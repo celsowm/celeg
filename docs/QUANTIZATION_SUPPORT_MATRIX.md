@@ -769,3 +769,137 @@ QKV fusion's reversion) for a predictable reason rather than a new one.
 product's arithmetic but the quantization *count* -- e.g. restructuring
 decode to quantize far fewer, larger activation batches, which is a
 different and larger redesign than swapping one kernel's math.
+
+## Where the GPU decode step actually goes: measured, and it is not launch overhead
+
+The three structural differences taken from llama.cpp's `mmvq.cu` (k-split,
+launch fusion, `dp4a`) each turned out to be worth ~nothing here, which left
+one hypothesis standing: that celeg simply issues more kernels per token than
+llama.cpp and is paying dispatch overhead for them. **That hypothesis is now
+measured and dead**, and the measurement that killed it also found where the
+time really goes.
+
+Method: `ncu --metrics gpu__time_duration.sum --print-summary per-kernel` run
+twice over `Nanbeige_Nanbeige4.2-3B-Q4_K_M` (44 layers, 48 query heads, 8 KV
+heads, head_dim 128, vocab 166144) at `--benchmark-decode 4` and
+`--benchmark-decode 20`, both with `--benchmark-warmup 0 --no-cuda-graph`, then
+differencing the per-kernel invocation counts. Differencing cancels model load
+and prefill exactly, so what remains is per-decode-token. A third run with
+`--clock-control none --csv` gives per-launch durations at native clocks (the
+`--print-summary` default of `--clock-control base` inflates durations by ~4-5x
+and must not be read as wall time).
+
+**Note on `nsys`**: it hangs indefinitely on this application, with *and*
+without `--cuda-graph-trace=node`, and with `--weight-mode auto` as well as
+`native`. An earlier note in this document attributed the hang to native mode;
+that attribution was wrong -- the hang is not mode-specific. All numbers below
+come from `ncu`.
+
+### Launch count and GPU busy time
+
+| Quantity | Value |
+|---|---|
+| Kernel launches per decode token | **667** (44 layers x 15, plus 7 per-step) |
+| Summed kernel duration per decode token (`ncu`, native clocks) | **8.31 ms** |
+| Wall-clock per decode token, `--no-cuda-graph` | 8.14 ms |
+| Wall-clock per decode token, CUDA graph (default) | 7.32 ms |
+
+Summed kernel time accounts for essentially the entire decode step -- the small
+overshoot against the 8.14 ms wall clock is profiler serialization overhead, not
+a real excess. **There are no launch gaps left to reclaim.** CUDA graph capture
+already collects the dispatch saving that was available (0.82 ms/token, 11%),
+and `cuda_graph_ready=1` on every benchmark run in this document. 667 launches
+is also not obviously more than llama.cpp issues for the same graph: 15 kernels
+per layer is norm x2, GEMV x6, rope/qk-norm x2, KV store, scale, attention
+partial + reduce, and SwiGLU -- llama.cpp's decode graph has a comparable node
+count. Launch count was the wrong suspect.
+
+### Where the 8.31 ms/token goes
+
+| Kernel | grid x block | ms/tok | calls/tok | us each | % |
+|---|---|---|---|---|---|
+| `w8a16_gemv_kernel` (FFN w13) | (2688)x(256) | 1.892 | 44 | 43.00 | 22.8 |
+| `w8a16_gemv_kernel` (o_proj, down) | (384)x(256) | 1.739 | 88 | 19.76 | 20.9 |
+| `gqa_decode_segment_partial_kernel` | (6144)x(32) | 0.921 | 44 | 20.92 | 11.1 |
+| `rmsnorm_kernel` | (1)x(256) | 0.810 | 90 | 9.00 | 9.7 |
+| `w8a16_gemv_kernel` (q_proj) | (768)x(256) | 0.655 | 44 | 14.88 | 7.9 |
+| `gqa_decode_segment_reduce_kernel` | (48)x(128) | 0.591 | 44 | 13.44 | 7.1 |
+| `w8a16_gemv_ksplit_kernel<4>` (k, v) | (1024)x(128) | 0.431 | 88 | 4.90 | 5.2 |
+| `w8a16_gemv_kernel` (lm_head) | (20768)x(256) | 0.304 | 1 | 303.82 | 3.7 |
+| `argmax_bf16_kernel` | **(1)x(256)** | 0.265 | 1 | 264.66 | 3.2 |
+| `paired_qk_norm_rope_kernel` | (48)x(128), (8)x(128) | 0.368 | 88 | 4.18 | 4.4 |
+| `swiglu_fused_kernel`, `store_kv_kernel`, `scale_kernel` | small | 0.329 | 132 | ~2.5 | 4.0 |
+
+The GEMVs are **55% of the step and are not the problem**. Computing achieved
+bandwidth from each grid's row count x K x 1 byte: w13 44 MB in 43.00&micro;s =
+~1.02 TB/s; down 22 MB in 19.76&micro;s = ~1.11 TB/s; lm_head 340 MB in
+303.82&micro;s = ~1.12 TB/s. Against the 5090's 1792 GB/s theoretical peak that
+is 57-62%, and against the honest achievable ceiling measured by
+`celeg-decode-gemv-benchmark` after its L2/zero-fill fixes (87% at 67 MB) there
+is maybe 30-40% left in the widest shapes and much less elsewhere. The earlier
+"22% of bandwidth" figure in this document divided total resident weight bytes
+by total step time and so charged the GEMVs for everything else in the step;
+per-kernel it does not hold up.
+
+**45% of the decode step is spent on kernels that move almost no data.** That
+is where the remaining gap against llama.cpp lives, and three of them have
+identified, unrelated causes:
+
+1. **`argmax_bf16_kernel` launches `<<<1, 256>>>`**
+   (`src/backend/cuda/kernels/sampling.cu:466`) over the entire 166144-entry
+   vocabulary -- one block, one SM out of 170, each thread striding 650 entries.
+   265&micro;s to reduce 332 KB is ~1.25 GB/s. A two-stage grid-wide reduction
+   is standard and would put this in the single-digit &micro;s range.
+   Recoverable: ~0.25 ms/token (3.2%).
+
+2. **`rmsnorm_kernel` costs 9.00&micro;s to move 8 KB.** At decode `rows == 1`,
+   so `norm.cuh:106` launches `<<<1, 256>>>` and 256 threads walk a 2048-wide
+   row in 8 scalar-strided iterations before a block reduction. The cost is a
+   chain of dependent global loads on a single SM, not arithmetic; the kernel
+   is at the latency floor rather than any bandwidth limit. Wider blocks and
+   `__nv_bfloat162` loads in the sum pass (the normalize pass is already
+   vectorized) would cut the iteration count to 1. Recoverable: perhaps
+   0.5 ms/token (6%) across the 90 calls.
+
+3. **Segmented decode attention scales with allocated context, not used
+   context.** `execution_plan.cpp:94` computes
+   `attention_chunks_ = ceil(max_context / attention_chunk_tokens)` **once, from
+   the context capacity**, and `attention_execution.cu:321` passes that fixed
+   count into every decode step. With `--context 4096` and the default
+   `attention_chunk_tokens = 32` that is 128 chunks, so the partial kernel is
+   launched with `q_heads * chunks = 48 * 128 = 6144` single-warp blocks per
+   layer regardless of how many tokens are actually in the KV cache. In this
+   benchmark (prompt 6 + 20 decoded) exactly **one** of those 128 chunks holds
+   any keys. The other 127 take the `begin >= end` early-out at
+   `attention_segmented.cuh:18` -- but that path still writes `head_dim` zeros
+   per block, so ~3.1 MB of zeroes are written and then read back by the reduce
+   kernel per layer per token, and the reduce loops all 128 chunks
+   unconditionally.
+
+   The capacity-scaling is directly measurable end-to-end, holding the actual
+   prompt and token count fixed and varying only the allocation:
+
+   | `--context` | chunks | decode tok/s |
+   |---|---|---|
+   | 512 | 16 | 141.9 |
+   | 2048 | 64 | 139.9 |
+   | 4096 | 128 | 136.9 |
+
+   That trend accounts for roughly 0.25 ms/token of the 1.51 ms the two
+   attention kernels cost. The **larger** share is that even the one live chunk
+   is a single warp walking up to 32 tokens with a dependent load per token --
+   the same latency-floor problem as `rmsnorm`, not a work problem. Both are
+   fixable without breaking CUDA-graph capture, which is why the grid is static
+   in the first place: the empty-chunk writes can be dropped entirely if the
+   reduce kernel bounds its loop by the device-side `position` instead of by
+   `chunks`, and the live chunk can be parallelized across a wider block.
+
+### Conclusion
+
+GPU decode is not launch-bound, not bandwidth-bound in its GEMVs, and not
+compute-bound anywhere. It is **latency-bound in a handful of small kernels**
+that run one block, or one warp per unit of work, and therefore sit at the
+memory-latency floor no matter how little data they touch. That is a different
+and more tractable diagnosis than any of the three llama.cpp kernel-shape
+differences investigated before it, and unlike those it is supported by
+per-kernel timings rather than by analogy to another engine's source.
