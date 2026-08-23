@@ -137,6 +137,11 @@ int main() {
     celeg::CpuGgufMatrix q6{
         celeg::GgmlType::Q6_K, 2, 256, bytes(q6_rows),
         q6_rows.size() * sizeof(BlockQ6K)};
+    std::vector<BlockQ5K> q5_rows(2, unit_q5k());
+    for (uint8_t& value : q5_rows[1].qh) value = 0xAA;
+    celeg::CpuGgufMatrix q5{
+        celeg::GgmlType::Q5_K, 2, 256, bytes(q5_rows),
+        q5_rows.size() * sizeof(BlockQ5K)};
     BlockQ2K q2_block;
     for (uint8_t& value : q2_block.scales) value = 1;
     BlockQ3K q3_block;
@@ -148,6 +153,7 @@ int main() {
         reinterpret_cast<const std::byte*>(&q3_block), sizeof(q3_block)};
     q4.validate();
     q6.validate();
+    q5.validate();
     q2.validate();
     q3.validate();
 
@@ -179,7 +185,7 @@ int main() {
         CELEG_TEST_CHECK(
             optimized_activation[block].bsums == activation[block].bsums);
     }
-    for (const auto* matrix : {&q4, &q6}) {
+    for (const auto* matrix : {&q4, &q6, &q5}) {
         const float scalar = celeg::cpu_gguf_dot_scalar(
             matrix->data, matrix->type, activation.data(), matrix->cols);
         const auto selected =

@@ -396,33 +396,73 @@ fixing opportunistically (e.g. a per-projection grain floor keyed to
 absolute tile count, not just `pool_size`) whenever someone is next in
 `linear.cpp`'s parallel_for.
 
-**Step 4 decision.** Both privileged profiling paths (`ncu`, `perf`) are
-blocked pending root access on this machine; the only additional evidence
-available without it is what steps 1 and 3 already produced. That is
-enough to close two of the three original hypotheses (dot4-coverage
-already ruled out by the full sweep, see above; sublinear-batching now
-ruled out by step 1) and leave one open, uninvestigated candidate the plan
-explicitly flagged but this session's evidence can't reach:
-**per-GEMM-call activation requantization** (`quantize_gguf_rows`,
-`gemm_gguf` calls it once per matrix per prefill batch rather than once
-per prefill pass) -- would explain a floor that is roughly constant per
-matmul call regardless of batched-row count, matching both the flat
-token-count-independent tok/s in step 1 and the fact that Q4_K/Q6_K's dot4
-advantage (1.7x, real) is much smaller than the >20x headroom llama.cpp's
-ratio implies is available. Confirming it needs either `perf` (blocked) or
-manual timing instrumentation around `quantize_gguf_rows` vs. the dot
-loop in `gemm_gguf` -- a smaller, non-privileged follow-up if this is
-picked back up.
+**Step 2, revisited: `perf record` (root access granted mid-investigation).**
+`kernel.perf_event_paranoid` was lowered from 4 to 1 (the user ran the
+`sysctl -w` themselves after this doc's first pass recorded it as
+root-blocked), which unblocked both `perf record` and `nsys` CPU sampling.
+A 512-token prefill on Q4_K_M, 32 threads, `perf record -g`, resolved down
+to a flat profile by self time:
 
-Extending `cpu_gguf_dot4_avx2` to the other seven native-dot types
-(mechanical, well-tested, moderate risk, per the plan) was not done this
-pass: it is a real, low-risk win for those types' absolute throughput
-(consistent with Q4_K/Q6_K's already-measured 1.7x), but nothing above
-shows it would move the prefill/decode *ratio* floor, since Q5_K -- no
-dot4 kernel -- and Q4_K -- has one -- land within noise of each other
-(0.40x vs 0.44x) in the full sweep. It remains a good mechanical follow-up
-for its own sake, just not a fix for the structural question this section
-investigated.
+| symbol | self time |
+|---|---|
+| `cpu_gguf_dot4_avx2` | 67.1% |
+| `cpu_gguf_dot_avx2` (scalar, per-lane) | 25.8% |
+| `update_online_avx2` (attention) | 3.6% |
+| `__expf_fma` | 1.1% |
+| `gemm_gguf`'s parallel_for dispatch lambda | 0.7% |
+| `cpu_quantize_q8k_avx2` (activation requantization) | 0.07% |
+
+This retires the "per-GEMM-call activation requantization" hypothesis
+outright -- `cpu_quantize_q8k_avx2` is noise at 0.07%, not a hidden floor.
+Threadpool dispatch overhead is likewise negligible (0.7%). **92.9% of
+prefill time is the dot-product kernels themselves**, split 67.1% batched
+(`dot4`) vs. 25.8% unbatched (`dot`, four separate scalar-ish calls per
+4-row group). That 25.8% is disproportionate: `scripts/gguf_census.py` on
+this exact file shows Q5_K is only 11.6% of weight elements (Q4_K 63.0%,
+Q6_K 25.4%, Q5_K 11.6%). Cross-referencing against
+`cpu_gguf_dot4_avx2`'s source (`gguf_avx2.cpp`) explains why: **the
+function batches Q4_K and Q6_K but not Q5_K** -- Q5_K silently falls
+through to four unbatched `cpu_gguf_dot_avx2` calls, the same fallback
+used for every other native-dot type. 11.6% of elements consuming 25.8%
+of cycles (a ~2.7x worse cycles-per-element ratio than the 88.4% of
+elements running through real `dot4`) is exactly the dot4-coverage gap
+the plan's original W5 hypothesis named -- the earlier rejection of that
+hypothesis (full-sweep ratios showing Q5_K and Q4_K indistinguishable at
+0.40x/0.44x) was confounded by comparing against llama.cpp's absolute
+speed, which has its own advantages unrelated to this gap; it was never a
+statement that dot4-vs-scalar doesn't matter for celeg's own throughput.
+
+**Step 4, implemented.** Added a real `dot4` path for Q5_K in
+`cpu_gguf_dot4_avx2` (`gguf_avx2.cpp`), mirroring the Q4_K/Q6_K structure:
+unpack each 256-wide sub-block's 5-bit weights (4-bit nibble from `qs` +
+1 high bit from `qh`, matching the existing scalar `Q5_K` branch bit for
+bit) once per sub-block, then reuse the unpacked values across the 4
+activation lanes via `_mm256_maddubs_epi16`/`_mm256_madd_epi16`,
+accumulating per-lane `int32` totals exactly as the Q4_K branch does.
+Covered by `tests/cpu_gguf_kernels_test.cpp`'s existing dot4
+self-consistency check (`dot4(...)` output compared against four
+independent `cpu_gguf_dot_avx2` calls, now run for Q4_K/Q6_K/Q5_K), with
+a Q5_K test row that exercises a nonzero `qh` pattern -- the prior Q5_K
+fixtures in this file all used an all-zero `qh`, which would have let a
+high-bit-unpacking bug in the new code pass silently. `ctest` 81/81 still
+passes.
+
+**Measured effect** (Nanbeige-3B, 512-token prefill, 32 threads,
+`celeg-bench -p 512 -n 0`):
+
+| file | before | after | change |
+|---|---|---|---|
+| Q4_K_M (63% Q4_K / 25% Q6_K / 12% Q5_K by element) | 26.29 tok/s | 30.43 tok/s | +15.7% |
+| Q5_K_M (pure Q5_K linear weights) | -- | 26.60 tok/s | new dot4 coverage |
+
+The other six native-dot types without a `dot4` branch (Q4_0, Q4_1, Q5_0,
+Q8_0, Q2_K, Q3_K) remain on the unbatched path. Per this same profile
+their combined share of a typical GGUF file's weight elements is small
+next to the K-quants (none of the 40 cached sweep files use them as the
+majority format), so they were not extended in this pass; the pattern
+established here (unpack once per sub-block, reuse across 4 lanes) is
+mechanical to repeat for any of them if a file where they dominate shows
+up.
 
 ## Native weight mode: measured, decision made
 

@@ -310,6 +310,57 @@ void cpu_gguf_dot4_avx2(const std::byte* packed_row, GgmlType type,
         for (int lane = 0; lane < 4; ++lane) output4[lane] = totals[lane];
         return;
     }
+    if (type == GgmlType::Q5_K) {
+        const auto* weights = reinterpret_cast<const BlockQ5K*>(packed_row);
+        float totals[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+        const size_t blocks = cols / 256;
+        const __m256i lo_mask = _mm256_set1_epi8(15);
+        const __m256i one_bit = _mm256_set1_epi8(1);
+        const __m256i one16 = _mm256_set1_epi16(1);
+        for (size_t b = 0; b < blocks; ++b) {
+            const BlockQ5K& weight = weights[b];
+            const float d = fp16_bits_to_float(weight.d);
+            const float dmin = fp16_bits_to_float(weight.dmin);
+            const __m256i qh256 = _mm256_loadu_si256(
+                reinterpret_cast<const __m256i*>(weight.qh));
+            __m256i scaled[4] = {
+                _mm256_setzero_si256(), _mm256_setzero_si256(),
+                _mm256_setzero_si256(), _mm256_setzero_si256()};
+            int minimum_totals[4] = {0, 0, 0, 0};
+            for (int sub = 0; sub < 8; ++sub) {
+                uint8_t scale = 0, minimum = 0;
+                scale_min(weight.scales, sub, scale, minimum);
+                const uint8_t* qs_block = weight.qs + (sub >> 1) * 32;
+                const __m256i qs256 = _mm256_loadu_si256(
+                    reinterpret_cast<const __m256i*>(qs_block));
+                const __m256i low = (sub & 1)
+                    ? _mm256_and_si256(_mm256_srli_epi16(qs256, 4), lo_mask)
+                    : _mm256_and_si256(qs256, lo_mask);
+                const __m256i hbits = _mm256_and_si256(
+                    _mm256_srli_epi16(qh256, sub), one_bit);
+                const __m256i high = _mm256_slli_epi16(hbits, 4);
+                const __m256i vals = _mm256_or_si256(low, high);
+                for (int lane = 0; lane < 4; ++lane) {
+                    const CpuQ8KBlock& x = activation[lane * blocks + b];
+                    const __m256i values = _mm256_loadu_si256(
+                        reinterpret_cast<const __m256i*>(x.qs.data() + sub * 32));
+                    const __m256i pair = _mm256_maddubs_epi16(vals, values);
+                    const __m256i dot = _mm256_madd_epi16(pair, one16);
+                    scaled[lane] = _mm256_add_epi32(scaled[lane],
+                        _mm256_mullo_epi32(dot, _mm256_set1_epi32(scale)));
+                    const int sum = x.bsums[sub * 2] + x.bsums[sub * 2 + 1];
+                    minimum_totals[lane] += static_cast<int>(minimum) * sum;
+                }
+            }
+            for (int lane = 0; lane < 4; ++lane) {
+                const float block_total = d * static_cast<float>(horizontal_sum(scaled[lane])) -
+                    dmin * static_cast<float>(minimum_totals[lane]);
+                totals[lane] += activation[lane * blocks + b].d * block_total;
+            }
+        }
+        for (int lane = 0; lane < 4; ++lane) output4[lane] = totals[lane];
+        return;
+    }
     if (type != GgmlType::Q4_K) {
         for (int lane = 0; lane < 4; ++lane) {
             output4[lane] = cpu_gguf_dot_avx2(packed_row, type,
