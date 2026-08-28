@@ -76,15 +76,17 @@ void check_gated_delta(id<MTLDevice> device, id<MTLCommandQueue> queue,
     const std::vector<float> projected_values{1.0f, 2.0f, 3.0f};
     const std::vector<float> zero{0.0f};
     const std::vector<float> one{1.0f};
+    const std::vector<float> convolution_values{1.0f, 1.0f, 1.0f};
+    const std::vector<float> convolution_state_values{0.0f, 0.0f, 0.0f};
     id<MTLBuffer> projected = buffer(device, projected_values);
     id<MTLBuffer> z = buffer(device, one);
     id<MTLBuffer> beta = buffer(device, zero);
     id<MTLBuffer> decay = buffer(device, zero);
-    id<MTLBuffer> convolution = buffer(device, one);
+    id<MTLBuffer> convolution = buffer(device, convolution_values);
     id<MTLBuffer> dt_bias = buffer(device, zero);
     id<MTLBuffer> a_log = buffer(device, zero);
     id<MTLBuffer> norm = buffer(device, one);
-    id<MTLBuffer> conv_state = buffer(device, zero);
+    id<MTLBuffer> conv_state = buffer(device, convolution_state_values);
     id<MTLBuffer> recurrent_state = buffer(device, zero);
     id<MTLBuffer> output = buffer(device, zero);
     id<MTLBuffer> buffers[] = {projected, z, beta, decay, convolution, dt_bias,
@@ -117,11 +119,6 @@ void check_gated_delta(id<MTLDevice> device, id<MTLCommandQueue> queue,
     const float state = normalized_key * filtered_value * 0.5f;
     const float expected = state / std::sqrt(state * state + epsilon) *
         (1.0f / (1.0f + std::exp(-1.0f)));
-    std::cerr << "gdn projected=" << static_cast<const float*>(projected.contents)[0] << "," <<
-        static_cast<const float*>(projected.contents)[1] << "," <<
-        static_cast<const float*>(projected.contents)[2] << " actual=" << actual_output[0] << " state=" <<
-        static_cast<const float*>(recurrent_state.contents)[0] << " expected=" <<
-        expected << " ref_state=" << state << '\n';
     check_close(actual_output[0], expected, "gated-delta output");
     check_close(static_cast<const float*>(recurrent_state.contents)[0], state,
                 "gated-delta state");
@@ -131,15 +128,18 @@ void check_mamba(id<MTLDevice> device, id<MTLCommandQueue> queue,
                  id<MTLLibrary> library) {
     const std::vector<float> projected_values{1.0f, 2.0f, 3.0f, 4.0f, 0.0f};
     const std::vector<float> one{1.0f};
+    const std::vector<float> convolution_values{1.0f, 1.0f, 1.0f};
+    const std::vector<float> convolution_state_values{0.0f, 0.0f, 0.0f};
+    const std::vector<float> convolution_bias_values{0.0f, 0.0f, 0.0f};
     const std::vector<float> zero{0.0f};
     id<MTLBuffer> projected = buffer(device, projected_values);
-    id<MTLBuffer> convolution = buffer(device, one);
-    id<MTLBuffer> conv_bias = buffer(device, zero);
+    id<MTLBuffer> convolution = buffer(device, convolution_values);
+    id<MTLBuffer> conv_bias = buffer(device, convolution_bias_values);
     id<MTLBuffer> dt_bias = buffer(device, zero);
     id<MTLBuffer> a_log = buffer(device, zero);
     id<MTLBuffer> d = buffer(device, one);
     id<MTLBuffer> norm = buffer(device, one);
-    id<MTLBuffer> conv_state = buffer(device, zero);
+    id<MTLBuffer> conv_state = buffer(device, convolution_state_values);
     id<MTLBuffer> ssm_state = buffer(device, zero);
     id<MTLBuffer> output = buffer(device, zero);
     id<MTLBuffer> buffers[] = {projected, convolution, conv_bias, dt_bias, a_log,
@@ -159,8 +159,10 @@ void check_mamba(id<MTLDevice> device, id<MTLCommandQueue> queue,
         {&epsilon, sizeof(epsilon)}, {&a_log_needs_exp, sizeof(a_log_needs_exp)}};
     run(queue, pipeline(device, library, "celeg_mamba2"), buffers, 10, constants);
     const float x = 2.0f / (1.0f + std::exp(-2.0f));
-    const float state = std::log(2.0f) * 3.0f * x;
-    const float raw = state * 4.0f + x;
+    const float b = 3.0f / (1.0f + std::exp(-3.0f));
+    const float c = 4.0f / (1.0f + std::exp(-4.0f));
+    const float state = std::log(2.0f) * b * x;
+    const float raw = state * c + x;
     const float gated = raw * (1.0f / (1.0f + std::exp(-raw))) *
         (1.0f / std::sqrt(raw * raw + epsilon));
     check_close(static_cast<const float*>(output.contents)[0], gated, "Mamba-2 output");

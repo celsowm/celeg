@@ -934,6 +934,12 @@ K-quants remain on the host fallback path.
 
 **Gate:** at least one CELEG-supported hybrid checkpoint generates correctly.
 
+Current status: short-convolution hybrid inference is validated with cached
+LFM2.5-350M, and native single-token Mamba-2 and Gated Delta state kernels have
+deterministic GPU primitive coverage. No Mamba-2 or Gated Delta checkpoint is
+currently present in the local Hugging Face cache, so real-checkpoint numerical
+parity remains an acceptance task when such a fixture is available.
+
 ## Sprint M5 — runtime cache and serving
 
 - paged KV;

@@ -14,6 +14,7 @@ struct Args {
     std::string model;
     std::string repo;
     std::string prompt;
+    std::string chat_template_file;
     int context = 4096;
     int max_new_tokens = 4;
 };
@@ -29,11 +30,12 @@ Args parse_args(int argc, char** argv) {
         if (key == "--model") args.model = value();
         else if (key == "--repo") args.repo = value();
         else if (key == "--prompt") args.prompt = value();
+        else if (key == "--chat-template-file") args.chat_template_file = value();
         else if (key == "--context") args.context = std::stoi(value());
         else if (key == "--max-new-tokens") args.max_new_tokens = std::stoi(value());
         else if (key == "--help") {
             std::cout << "celeg-metal-run [--model DIR | --repo REPO_ID] --prompt TEXT "
-                         "[--context N] [--max-new-tokens N]\n";
+                         "[--chat-template-file PATH] [--context N] [--max-new-tokens N]\n";
             std::exit(0);
         } else if (!key.empty() && key.rfind("--", 0) != 0 &&
                    args.model.empty() && args.repo.empty()) {
@@ -57,7 +59,7 @@ int main(int argc, char** argv) {
     try {
         const Args args = parse_args(argc, argv);
         const celeg::app::RunInputs inputs{
-            args.model, args.repo, args.prompt, {}, {}, args.context,
+            args.model, args.repo, args.prompt, {}, args.chat_template_file, args.context,
             args.max_new_tokens, 1, 0.1f, 1.0f, 1.05f, 1, false};
         auto prepared = celeg::app::prepare_run(inputs, true);
         const auto prompt = celeg::app::prepare_prompt(inputs, prepared);
