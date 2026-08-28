@@ -14,6 +14,9 @@ import tempfile
 from typing import Callable, Iterable, Mapping, Sequence
 
 HF_REPO = "LiquidAI/LFM2.5-230M"
+HF_GGUF_REPO = "LiquidAI/LFM2.5-350M-GGUF"
+HF_GGUF_FILE = "LFM2.5-350M-Q4_K_M.gguf"
+HF_MOE_REPO = "LiquidAI/LFM2.5-8B-A1B"
 Runner = Callable[..., subprocess.CompletedProcess[str]]
 
 
@@ -48,6 +51,13 @@ class Environment:
     checkpoint: pathlib.Path | None
     errors: list[str]
     warnings: list[str]
+    macos_version: str = ""
+    xcode_version: str = ""
+    sdk_path: pathlib.Path | None = None
+    metal_compiler: Tool | None = None
+    metallib_compiler: Tool | None = None
+    quantized_checkpoint: pathlib.Path | None = None
+    moe_checkpoint: pathlib.Path | None = None
 
     @property
     def ok(self) -> bool:
@@ -142,6 +152,22 @@ def executable_version(path: pathlib.Path, runner: Runner = run_capture) -> str:
         return cuda.group(1)
     generic = re.search(r"(\d+\.\d+(?:\.\d+)*)", text)
     return generic.group(1) if generic else ""
+
+
+def xcrun_path(tool: str, env: Mapping[str, str], runner: Runner = run_capture) -> pathlib.Path | None:
+    result = runner(["xcrun", "--find", tool], env=env)
+    if result.returncode != 0:
+        return None
+    values = result.stdout.strip().splitlines()
+    if not values:
+        return None
+    path = pathlib.Path(values[-1])
+    return path.resolve() if path.is_file() else None
+
+
+def command_output(command: Sequence[str], env: Mapping[str, str], runner: Runner) -> str:
+    result = runner(command, env=env)
+    return result.stdout.strip() if result.returncode == 0 else ""
 
 
 def which(name: str, env: Mapping[str, str]) -> pathlib.Path | None:
@@ -548,6 +574,27 @@ def find_checkpoint(
     return None
 
 
+def find_gguf_checkpoint(
+    env: Mapping[str, str],
+    repo: str = HF_GGUF_REPO,
+    filename: str = HF_GGUF_FILE,
+) -> pathlib.Path | None:
+    owner, name = repo.split("/", 1)
+    snapshots = hf_cache_root(env) / f"models--{owner}--{name}" / "snapshots"
+    if not snapshots.is_dir():
+        return None
+    candidates = sorted(
+        (path for path in snapshots.iterdir() if path.is_dir()),
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    )
+    for candidate in candidates:
+        model = candidate / filename
+        if model.is_file():
+            return model
+    return None
+
+
 def discover_environment(
     requested_backend: str,
     requested_arch: str,
@@ -561,6 +608,11 @@ def discover_environment(
     errors: list[str] = []
     warnings: list[str] = []
     vcvars: pathlib.Path | None = None
+    macos_version = ""
+    xcode_version = ""
+    sdk_path: pathlib.Path | None = None
+    metal_compiler: Tool | None = None
+    metallib_compiler: Tool | None = None
 
     msvc_include_prefix = ""
     if system == "windows":
@@ -603,6 +655,22 @@ def discover_environment(
     ninja = Tool(ninja_path, executable_version(ninja_path, runner)) if ninja_path else None
     compiler = Tool(compiler_path, executable_version(compiler_path, runner)) if compiler_path else None
 
+    if system == "darwin":
+        macos_version = command_output(["sw_vers", "-productVersion"], values, runner)
+        sdk_value = command_output(
+            ["xcrun", "--sdk", "macosx", "--show-sdk-path"], values, runner)
+        if sdk_value:
+            sdk_path = pathlib.Path(sdk_value.splitlines()[-1]).resolve()
+        xcode_text = command_output(["xcodebuild", "-version"], values, runner)
+        xcode_match = re.search(r"^Xcode\s+(.+)$", xcode_text, re.MULTILINE)
+        xcode_version = xcode_match.group(1).strip() if xcode_match else ""
+        metal_path = xcrun_path("metal", values, runner)
+        metallib_path = xcrun_path("metallib", values, runner)
+        if metal_path:
+            metal_compiler = Tool(metal_path, executable_version(metal_path, runner))
+        if metallib_path:
+            metallib_compiler = Tool(metallib_path, executable_version(metallib_path, runner))
+
     # CMake can use an absolute C/CXX compiler path while nvcc still invokes
     # the MSVC host compiler by the bare name `cl.exe` during CUDA compiler
     # identification.  Keep the selected toolchain self-contained in the
@@ -634,9 +702,14 @@ def discover_environment(
     runtime_dlls = cuda_runtime_dlls(runtime_dirs) if system == "windows" else []
     cuda_buildable = bool(nvcc and arch != "native")
 
+    metal_host = system == "darwin" and platform.machine().lower() in {"arm64", "aarch64"}
+    metal_buildable = bool(metal_host and cmake and ninja and compiler and sdk_path)
+    if system == "darwin" and metal_host and not metal_compiler:
+        warnings.append("Metal offline compiler was not found; runtime MSL compilation will be used.")
+
     backend = requested_backend
     if backend == "auto":
-        backend = "cuda" if cuda_buildable else "cpu"
+        backend = "cuda" if cuda_buildable else ("metal" if metal_buildable else "cpu")
         if candidates and not cuda_buildable:
             warnings.append("CUDA was found but no compatible concrete GPU architecture was detected; using CPU.")
     elif backend == "cuda":
@@ -644,6 +717,13 @@ def discover_environment(
             errors.append("No CUDA toolkit supports the requested architecture.")
         if arch == "native":
             errors.append("CUDA architecture is native but no GPU compute capability was detected; pass --arch N.")
+    elif backend == "metal":
+        if system != "darwin":
+            errors.append("Metal requires macOS.")
+        elif not metal_host:
+            errors.append("Metal requires an Apple Silicon host.")
+        elif not sdk_path:
+            errors.append("The macOS SDK was not found through xcrun.")
 
     if backend == "cuda" and system == "windows":
         required = ("cublas64_", "cublaslt64_")
@@ -674,8 +754,15 @@ def discover_environment(
         gpu_arch=arch,
         requested_backend=requested_backend,
         backend=backend,
-        checkpoint=find_checkpoint(values),
+        checkpoint=find_checkpoint(values) or find_checkpoint(
+            values, "LiquidAI/LFM2.5-350M"),
         errors=errors,
         warnings=warnings,
+        macos_version=macos_version,
+        xcode_version=xcode_version,
+        sdk_path=sdk_path,
+        metal_compiler=metal_compiler,
+        metallib_compiler=metallib_compiler,
+        quantized_checkpoint=find_gguf_checkpoint(values),
+        moe_checkpoint=find_checkpoint(values, HF_MOE_REPO),
     )
-

@@ -1,0 +1,19 @@
+{
+  "model": "/Users/celsowm/.cache/huggingface/hub/models--LiquidAI--LFM2.5-350M-GGUF/snapshots/9969000761ce34de907bf20017cbfc3d52d6eaf9/LFM2.5-350M-Q4_K_M.gguf",
+  "backend": "metal-native device=Apple M5",
+  "context": 128,
+  "prompt_tokens": 32,
+  "decode_tokens": 8,
+  "warmup": 1,
+  "repetitions": 3,
+  "prefill_ms": 804.6533333,
+  "prefill_tokens_per_second": 39.76867885,
+  "decode_ms": 222.7758333,
+  "decode_tokens_per_second": 35.91053787,
+  "manifest": "/Users/celsowm/celeg/benchmarks/manifests/metal_lfm25_350m_q4_k_m.json",
+  "repo": "LiquidAI/LFM2.5-350M-GGUF",
+  "checkpoint": "/Users/celsowm/.cache/huggingface/hub/models--LiquidAI--LFM2.5-350M-GGUF/snapshots/9969000761ce34de907bf20017cbfc3d52d6eaf9/LFM2.5-350M-Q4_K_M.gguf",
+  "platform": "macOS-26.5.1-arm64-arm-64bit",
+  "processor": "arm",
+  "celeg_commit": "128374abe0b4f89a67e55cd0409d45551d003483"
+}

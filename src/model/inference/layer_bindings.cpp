@@ -522,9 +522,12 @@ void bind_moe(CanonicalInferenceContext& context,
     };
 
     const int num_experts = context.moe->num_experts;
+    const std::string router_name = has_tensor(prefix + "gate.weight")
+        ? prefix + "gate.weight"
+        : feed_forward_prefix + "gate.weight";
     bind(
         TensorRole::MoeRouter,
-        prefix + "gate.weight",
+        router_name,
         {num_experts, *m.core.hidden_size});
     std::optional<std::string> bias_name;
     for (const std::string& candidate : {

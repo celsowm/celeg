@@ -86,6 +86,15 @@ void celeg_cuda_backend_options_init(celeg_cuda_backend_options* options) {
     options->engine.page_tokens = 16;
 }
 
+void celeg_metal_backend_options_init(celeg_metal_backend_options* options) {
+    if (!options) return;
+    *options = {};
+    options->struct_size = sizeof(*options);
+    options->engine.max_active_requests = 1;
+    options->engine.max_batched_tokens = 256;
+    options->engine.prefill_chunk_tokens = 256;
+}
+
 void celeg_request_options_init(celeg_request_options* options) {
     if (!options) return;
     *options = {};
@@ -105,11 +114,21 @@ const char* celeg_backend_capabilities(const char* backend_id) {
         celeg::api::global_error = celeg::detect_cpu_capabilities().summary();
         return celeg::api::global_error.c_str();
     }
+#ifdef CELEG_API_WITH_METAL
+    if (backend_id && std::strcmp(backend_id, "metal") == 0) {
+        celeg::api::global_error =
+            "Metal backend available for celeg_engine_*; celeg_model_* remains CPU-only";
+        return celeg::api::global_error.c_str();
+    }
+#endif
 #ifdef CELEG_API_WITH_CUDA
     celeg::api::global_error =
         "CUDA backend available for celeg_engine_*; celeg_model_* remains CPU-only";
     return celeg::api::global_error.c_str();
 #else
+    if (backend_id && std::strcmp(backend_id, "metal") == 0) {
+        return "Metal backend unavailable in this build";
+    }
     return "CUDA backend unavailable in this build";
 #endif
 }

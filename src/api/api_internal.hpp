@@ -12,6 +12,9 @@
 #include "celeg/backend/cuda/runtime_types.hpp"
 #include "celeg/backend/cuda/concurrency.hpp"
 #endif
+#ifdef CELEG_API_WITH_METAL
+#include "celeg/backend/metal/runtime_types.hpp"
+#endif
 
 #include <cstddef>
 #include <cstdint>
@@ -79,6 +82,10 @@ celeg_request_status status(celeg::serve::RequestStatus source);
 celeg::CudaModelOptions cuda_options(const celeg_cuda_model_options& source);
 celeg::ConcurrentEngineOptions cuda_engine_options(
     const celeg_cuda_engine_options& source);
+#endif
+#ifdef CELEG_API_WITH_METAL
+celeg::MetalModelOptions metal_options(const celeg_metal_model_options& source);
+celeg::MetalEngineOptions metal_engine_options(const celeg_metal_engine_options& source);
 #endif
 
 }

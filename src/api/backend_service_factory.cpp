@@ -4,6 +4,9 @@
 #ifdef CELEG_API_WITH_CUDA
 #include "celeg/backend/cuda/cuda_inference_service.hpp"
 #endif
+#ifdef CELEG_API_WITH_METAL
+#include "celeg/serve/metal_inference_service.hpp"
+#endif
 
 #include <memory>
 #include <stdexcept>
@@ -123,6 +126,58 @@ public:
 };
 #endif
 
+#ifdef CELEG_API_WITH_METAL
+class MetalBackendOptions final : public IBackendOptions {
+public:
+    static constexpr std::string_view kSchemaId = "metal/1";
+
+    MetalBackendOptions(MetalModelOptions model_value,
+                        MetalEngineOptions engine_value)
+        : model(std::move(model_value)), engine(std::move(engine_value)) {}
+
+    BackendId backend_id() const noexcept override { return "metal"; }
+    std::string_view schema_id() const noexcept override { return kSchemaId; }
+    const void* data() const noexcept override { return this; }
+
+    MetalModelOptions model;
+    MetalEngineOptions engine;
+};
+
+class MetalBackendFactory final : public IAbiBackendFactory {
+public:
+    std::string_view id() const override { return "metal"; }
+    bool supports(BackendId backend) const override { return backend == "metal"; }
+
+    std::shared_ptr<const IBackendOptions> decode_options(
+        std::span<const std::byte> bytes) const override {
+        if (bytes.size() < sizeof(celeg_metal_backend_options)) {
+            throw std::invalid_argument("Metal backend options are truncated");
+        }
+        const auto* source =
+            reinterpret_cast<const celeg_metal_backend_options*>(bytes.data());
+        if (source->struct_size < sizeof(*source) || source->struct_size > bytes.size()) {
+            throw std::invalid_argument("Metal backend options have an invalid struct size");
+        }
+        return std::make_shared<MetalBackendOptions>(
+            metal_options(source->model), metal_engine_options(source->engine));
+    }
+
+    std::unique_ptr<serve::ServiceBundle> create(
+        const BackendCreateRequest& request) const override {
+        if (!request.runtime || !request.options ||
+            request.backend_id != id() || request.options->backend_id() != id()) {
+            throw std::invalid_argument("Metal backend request has invalid options");
+        }
+        const auto* options = request.options->as<MetalBackendOptions>();
+        if (!options) throw std::invalid_argument("Metal backend options type mismatch");
+        auto service = std::make_unique<serve::MetalInferenceService>(
+            request.model_path, request.max_context, options->model, options->engine,
+            request.runtime);
+        return std::make_unique<serve::ServiceBundle>(std::move(service));
+    }
+};
+#endif
+
 }
 
 std::unique_ptr<celeg::serve::ServiceBundle> create_service_bundle(
@@ -138,6 +193,9 @@ std::unique_ptr<celeg::serve::ServiceBundle> create_service_bundle(
     builder.add_backend_factory(std::make_unique<CpuBackendFactory>());
 #ifdef CELEG_API_WITH_CUDA
     builder.add_backend_factory(std::make_unique<CudaBackendFactory>());
+#endif
+#ifdef CELEG_API_WITH_METAL
+    builder.add_backend_factory(std::make_unique<MetalBackendFactory>());
 #endif
     const std::shared_ptr<const RuntimeContext> runtime = builder.build_shared();
     const IBackendFactory* selected = nullptr;

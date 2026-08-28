@@ -1,7 +1,7 @@
 # Celeg
 
 Celeg is a native C++20 inference runtime for LFM2, LFM2.5, Granite, MiniCPM5,
-SmolLM3, Muse Glimmer, and Nemotron 3 Nano language models. It provides independent CPU and NVIDIA CUDA
+SmolLM3, Muse Glimmer, and Nemotron 3 Nano language models. It provides independent CPU, NVIDIA CUDA, and Apple Metal
 backends, direct checkpoint loading, quantized execution, an OpenAI-compatible
 server, and a public C API.
 
@@ -10,15 +10,15 @@ Safetensors checkpoint directory, or a local GGUF file.
 
 ## Support matrix
 
-| Architecture | Safetensors | GGUF | CPU | CUDA |
-| --- | :---: | :---: | :---: | :---: |
-| LFM2/LFM2.5 dense | Yes | Yes | Yes | Yes |
-| LFM2/LFM2.5 MoE | Yes | Yes | Yes | Yes |
-| Granite dense | Yes | No | Yes | Yes |
-| MiniCPM5-1B | Yes | Yes | Yes | Yes |
-| SmolLM3-3B | Yes | Yes | Yes | Yes |
-| Nemotron 3 Nano 4B | Yes | Q4_K_M | Yes | Yes |
-| Muse Glimmer 30B | Yes | UD-IQ2_XXS* | Yes | Yes |
+| Architecture | Safetensors | GGUF | CPU | CUDA | Metal |
+| --- | :---: | :---: | :---: | :---: | :---: |
+| LFM2/LFM2.5 dense | Yes | Yes | Yes | Yes | LFM2.5-350M |
+| LFM2/LFM2.5 MoE | Yes | Yes | Yes | Yes | No |
+| Granite dense | Yes | No | Yes | Yes | No |
+| MiniCPM5-1B | Yes | Yes | Yes | Yes | No |
+| SmolLM3-3B | Yes | Yes | Yes | Yes | No |
+| Nemotron 3 Nano 4B | Yes | Q4_K_M | Yes | Yes | No |
+| Muse Glimmer 30B | Yes | UD-IQ2_XXS* | Yes | Yes | No |
 
 * Muse Glimmer is Tier A native text support and includes a registered Tier B
 image provider for the official Safetensors packaging. The CUDA loader also
@@ -104,6 +104,10 @@ For CPU builds:
 For CUDA builds, add a compatible NVIDIA CUDA Toolkit and GPU. CUDA is
 optional; the CPU backend can be built without it.
 
+For Metal builds, use an Apple Silicon Mac with the macOS SDK and an
+Objective-C++ compiler. The current native Metal milestone targets the cached
+LFM2.5-350M convolution/attention model, with native Q4_K/Q6_K GGUF kernels.
+
 The repository is developed and tested on Windows and Linux. On Windows,
 executables have an `.exe` suffix.
 
@@ -116,6 +120,7 @@ toolkit, GPU architecture, and runtime dependencies:
 python scripts/dev.py doctor
 python scripts/dev.py verify --backend cpu
 python scripts/dev.py verify --backend cuda
+python scripts/dev.py verify --backend metal
 ```
 
 Use `--backend auto` to select CUDA when available and CPU otherwise. Other
@@ -144,6 +149,7 @@ ctest --preset cpu-relwithdebinfo
 ```
 
 CUDA presets are named `cuda-release` and `cuda-relwithdebinfo`.
+Metal presets are named `metal-release` and `metal-relwithdebinfo`.
 
 ## Obtain a model
 
@@ -164,6 +170,21 @@ The CUDA runner uses the same repository IDs:
 celeg-run --repo LiquidAI/LFM2.5-230M \
   --prompt "Explain CUDA in one sentence." \
   --max-new-tokens 32
+```
+
+On Apple Silicon, the Metal runner uses the same cached checkpoint resolution:
+
+```text
+celeg-metal-run --repo LiquidAI/LFM2.5-350M-GGUF \
+  --prompt "Explain gravity in one sentence." \
+  --max-new-tokens 32
+```
+
+The Metal benchmark uses the same cached file without downloading it:
+
+```text
+python benchmarks/run_metal_bench.py \
+  benchmarks/manifests/metal_lfm25_350m_q4_k_m.json
 ```
 
 Use `celeg-download` to populate the Hugging Face cache from a repository:
@@ -275,7 +296,7 @@ Typical CPU controls include `--cpu-isa`, `--threads`, `--cpu-kv-cache`,
 ## OpenAI-compatible server
 
 `celeg-serve` exposes an OpenAI-compatible HTTP API. It uses a local model path
-and can select the CPU or CUDA backend:
+and can select the CPU, CUDA, or Metal backend:
 
 ```text
 celeg-serve \
@@ -285,8 +306,9 @@ celeg-serve \
   --served-model-name celeg
 ```
 
-Start the CUDA version by changing `--backend cpu` to `--backend cuda`. The
-server provides health, model, tokenizer, and chat-completion routes. See the
+Start the CUDA or Metal version by changing `--backend cpu` to `--backend cuda`
+or `--backend metal`. The server provides health, model, tokenizer, and
+chat-completion routes. See the
 generated API documentation served by the process for the exact HTTP schema.
 
 ## C API

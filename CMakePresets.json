@@ -35,6 +35,30 @@
       }
     },
     {
+      "name": "metal-release",
+      "inherits": "base",
+      "displayName": "Metal Release",
+      "binaryDir": "${sourceDir}/out/${hostSystemName}-metal-release",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CELEG_ENABLE_CUDA": "OFF",
+        "CELEG_ENABLE_METAL": "ON",
+        "CELEG_RUN_METAL_TESTS": "ON"
+      }
+    },
+    {
+      "name": "metal-relwithdebinfo",
+      "inherits": "base",
+      "displayName": "Metal RelWithDebInfo",
+      "binaryDir": "${sourceDir}/out/${hostSystemName}-metal-relwithdebinfo",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "CELEG_ENABLE_CUDA": "OFF",
+        "CELEG_ENABLE_METAL": "ON",
+        "CELEG_RUN_METAL_TESTS": "ON"
+      }
+    },
+    {
       "name": "cuda-release",
       "inherits": "base",
       "displayName": "CUDA Release",
@@ -69,6 +93,14 @@
       "configurePreset": "cpu-relwithdebinfo"
     },
     {
+      "name": "metal-release",
+      "configurePreset": "metal-release"
+    },
+    {
+      "name": "metal-relwithdebinfo",
+      "configurePreset": "metal-relwithdebinfo"
+    },
+    {
       "name": "cuda-release",
       "configurePreset": "cuda-release"
     },
@@ -88,6 +120,20 @@
     {
       "name": "cpu-relwithdebinfo",
       "configurePreset": "cpu-relwithdebinfo",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "metal-release",
+      "configurePreset": "metal-release",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "metal-relwithdebinfo",
+      "configurePreset": "metal-relwithdebinfo",
       "output": {
         "outputOnFailure": true
       }

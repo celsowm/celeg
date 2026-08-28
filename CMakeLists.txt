@@ -11,17 +11,25 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
 option(CELEG_ENABLE_CUDA "Build the NVIDIA CUDA backend when a CUDA compiler is available" ON)
+if(APPLE)
+    set(_celeg_metal_default ON)
+else()
+    set(_celeg_metal_default OFF)
+endif()
+option(CELEG_ENABLE_METAL "Build the Apple Metal backend on Apple hosts" ${_celeg_metal_default})
 option(CELEG_BUILD_TESTS "Build host, CPU and CUDA tests" ON)
 option(CELEG_FAST_MATH "Enable CUDA --use_fast_math" OFF)
 option(CELEG_DEBUG_SYNC "Synchronize after every CUDA kernel" OFF)
 option(CELEG_RUN_CUDA_TESTS "Register CUDA runtime tests with CTest" ON)
 option(CELEG_ENABLE_SERVE "Build celeg-serve and its OpenAI-compatible protocol layer (fetches Glaze)" ON)
+option(CELEG_RUN_METAL_TESTS "Register Metal runtime tests with CTest" ${APPLE})
 
 find_package(Threads REQUIRED)
 
 include(cmake/sources/base_runtime.cmake)
 include(cmake/sources/cpu_backend.cmake)
 include(cmake/sources/cuda_backend.cmake)
+include(cmake/sources/metal_backend.cmake)
 include(cmake/sources/api.cmake)
 include(cmake/sources/apps.cmake)
 include(cmake/sources/tests.cmake)
@@ -31,7 +39,9 @@ include(cmake/sources/tests.cmake)
 # the diagnostic names the broken manifest entry directly.
 foreach(_celeg_variable IN ITEMS
         CELEG_BASE_RUNTIME_SOURCES CELEG_CPU_BACKEND_SOURCES
-        CELEG_CUDA_BACKEND_SOURCES CELEG_API_SOURCES)
+        CELEG_CUDA_BACKEND_SOURCES CELEG_METAL_BACKEND_SOURCES
+        CELEG_METAL_MODEL_SOURCES CELEG_METAL_SHADER_SOURCES
+        CELEG_METAL_APP_SOURCES CELEG_API_SOURCES)
     foreach(_celeg_source IN LISTS ${_celeg_variable})
         if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/${_celeg_source}")
             message(FATAL_ERROR
@@ -174,6 +184,70 @@ if(CELEG_ENABLE_SERVE)
 
 endif()
 
+set(CELEG_METAL_AVAILABLE OFF)
+if(CELEG_ENABLE_METAL)
+    if(NOT APPLE)
+        message(FATAL_ERROR "CELEG_ENABLE_METAL requires an Apple host")
+    endif()
+    include(CheckLanguage)
+    check_language(OBJCXX)
+    if(NOT CMAKE_OBJCXX_COMPILER)
+        message(FATAL_ERROR "CELEG_ENABLE_METAL requires an Objective-C++ compiler")
+    endif()
+    enable_language(OBJCXX)
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/backend/metal/kernels/probe.metal"
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/backend/metal/kernels/inference.metal")
+    find_library(CELEG_METAL_FRAMEWORK Metal REQUIRED)
+    find_library(CELEG_FOUNDATION_FRAMEWORK Foundation REQUIRED)
+    file(READ "${CMAKE_CURRENT_SOURCE_DIR}/src/backend/metal/kernels/probe.metal"
+        CELEG_METAL_PROBE_SOURCE)
+    file(READ "${CMAKE_CURRENT_SOURCE_DIR}/src/backend/metal/kernels/inference.metal"
+        CELEG_METAL_INFERENCE_SOURCE)
+    file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/generated")
+    configure_file(
+        "${CMAKE_CURRENT_SOURCE_DIR}/cmake/metal_probe_source.hpp.in"
+        "${CMAKE_CURRENT_BINARY_DIR}/generated/metal_probe_source.hpp"
+        @ONLY)
+    configure_file(
+        "${CMAKE_CURRENT_SOURCE_DIR}/cmake/metal_inference_source.hpp.in"
+        "${CMAKE_CURRENT_BINARY_DIR}/generated/metal_inference_source.hpp"
+        @ONLY)
+
+    add_library(celeg_metal_backend ${CELEG_METAL_BACKEND_SOURCES})
+    target_include_directories(celeg_metal_backend PUBLIC include)
+    target_include_directories(celeg_metal_backend PRIVATE
+        "${CMAKE_CURRENT_BINARY_DIR}/generated")
+    target_compile_definitions(celeg_metal_backend PUBLIC CELEG_API_WITH_METAL=1)
+    target_link_libraries(celeg_metal_backend PUBLIC
+        celeg_runtime "${CELEG_METAL_FRAMEWORK}" "${CELEG_FOUNDATION_FRAMEWORK}"
+        Threads::Threads)
+    set_source_files_properties(src/backend/metal/runtime/device.mm
+        PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
+    set(CELEG_METAL_AVAILABLE ON)
+
+    add_library(celeg_serve_metal src/serve/metal_inference_service.cpp)
+    target_sources(celeg_serve_metal PRIVATE ${CELEG_METAL_MODEL_SOURCES})
+    target_include_directories(celeg_serve_metal PUBLIC include)
+    target_include_directories(celeg_serve_metal PRIVATE
+        "${CMAKE_CURRENT_BINARY_DIR}/generated")
+    target_link_libraries(celeg_serve_metal PUBLIC
+        celeg_metal_backend celeg_cpu_backend)
+    target_compile_definitions(celeg_serve_metal PUBLIC CELEG_SERVE_METAL=1)
+    set_source_files_properties(src/backend/metal/model/model.mm
+        PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
+    target_link_libraries(celeg PRIVATE celeg_metal_backend celeg_serve_metal)
+    if(TARGET celeg-serve)
+        target_link_libraries(celeg-serve PRIVATE celeg_serve_metal)
+        target_compile_definitions(celeg-serve PRIVATE CELEG_SERVE_METAL=1)
+    endif()
+
+    add_executable(celeg-metal-run src/app/metal/main.cpp)
+    target_link_libraries(celeg-metal-run PRIVATE celeg_serve_metal celeg_base)
+    add_executable(celeg-metal-bench ${CELEG_METAL_APP_SOURCES})
+    target_link_libraries(celeg-metal-bench PRIVATE celeg_serve_metal celeg_base)
+endif()
+
 add_library(celeg_serve_core src/serve/generation_dispatcher.cpp)
 target_include_directories(celeg_serve_core PUBLIC include)
 if(NOT MSVC)
@@ -188,6 +262,9 @@ if(NOT MSVC)
 endif()
 target_link_libraries(celeg_serve_cpu PUBLIC celeg_cpu_backend)
 target_link_libraries(celeg PRIVATE celeg_serve_cpu)
+if(CELEG_METAL_AVAILABLE)
+    target_link_libraries(celeg_serve_metal PUBLIC celeg_serve_cpu)
+endif()
 
 if(CELEG_ENABLE_SERVE)
     # libuv is uSockets' event loop backend on platforms without epoll/kqueue
@@ -256,6 +333,10 @@ if(CELEG_ENABLE_SERVE)
         src/app/serve/routes/chat_completions.cpp)
     target_link_libraries(celeg-serve PRIVATE
         celeg_cpu_backend celeg_serve_cpu celeg_serve_core celeg_serve_protocol uwebsockets)
+    if(CELEG_METAL_AVAILABLE)
+        target_link_libraries(celeg-serve PRIVATE celeg_serve_metal)
+        target_compile_definitions(celeg-serve PRIVATE CELEG_SERVE_METAL=1)
+    endif()
     add_custom_command(TARGET celeg-serve POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E rm -rf "$<TARGET_FILE_DIR:celeg-serve>/celeg-serve-assets"
         COMMAND ${CMAKE_COMMAND} -E make_directory
@@ -397,6 +478,10 @@ endif()
 if(CELEG_ENABLE_SERVE)
     list(APPEND CELEG_INSTALL_TARGETS celeg_serve_protocol celeg-serve)
 endif()
+if(CELEG_METAL_AVAILABLE)
+    list(APPEND CELEG_INSTALL_TARGETS celeg_metal_backend celeg_serve_metal
+        celeg-metal-run celeg-metal-bench)
+endif()
 install(TARGETS ${CELEG_INSTALL_TARGETS}
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
@@ -481,6 +566,10 @@ set(CELEG_PUBLIC_HEADERS
     include/celeg/backend/cuda/moe/expert_residency.hpp
     include/celeg/serve/cpu_inference_service.hpp
     include/celeg/backend/cuda/cuda_inference_service.hpp
+    include/celeg/backend/metal/device.hpp
+    include/celeg/backend/metal/model.hpp
+    include/celeg/backend/metal/runtime_types.hpp
+    include/celeg/serve/metal_inference_service.hpp
     include/celeg/serve/generation_dispatcher.hpp
     include/celeg/serve/chat_generation.hpp
     include/celeg/serve/inference_service.hpp
@@ -796,12 +885,12 @@ target_link_libraries(weight_plan_test PRIVATE celeg_base)
     target_link_libraries(runtime_backend_extension_test PRIVATE celeg_base)
     target_include_directories(runtime_backend_extension_test PRIVATE include tests)
     add_test(NAME runtime_backend_extension_test COMMAND runtime_backend_extension_test)
-    # Host-only policy test: the CUDA attention capability matrix is data, so it
-    # is verified on every preset, with or without a CUDA toolchain.
-    add_executable(cuda_attention_capability_test tests/cuda_attention_capability_test.cpp)
-    target_link_libraries(cuda_attention_capability_test PRIVATE celeg_base)
-    target_include_directories(cuda_attention_capability_test PRIVATE include tests)
-    add_test(NAME cuda_attention_capability_test COMMAND cuda_attention_capability_test)
+    if(CELEG_CUDA_AVAILABLE)
+        add_executable(cuda_attention_capability_test tests/cuda_attention_capability_test.cpp)
+        target_link_libraries(cuda_attention_capability_test PRIVATE celeg_base)
+        target_include_directories(cuda_attention_capability_test PRIVATE include tests)
+        add_test(NAME cuda_attention_capability_test COMMAND cuda_attention_capability_test)
+    endif()
     add_executable(image_codec_test tests/image_codec_test.cpp)
     target_link_libraries(image_codec_test PRIVATE celeg_base)
     target_include_directories(image_codec_test PRIVATE include tests)
@@ -876,5 +965,30 @@ target_link_libraries(weight_plan_test PRIVATE celeg_base)
         if(CELEG_RUN_CUDA_TESTS)
             add_test(NAME cuda_granite_test COMMAND cuda_granite_test)
         endif()
+    endif()
+
+    if(CELEG_METAL_AVAILABLE)
+        add_executable(metal_device_test tests/metal_device_test.mm)
+        target_include_directories(metal_device_test PRIVATE include)
+        target_link_libraries(metal_device_test PRIVATE celeg_metal_backend)
+        if(CELEG_RUN_METAL_TESTS)
+            add_test(NAME metal_device_test COMMAND metal_device_test)
+        endif()
+        add_executable(metal_inference_test tests/metal_inference_test.mm)
+        target_include_directories(metal_inference_test PRIVATE include)
+        target_link_libraries(metal_inference_test PRIVATE
+            celeg_serve_metal celeg_cpu_backend celeg_base)
+        add_executable(metal_quantization_test tests/metal_quantization_test.mm)
+        target_include_directories(metal_quantization_test PRIVATE include
+            "${CMAKE_CURRENT_BINARY_DIR}/generated")
+        target_link_libraries(metal_quantization_test PRIVATE
+            celeg_cpu_backend celeg_base "${CELEG_METAL_FRAMEWORK}"
+            "${CELEG_FOUNDATION_FRAMEWORK}")
+        add_executable(metal_c_api_smoke_test tests/metal_c_api_smoke_test.c)
+        target_include_directories(metal_c_api_smoke_test PRIVATE include)
+        target_link_libraries(metal_c_api_smoke_test PRIVATE celeg)
+        add_executable(metal_service_test tests/metal_service_test.mm)
+        target_include_directories(metal_service_test PRIVATE include)
+        target_link_libraries(metal_service_test PRIVATE celeg_serve_metal celeg_base)
     endif()
 endif()

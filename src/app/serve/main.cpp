@@ -7,6 +7,9 @@
 #ifdef CELEG_SERVE_CUDA
 #include "celeg/backend/cuda/cuda_inference_service.hpp"
 #endif
+#ifdef CELEG_SERVE_METAL
+#include "celeg/serve/metal_inference_service.hpp"
+#endif
 #include "celeg/serve/generation_dispatcher.hpp"
 #include "celeg/text/tokenizer.hpp"
 #include "celeg/runtime/context.hpp"
@@ -94,7 +97,7 @@ Args parse_args(int argc, char** argv) {
         else if (key == "--help") {
             std::cout << "celeg-serve (--model PATH | --repo HF_REPO | HF_REPO_OR_PATH) [--host 127.0.0.1] [--port 8080] [--context 4096] "
                          "[--threads N] [--max-active-requests N] [--max-batched-tokens N] "
-                         "[--prefill-chunk-tokens N] [--backend cpu|cuda] "
+                         "[--prefill-chunk-tokens N] [--backend cpu|cuda|metal] "
                          "[--format auto|safetensors|gguf] [--quant TAG] "
                          "[--expert-offload none|auto|host] [--expert-cache-policy static|lru|lfu-lru] "
                          "[--expert-backing host|disk] [--expert-cache-per-layer N] "
@@ -253,8 +256,21 @@ int main(int argc, char** argv) {
 #else
             throw std::runtime_error("CUDA serving is not available in this build");
 #endif
+        } else if (args.backend == "metal") {
+#ifdef CELEG_SERVE_METAL
+            celeg::MetalEngineOptions engine_options;
+            engine_options.max_active_requests = args.max_active_requests;
+            engine_options.max_batched_tokens = args.max_batched_tokens;
+            engine_options.prefill_chunk_tokens = args.prefill_chunk_tokens;
+            service = std::make_unique<celeg::serve::ServiceBundle>(
+                std::make_unique<celeg::serve::MetalInferenceService>(
+                    model.string(), args.context, celeg::MetalModelOptions{},
+                    engine_options, runtime));
+#else
+            throw std::runtime_error("Metal serving is not available in this build");
+#endif
         } else {
-            throw std::runtime_error("--backend must be cpu or cuda");
+            throw std::runtime_error("--backend must be cpu, cuda, or metal");
         }
 
         celeg::ChatCapabilities chat_capabilities = chat_template.capabilities();

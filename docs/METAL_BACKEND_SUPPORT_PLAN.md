@@ -2,7 +2,21 @@
 
 ## Status
 
-Proposed implementation roadmap.
+Initial native Metal vertical slice implemented; broader backend coverage remains pending.
+
+The current implementation provides the backend build/configuration surface,
+Apple Silicon capability discovery, a runtime-compiled Metal command-buffer
+probe, serving/API registration, and cached-checkpoint smoke coverage. The
+macOS arm64 CPU baseline is verified with the complete 80-test CPU suite.
+native path currently covers the cached LFM2.5-350M convolution/attention/
+SwiGLU graph and runs its linear, convolutional, attention, and logits operations
+through Metal. Q4_K and Q6_K GGUF tensors remain in native block layout and
+use Metal dequantizing GEMV and embedding kernels; other quantized formats
+still use the explicit host fallback. The cached LFM2.5-8B-A1B MoE checkpoint
+now resolves through the common tensor grammar but remains explicitly rejected
+by the Metal model loader until MoE execution and memory-efficient weight
+residency are implemented. The remaining recurrent/MoE graph
+families, paging, batching, and serving scale-out are later roadmap phases.
 
 Audit baseline: `master` at `cdd716677364e5f52d1875f9b5e68e11e89afa81`.
 
@@ -905,6 +919,11 @@ pass/fail correctness tests so thermal/background noise does not make CI flaky.
 
 **Gate:** quantized model runs without whole-model BF16 expansion.
 
+Current status: Q4_K and Q6_K native block residency, Metal GEMV/embedding
+dispatch, CPU reference comparison, cached LFM2.5-350M-Q4_K_M smoke, and the
+reproducible `celeg-metal-bench` manifest pass on the physical M5. Additional
+K-quants remain on the host fallback path.
+
 ## Sprint M4 — hybrid/recurrent execution
 
 - short convolution;
@@ -972,27 +991,27 @@ experimental branch.
 
 Metal support is considered first-class only when all of the following are true:
 
-- [ ] macOS arm64 CPU verify passes.
-- [ ] Metal device discovery and shader compilation are part of the standard
+- [x] macOS arm64 CPU verify passes.
+- [x] Metal device discovery and shader compilation are part of the standard
       developer harness.
-- [ ] `celeg_metal_backend` is isolated from backend-neutral code.
-- [ ] backend id `metal` works through `celeg_engine_create`.
-- [ ] Metal serving uses the existing service interfaces.
-- [ ] Safetensors model smoke passes.
-- [ ] GGUF native quantized model smoke passes.
-- [ ] standard attention path passes CPU numerical comparison.
-- [ ] at least one hybrid/recurrent model passes.
+- [x] `celeg_metal_backend` is isolated from backend-neutral code.
+- [x] backend id `metal` works through `celeg_engine_create`.
+- [x] Metal serving uses the existing service interfaces.
+- [x] Safetensors model smoke passes.
+- [x] GGUF native quantized model smoke passes.
+- [x] standard attention path passes CPU numerical comparison.
+- [x] at least one hybrid/recurrent model passes.
 - [ ] paged KV and prefix-cache tests pass.
 - [ ] concurrent request tests pass.
 - [ ] at least one MoE checkpoint passes.
-- [ ] M5 benchmark results are reproducible and committed as benchmark output,
+- [x] M5 benchmark results are reproducible and committed as benchmark output,
       not hard-coded claims in implementation comments.
 - [ ] hosted macOS CI compiles the Metal backend and shaders.
-- [ ] real Metal runtime is validated on the physical M5 or a self-hosted Apple
+- [x] real Metal runtime is validated on the physical M5 or a self-hosted Apple
       Silicon runner.
 - [ ] optional M5 tensor fast paths are feature-detected and retain the generic
       Metal fallback.
-- [ ] README/support matrix and developer documentation are updated.
+- [x] README/support matrix and developer documentation are updated.
 
 ---
 

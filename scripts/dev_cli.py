@@ -17,7 +17,7 @@ from dev_reporting import print_doctor
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("command", choices=("doctor", "build", "test", "smoke", "verify"))
-    parser.add_argument("--backend", choices=("auto", "cpu", "cuda"), default="auto")
+    parser.add_argument("--backend", choices=("auto", "cpu", "cuda", "metal"), default="auto")
     parser.add_argument(
         "--build-type",
         choices=("Release", "RelWithDebInfo", "Debug"),
@@ -84,4 +84,3 @@ def main(argv: Sequence[str] | None = None) -> int:
     except (DevError, OSError) as error:
         print(f"{args.command}: FAIL: {error}", file=sys.stderr)
         return 1
-

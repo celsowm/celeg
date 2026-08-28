@@ -33,7 +33,20 @@ def environment_json(environment: Environment) -> dict[str, object]:
             "driver": environment.driver_version or None,
             "architecture": environment.gpu_arch,
         },
+        "metal": {
+            "macos_version": environment.macos_version or None,
+            "xcode_version": environment.xcode_version or None,
+            "sdk_path": str(environment.sdk_path) if environment.sdk_path else None,
+            "metal": tool_json(environment.metal_compiler),
+            "metallib": tool_json(environment.metallib_compiler),
+        },
         "checkpoint": str(environment.checkpoint) if environment.checkpoint else None,
+        "quantized_checkpoint": (
+            str(environment.quantized_checkpoint)
+            if environment.quantized_checkpoint
+            else None
+        ),
+        "moe_checkpoint": str(environment.moe_checkpoint) if environment.moe_checkpoint else None,
         "warnings": environment.warnings,
         "errors": environment.errors,
     }
@@ -57,10 +70,17 @@ def print_doctor(environment: Environment, as_json: bool) -> None:
     print(f"doctor: gpu            {environment.gpu_name or '<not detected>'}")
     print(f"doctor: driver         {environment.driver_version or '<not detected>'}")
     print(f"doctor: architecture   {environment.gpu_arch}")
+    if environment.platform_name == "darwin":
+        print(f"doctor: macOS          {environment.macos_version or '<not detected>'}")
+        print(f"doctor: Xcode          {environment.xcode_version or '<not detected>'}")
+        print(f"doctor: SDK            {environment.sdk_path or '<not detected>'}")
+        print(f"doctor: metal compiler  {display(environment.metal_compiler)}")
+        print(f"doctor: metallib        {display(environment.metallib_compiler)}")
     print(f"doctor: checkpoint     {environment.checkpoint or '<not cached>'}")
+    print(f"doctor: quantized      {environment.quantized_checkpoint or '<not cached>'}")
+    print(f"doctor: MoE checkpoint {environment.moe_checkpoint or '<not cached>'}")
     for warning in environment.warnings:
         print(f"doctor: warning: {warning}")
     for error in environment.errors:
         print(f"doctor: error: {error}")
     print(f"doctor: RESULT: {'ready' if environment.ok else 'not ready'}")
-

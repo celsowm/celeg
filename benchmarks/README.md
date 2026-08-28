@@ -164,3 +164,18 @@ Writes `benchmarks/compile_baseline.json` (gitignored) with clean build time,
 two incremental rebuild times (one after touching an attention kernel, one
 after touching a model orchestration file), and the final `celeg-run` binary
 size.
+
+## Metal benchmark
+
+The Metal benchmark keeps model loading outside the timed samples and measures
+deterministic direct token evaluation after one warm-up run. It resolves the
+checkpoint from the local Hugging Face cache and records the platform, backend,
+manifest, and CELEG revision in the result:
+
+```bash
+python benchmarks/run_metal_bench.py \
+  benchmarks/manifests/metal_lfm25_350m_q4_k_m.json
+```
+
+The current baseline is recorded in `docs/METAL_BENCHMARK_REPORT.md`. It is a
+correctness/performance reference, not a cross-machine performance threshold.

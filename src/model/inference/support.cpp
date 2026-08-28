@@ -184,6 +184,9 @@ bool layer_has_feed_forward(const CanonicalInferenceContext& context,
          has_tensor("transformer.h." + index + ".mlp.w_up.weight") ||
          has_tensor("model.layers." + index + ".feed_forward.w1.weight") ||
          has_tensor("model.language_model.layers." + index + ".feed_forward.w1.weight") ||
+         has_tensor("model.layers." + index + ".feed_forward.experts.0.w1.weight") ||
+         has_tensor("model.language_model.layers." + index +
+                    ".feed_forward.experts.0.w1.weight") ||
          (context.moe &&
           has_tensor("model.layers." + index +
                      ".mlp.experts.0.gate_proj.weight")));

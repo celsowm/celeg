@@ -123,6 +123,24 @@ typedef struct celeg_cuda_backend_options {
     celeg_cuda_engine_options engine;
 } celeg_cuda_backend_options;
 
+typedef struct celeg_metal_model_options {
+    int32_t weight_mode;
+    int32_t kv_cache_mode;
+    int32_t storage_mode;
+} celeg_metal_model_options;
+
+typedef struct celeg_metal_engine_options {
+    int32_t max_active_requests;
+    int32_t max_batched_tokens;
+    int32_t prefill_chunk_tokens;
+} celeg_metal_engine_options;
+
+typedef struct celeg_metal_backend_options {
+    uint32_t struct_size;
+    celeg_metal_model_options model;
+    celeg_metal_engine_options engine;
+} celeg_metal_backend_options;
+
 typedef struct celeg_request_options {
     uint32_t struct_size;
     uint32_t max_new_tokens;
@@ -146,6 +164,7 @@ CELEG_API void celeg_engine_options_init(celeg_engine_options* options,
                                           uint32_t backend_options_size);
 CELEG_API void celeg_cpu_backend_options_init(celeg_cpu_backend_options* options);
 CELEG_API void celeg_cuda_backend_options_init(celeg_cuda_backend_options* options);
+CELEG_API void celeg_metal_backend_options_init(celeg_metal_backend_options* options);
 CELEG_API void celeg_request_options_init(celeg_request_options* options);
 CELEG_API const char* celeg_backend_capabilities(const char* backend_id);
 

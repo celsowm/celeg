@@ -16,6 +16,7 @@ celeg_engine* celeg_engine_create(const char* path,
                                  sizeof(options->generation), "generation options");
         auto result = std::make_unique<celeg_engine>();
         result->service = celeg::api::create_service_bundle(path, *options);
+        result->service->scheduler().start();
         return result.release();
     } catch (const std::exception& error) {
         celeg::api::global_error = error.what();
@@ -23,7 +24,11 @@ celeg_engine* celeg_engine_create(const char* path,
     }
 }
 
-void celeg_engine_destroy(celeg_engine* engine) { delete engine; }
+void celeg_engine_destroy(celeg_engine* engine) {
+    if (!engine) return;
+    if (engine->service) engine->service->scheduler().stop();
+    delete engine;
+}
 
 celeg_status celeg_engine_submit(celeg_engine* engine, const int32_t* tokens,
                                  size_t count,

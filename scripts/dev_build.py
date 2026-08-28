@@ -76,8 +76,10 @@ def configure_command(
         "Ninja",
         f"-DCMAKE_BUILD_TYPE={args.build_type}",
         f"-DCELEG_ENABLE_CUDA={'ON' if environment.backend == 'cuda' else 'OFF'}",
+        f"-DCELEG_ENABLE_METAL={'ON' if environment.backend == 'metal' else 'OFF'}",
         "-DCELEG_BUILD_TESTS=ON",
         f"-DCELEG_RUN_CUDA_TESTS={'ON' if args.celeg_tests == 'on' else 'OFF'}",
+        f"-DCELEG_RUN_METAL_TESTS={'ON' if args.celeg_tests == 'on' else 'OFF'}",
     ]
     # Do not let CMake rediscover a newer preview toolset from the global
     # machine when the harness already selected a CUDA-compatible MSVC host.
@@ -279,7 +281,12 @@ class SmokeCoordinator:
         self.directory = directory
 
     def _runner(self) -> pathlib.Path:
-        name = "celeg-run" if self.environment.backend == "cuda" else "celeg-cpu-run"
+        if self.environment.backend == "cuda":
+            name = "celeg-run"
+        elif self.environment.backend == "metal":
+            name = "celeg-metal-run"
+        else:
+            name = "celeg-cpu-run"
         return executable(self.directory, name, self.environment)
 
     def _commands(self, runner: pathlib.Path) -> list[list[str]]:
@@ -291,6 +298,28 @@ class SmokeCoordinator:
             commands.append([
                 str(executable(self.directory, "expert_residency_test", self.environment))
             ])
+        if self.environment.backend == "metal" and self.args.celeg_tests == "on":
+            commands.append([
+                str(executable(self.directory, "metal_device_test", self.environment))
+            ])
+            if self.environment.quantized_checkpoint:
+                commands.append([
+                    str(executable(self.directory, "metal_quantization_test", self.environment)),
+                    str(self.environment.quantized_checkpoint),
+                ])
+            if self.environment.checkpoint:
+                commands.append([
+                    str(executable(self.directory, "metal_inference_test", self.environment)),
+                    str(self.environment.checkpoint),
+                ])
+                commands.append([
+                    str(executable(self.directory, "metal_c_api_smoke_test", self.environment)),
+                    str(self.environment.checkpoint),
+                ])
+                commands.append([
+                    str(executable(self.directory, "metal_service_test", self.environment)),
+                    str(self.environment.checkpoint),
+                ])
         return commands
 
     def _run_commands(self, commands: Sequence[Sequence[str]]) -> None:
@@ -300,29 +329,73 @@ class SmokeCoordinator:
                 raise DevError(f"Smoke command failed: {pathlib.Path(command[0]).name}")
 
     def _run_cached_inference(self, runner: pathlib.Path) -> None:
-        if self.environment.backend != "cuda":
+        if self.environment.backend == "cpu":
             print_visible("smoke: model inference skipped for CPU verification")
             return
-        if not self.environment.checkpoint:
-            print_visible(f"smoke: {HF_REPO} is not cached; model inference skipped")
-            return
-        if not self.environment.gpu_name:
+        if self.environment.backend == "cuda" and not self.environment.gpu_name:
             print_visible("smoke: no CUDA device is visible; model inference skipped")
             return
-        result = run_visible(
-            [
-                str(runner),
-                "--repo",
-                HF_REPO,
-                "--prompt",
-                "Hello",
-                "--max-new-tokens",
-                "4",
-            ],
-            env=self.environment.values,
-        )
-        if result.returncode != 0:
-            raise DevError("Cached model inference smoke test failed.")
+        if self.environment.checkpoint:
+            if self.environment.backend == "metal":
+                model_argument = ["--model", str(self.environment.checkpoint)]
+            else:
+                model_argument = ["--repo", HF_REPO]
+            result = run_visible(
+                [
+                    str(runner),
+                    *model_argument,
+                    "--prompt",
+                    "Hello",
+                    "--max-new-tokens",
+                    "4",
+                ],
+                env=self.environment.values,
+            )
+            if result.returncode != 0:
+                raise DevError("Cached model inference smoke test failed.")
+        else:
+            print_visible(f"smoke: {HF_REPO} is not cached; model inference skipped")
+        if self.environment.backend == "metal" and self.environment.quantized_checkpoint:
+            result = run_visible(
+                [
+                    str(runner),
+                    "--model",
+                    str(self.environment.quantized_checkpoint),
+                    "--prompt",
+                    "Hello",
+                    "--max-new-tokens",
+                    "4",
+                ],
+                env=self.environment.values,
+            )
+            if result.returncode != 0:
+                raise DevError("Cached GGUF Metal inference smoke test failed.")
+            result = run_visible(
+                [
+                    str(executable(self.directory, "metal_c_api_smoke_test", self.environment)),
+                    str(self.environment.quantized_checkpoint),
+                ],
+                env=self.environment.values,
+            )
+            if result.returncode != 0:
+                raise DevError("Cached GGUF Metal C API smoke test failed.")
+        if self.environment.backend == "metal" and self.environment.moe_checkpoint:
+            result = run_visible(
+                [
+                    str(runner),
+                    "--model",
+                    str(self.environment.moe_checkpoint),
+                    "--context",
+                    "64",
+                    "--prompt",
+                    "Hello",
+                    "--max-new-tokens",
+                    "1",
+                ],
+                env=self.environment.values,
+            )
+            if result.returncode != 0:
+                raise DevError("Cached Metal MoE inference smoke test failed.")
 
     def run(self) -> None:
         runner = self._runner()

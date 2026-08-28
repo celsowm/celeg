@@ -29,6 +29,8 @@ model/
 # under benchmarks/ at all -- both engines read from the user's default HF
 # hub cache (see benchmarks/run_bench.py).
 .externals/
-benchmarks/results/
+benchmarks/results/*
+!benchmarks/results/
+!benchmarks/results/metal_lfm25_350m_q4_k_m.json
 run_asan_qwen.bat
 .hermes/

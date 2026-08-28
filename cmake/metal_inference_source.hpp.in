@@ -1,0 +1,7 @@
+#pragma once
+
+namespace celeg::metal_detail {
+inline constexpr const char* kInferenceShader = R"CELEGINF(
+@CELEG_METAL_INFERENCE_SOURCE@
+)CELEGINF";
+}

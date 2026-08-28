@@ -26,7 +26,8 @@ std::string source_identity(const std::filesystem::path& path) {
     if (std::filesystem::is_regular_file(path)) {
         out << std::filesystem::file_size(path) << ':';
     }
-    out << std::filesystem::last_write_time(path).time_since_epoch().count();
+    out << static_cast<long long>(
+        std::filesystem::last_write_time(path).time_since_epoch().count());
     return out.str();
 }
 

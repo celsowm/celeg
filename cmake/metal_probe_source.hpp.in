@@ -1,0 +1,9 @@
+#pragma once
+
+namespace celeg::metal_detail {
+
+inline constexpr const char* kProbeShader = R"CELEGMSL(
+@CELEG_METAL_PROBE_SOURCE@
+)CELEGMSL";
+
+}

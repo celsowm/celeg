@@ -45,8 +45,9 @@ celeg_model_destroy(model);
 ## Engine API
 
 `celeg_engine` provides request submission, polling, cancellation, status
-inspection, and explicit stepping. The backend is selected by the backend ID,
-and backend-owned options are passed as an opaque payload.
+inspection, and explicit stepping. Creating a `celeg_engine` starts its
+selected scheduler; destroying it stops the scheduler. The backend is selected
+by the backend ID, and backend-owned options are passed as an opaque payload.
 
 ```c
 celeg_engine* engine = celeg_engine_create("model.safetensors", &engine_options);

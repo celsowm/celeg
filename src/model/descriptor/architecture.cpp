@@ -353,7 +353,7 @@ public:
                 scheduled_sliding.size() == static_cast<size_t>(physical_layer_count)
                     ? static_cast<size_t>(layer % physical_layer_count)
                     : static_cast<size_t>(layer);
-            return scheduled_sliding[index];
+            return static_cast<bool>(scheduled_sliding[index]);
         };
         for (int layer = 0; layer < layer_count; ++layer) {
             if (!std::holds_alternative<AttentionSpec>(
