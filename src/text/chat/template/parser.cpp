@@ -170,18 +170,18 @@ private:
             lexer_.current().text == "if") {
             lexer_.next();
             Expression condition = parse_or();
-            if (lexer_.current().kind != LexerToken::Kind::Identifier ||
-                lexer_.current().text != "else") {
-                throw std::invalid_argument(
-                    "Jinja conditional expression requires else");
-            }
-            lexer_.next();
 
             Expression result;
             result.kind = Expression::Kind::Conditional;
             result.children.push_back(std::move(condition));
             result.children.push_back(std::move(value));
-            result.children.push_back(parse_conditional());
+            if (lexer_.current().kind == LexerToken::Kind::Identifier &&
+                lexer_.current().text == "else") {
+                lexer_.next();
+                result.children.push_back(parse_conditional());
+            } else {
+                result.children.push_back(Expression{});
+            }
             return result;
         }
         return value;

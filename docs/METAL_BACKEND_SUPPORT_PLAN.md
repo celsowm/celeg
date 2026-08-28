@@ -13,11 +13,12 @@ SwiGLU graph and runs its linear, convolutional, attention, and logits operation
 through Metal. Q4_K and Q6_K GGUF tensors remain in native block layout and
 use Metal dequantizing GEMV and embedding kernels; other quantized formats
 still use the explicit host fallback. The cached LFM2.5-8B-A1B MoE checkpoint
-now runs a one-token Metal smoke using demand-loaded expert matrices. The
-service also has page-addressed KV storage, longest-prefix session reuse, and
-independent-request scheduling. Full recurrent graph coverage, a shared
-physical page allocator, batched GPU dispatch, and serving scale-out remain
-later roadmap phases.
+now runs a one-token Metal smoke using demand-loaded expert matrices, and the
+cached Gemma-4 E4B-it checkpoint runs text-only inference with an explicit
+minimal turn template. The service also has page-addressed KV storage,
+longest-prefix session reuse, and independent-request scheduling. Full
+recurrent graph coverage, a shared physical page allocator, batched GPU
+dispatch, and serving scale-out remain later roadmap phases.
 
 Audit baseline: `master` at `cdd716677364e5f52d1875f9b5e68e11e89afa81`.
 
@@ -935,10 +936,10 @@ K-quants remain on the host fallback path.
 **Gate:** at least one CELEG-supported hybrid checkpoint generates correctly.
 
 Current status: short-convolution hybrid inference is validated with cached
-LFM2.5-350M, and native single-token Mamba-2 and Gated Delta state kernels have
-deterministic GPU primitive coverage. No Mamba-2 or Gated Delta checkpoint is
-currently present in the local Hugging Face cache, so real-checkpoint numerical
-parity remains an acceptance task when such a fixture is available.
+LFM2.5-350M, native single-token Mamba-2 and Gated Delta state kernels have
+deterministic GPU primitive coverage, and a converted fixture from the cached
+`state-spaces/mamba2-130m` checkpoint completes four-token Metal generation.
+Full recurrent prefill and CPU numerical parity remain acceptance work.
 
 ## Sprint M5 — runtime cache and serving
 

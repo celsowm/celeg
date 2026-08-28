@@ -79,6 +79,14 @@ int main() {
     CELEG_TEST_CHECK(generation_resolved.format(inferred_messages, /*add_generation_prompt=*/true)
                          .find("<|im_start|>assistant") != std::string::npos);
 
+    celeg::CheckpointMetadata shorthand_metadata;
+    shorthand_metadata.values["chat_template"] = std::string(
+        "{{ ',' if messages }}");
+    const celeg::ResolvedInteraction shorthand_resolved =
+        celeg::resolve_interaction(shorthand_metadata, tokenizer);
+    CELEG_TEST_CHECK(shorthand_resolved.format({}).empty());
+    CELEG_TEST_CHECK(shorthand_resolved.format(inferred_messages) == ",");
+
     // strftime_now must render the current local time via a C strftime format
     // rather than emitting the literal format string.
     celeg::CheckpointMetadata strftime_metadata;
