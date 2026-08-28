@@ -426,6 +426,11 @@ private:
             result.kind = Expression::Kind::Literal;
             result.literal = TemplateValue{lexer_.current().text};
             lexer_.next();
+            while (lexer_.current().kind == LexerToken::Kind::String) {
+                std::get<std::string>(result.literal.value) +=
+                    lexer_.current().text;
+                lexer_.next();
+            }
             return result;
         }
 
@@ -701,12 +706,23 @@ private:
                     std::size_t begin = 0;
                     while (begin < parameters.size()) {
                         const std::size_t comma = parameters.find(',', begin);
-                        macro.parameters.push_back(trim(parameters.substr(
+                        const std::string parameter = trim(parameters.substr(
                             begin,
                             comma == std::string::npos
                                 ? std::string::npos
-                                : comma - begin)));
-                        if (macro.parameters.back().empty()) {
+                                : comma - begin));
+                        const std::size_t equals = parameter.find('=');
+                        MacroParameter parsed;
+                        parsed.name = trim(parameter.substr(
+                            0, equals == std::string::npos
+                                ? std::string::npos
+                                : equals));
+                        if (equals != std::string::npos) {
+                            parsed.default_value = parse_expression(
+                                parameter.substr(equals + 1));
+                        }
+                        macro.parameters.push_back(std::move(parsed));
+                        if (macro.parameters.back().name.empty()) {
                             fail("empty macro parameter");
                         }
                         if (comma == std::string::npos) {

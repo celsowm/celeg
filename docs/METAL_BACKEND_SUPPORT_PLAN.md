@@ -14,8 +14,8 @@ through Metal. Q4_K and Q6_K GGUF tensors remain in native block layout and
 use Metal dequantizing GEMV and embedding kernels; other quantized formats
 still use the explicit host fallback. The cached LFM2.5-8B-A1B MoE checkpoint
 now runs a one-token Metal smoke using demand-loaded expert matrices, and the
-cached Gemma-4 E4B-it checkpoint runs text-only inference with an explicit
-minimal turn template. The service also has page-addressed KV storage,
+cached Gemma-4 E4B-it checkpoint runs text-only inference through its stock
+template. The service also has page-addressed KV storage,
 longest-prefix session reuse, and independent-request scheduling. Full
 recurrent graph coverage, a shared physical page allocator, batched GPU
 dispatch, and serving scale-out remain later roadmap phases.

@@ -59,6 +59,11 @@ struct Expression {
     std::vector<Expression> children;
 };
 
+struct MacroParameter {
+    std::string name;
+    std::optional<Expression> default_value;
+};
+
 struct TemplateNode {
     enum class Kind {
         Text,
@@ -78,7 +83,7 @@ struct TemplateNode {
     std::vector<TemplateNode> body;
     std::vector<std::pair<Expression, std::vector<TemplateNode>>> branches;
     std::vector<TemplateNode> otherwise;
-    std::vector<std::string> parameters;
+    std::vector<MacroParameter> parameters;
 };
 
 TemplateValue template_value_from_json(const Json& input);

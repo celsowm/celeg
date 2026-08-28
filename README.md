@@ -192,14 +192,16 @@ celeg-metal-run --repo LiquidAI/LFM2.5-8B-A1B \
 ```
 
 Gemma-4 E4B-it can be smoke-tested through the cached repository as a text-only
-Metal run. Its upstream template uses Jinja constructs outside CELEG's
-restricted template subset, so pass the minimal fixture explicitly:
+Metal run. Its upstream template is supported by CELEG's generic Jinja
+interpreter:
 
 ```text
 celeg-metal-run --repo google/gemma-4-E4B-it \
-  --chat-template-file docs/fixtures/gemma4-metal.jinja \
   --context 64 --prompt "Hello" --max-new-tokens 4
 ```
+
+For a deterministic minimal text-only turn, the checked-in fixture remains
+available at `docs/fixtures/gemma4-metal.jinja` via `--chat-template-file`.
 
 The Metal benchmark uses the same cached file without downloading it:
 

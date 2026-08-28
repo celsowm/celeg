@@ -32,7 +32,7 @@ bool supported_member_call(std::string_view member) {
 }
 
 bool supported_filter(std::string_view filter) {
-    static constexpr std::array<std::string_view, 15> kFilters{
+    static constexpr std::array<std::string_view, 17> kFilters{
         "tojson",
         "string",
         "safe",
@@ -43,6 +43,8 @@ bool supported_filter(std::string_view filter) {
         "default",
         "replace",
         "join",
+        "dictsort",
+        "map",
         "list",
         "items",
         "min",
@@ -80,7 +82,7 @@ void validate_expression(
         return;
 
     case Expression::Kind::Binary: {
-        static constexpr std::array<std::string_view, 24> kAllowed{
+        static constexpr std::array<std::string_view, 25> kAllowed{
             "and",
             "or",
             "+",
@@ -102,6 +104,7 @@ void validate_expression(
             "is not none",
             "is string",
             "is not string",
+            "is boolean",
             "is true",
             "is false",
             "is iterable",
@@ -218,6 +221,12 @@ void validate_nodes(
             break;
 
         case TemplateNode::Kind::Macro:
+            for (const MacroParameter& parameter : node.parameters) {
+                if (parameter.default_value) {
+                    validate_expression(
+                        *parameter.default_value, origin, node.line, macros);
+                }
+            }
             validate_nodes(node.body, origin, macros);
             break;
 

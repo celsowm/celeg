@@ -621,6 +621,10 @@ private:
             return TemplateValue{
                 !std::holds_alternative<std::string>(value.value)};
         }
+        if (name == "is boolean") {
+            return TemplateValue{
+                std::holds_alternative<bool>(value.value)};
+        }
         if (name == "is true") {
             return TemplateValue{truthy(value)};
         }
@@ -729,6 +733,52 @@ private:
                 }
             }
             return TemplateValue{std::move(out)};
+        }
+        if (expression.text == "dictsort") {
+            const auto* object = std::get_if<ValueObject>(&input.value);
+            if (!object) {
+                throw_error(state, "dictsort filter requires an object");
+            }
+            ValueList pairs;
+            pairs.reserve(object->size());
+            for (const auto& [key, value] : *object) {
+                pairs.emplace_back(ValueList{TemplateValue{key}, value});
+            }
+            return TemplateValue{std::move(pairs)};
+        }
+        if (expression.text == "map") {
+            const auto* list = std::get_if<ValueList>(&input.value);
+            if (!list || expression.children.size() < 2) {
+                throw_error(state, "map filter requires a list and filter name");
+            }
+            const std::string operation = stringify(argument(1));
+            ValueList mapped;
+            mapped.reserve(list->size());
+            for (const TemplateValue& value : *list) {
+                const std::string text = stringify(value);
+                if (operation == "upper") {
+                    std::string transformed = text;
+                    std::transform(
+                        transformed.begin(), transformed.end(), transformed.begin(),
+                        [](unsigned char character) {
+                            return static_cast<char>(std::toupper(character));
+                        });
+                    mapped.emplace_back(std::move(transformed));
+                } else if (operation == "lower") {
+                    std::string transformed = text;
+                    std::transform(
+                        transformed.begin(), transformed.end(), transformed.begin(),
+                        [](unsigned char character) {
+                            return static_cast<char>(std::tolower(character));
+                        });
+                    mapped.emplace_back(std::move(transformed));
+                } else {
+                    throw_error(
+                        state,
+                        "unsupported map filter operation '" + operation + "'");
+                }
+            }
+            return TemplateValue{std::move(mapped)};
         }
         if (expression.text == "items") {
             const auto* object =
@@ -902,8 +952,8 @@ private:
 
             const auto macro = state.macros.find(target.text);
             if (macro != state.macros.end()) {
-                if (expression.children.size() - 1 >
-                    macro->second.node->parameters.size()) {
+                const auto& parameters = macro->second.node->parameters;
+                if (expression.children.size() - 1 > parameters.size()) {
                     throw_error(
                         state,
                         "wrong argument count for Jinja macro '" +
@@ -911,16 +961,46 @@ private:
                 }
 
                 ValueObject arguments;
-                for (std::size_t index = 0;
-                     index < macro->second.node->parameters.size();
+                std::size_t positional = 0;
+                for (std::size_t index = 1;
+                     index < expression.children.size();
                      ++index) {
-                    arguments.emplace(
-                        macro->second.node->parameters[index],
-                        index + 1 < expression.children.size()
-                            ? eval(
-                                  expression.children[index + 1],
-                                  state)
-                            : TemplateValue{});
+                    const Expression& argument = expression.children[index];
+                    if (argument.kind == Expression::Kind::Binary &&
+                        argument.text.starts_with("__keyword:")) {
+                        const std::string name = argument.text.substr(
+                            std::string_view("__keyword:").size());
+                        const auto parameter = std::find_if(
+                            parameters.begin(), parameters.end(),
+                            [&](const MacroParameter& candidate) {
+                                return candidate.name == name;
+                            });
+                        if (parameter == parameters.end() || arguments.contains(name)) {
+                            throw_error(state, "invalid Jinja macro keyword");
+                        }
+                        arguments.emplace(name, eval(argument.children.front(), state));
+                    } else {
+                        while (positional < parameters.size() &&
+                               arguments.contains(parameters[positional].name)) {
+                            ++positional;
+                        }
+                        if (positional >= parameters.size()) {
+                            throw_error(state, "too many positional Jinja macro arguments");
+                        }
+                        arguments.emplace(
+                            parameters[positional].name,
+                            eval(argument, state));
+                        ++positional;
+                    }
+                }
+                for (const MacroParameter& parameter : parameters) {
+                    if (!arguments.contains(parameter.name)) {
+                        arguments.emplace(
+                            parameter.name,
+                            parameter.default_value
+                                ? eval(*parameter.default_value, state)
+                                : TemplateValue{});
+                    }
                 }
                 state.scopes.push_back(std::move(arguments));
                 std::string output;

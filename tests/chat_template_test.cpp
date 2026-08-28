@@ -87,6 +87,14 @@ int main() {
     CELEG_TEST_CHECK(shorthand_resolved.format({}).empty());
     CELEG_TEST_CHECK(shorthand_resolved.format(inferred_messages) == ",");
 
+    celeg::CheckpointMetadata macro_metadata;
+    macro_metadata.values["chat_template"] = std::string(
+        "{% macro emit(value, suffix='!') %}{{ value }}{{ suffix }}{% endmacro %}"
+        "{{ emit('a', suffix='b') }}{{ emit('e') }}{{ 'c' 'd' }}");
+    const celeg::ResolvedInteraction macro_resolved =
+        celeg::resolve_interaction(macro_metadata, tokenizer);
+    CELEG_TEST_CHECK(macro_resolved.format({}) == "abe!cd");
+
     // strftime_now must render the current local time via a C strftime format
     // rather than emitting the literal format string.
     celeg::CheckpointMetadata strftime_metadata;
