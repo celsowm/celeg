@@ -167,7 +167,7 @@ calibration noise:
   dequantizes GGUF blocks through the same shared `q4_0_decode` used by the
   host dequantizer, not the CPU's packed native-dot kernel) and llama.cpp
   both continue "Paris.\n\</think\>\n\n...". celeg CPU's scalar and AVX2 Q4_0
-  dot kernels (`src/backend/cpu/kernels/gguf.cpp:467`,
+  dot kernels (`src/backend/cpu/kernels/gguf/dot.cpp`,
   `gguf_avx2.cpp:444`) agree with each other byte-for-byte and their
   dot-product algebra (`dot - 8*bsum`, matching ggml's zero-point
   convention) checks out on inspection, which rules out an ISA-specific

@@ -637,7 +637,7 @@ accidental `if/continue` order.
 ### Current problem
 
 `layer_semantics.cpp` recognizes a grammar and constructs a semantic mixer;
-`layer_bindings.cpp` then dispatches over the mixer and repeats family-specific
+the inference binding implementation then dispatches over the mixer and repeats family-specific
 tensor naming/shape knowledge to bind the physical tensors.
 
 This creates two coordinated registries that must evolve together.
