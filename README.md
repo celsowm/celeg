@@ -13,7 +13,7 @@ Safetensors checkpoint directory, or a local GGUF file.
 | Architecture | Safetensors | GGUF | CPU | CUDA | Metal |
 | --- | :---: | :---: | :---: | :---: | :---: |
 | LFM2/LFM2.5 dense | Yes | Yes | Yes | Yes | LFM2.5-350M |
-| LFM2/LFM2.5 MoE | Yes | Yes | Yes | Yes | No |
+| LFM2/LFM2.5 MoE | Yes | Yes | Yes | Yes | LFM2.5-8B-A1B (demand-loaded) |
 | Granite dense | Yes | No | Yes | Yes | No |
 | MiniCPM5-1B | Yes | Yes | Yes | Yes | No |
 | SmolLM3-3B | Yes | Yes | Yes | Yes | No |
@@ -105,8 +105,9 @@ For CUDA builds, add a compatible NVIDIA CUDA Toolkit and GPU. CUDA is
 optional; the CPU backend can be built without it.
 
 For Metal builds, use an Apple Silicon Mac with the macOS SDK and an
-Objective-C++ compiler. The current native Metal milestone targets the cached
-LFM2.5-350M convolution/attention model, with native Q4_K/Q6_K GGUF kernels.
+Objective-C++ compiler. The native Metal path covers the cached LFM2.5-350M
+convolution/attention model, native Q4_K/Q6_K GGUF kernels, and one-token
+demand-loaded inference for the cached LFM2.5-8B-A1B MoE checkpoint.
 
 The repository is developed and tested on Windows and Linux. On Windows,
 executables have an `.exe` suffix.
@@ -178,6 +179,14 @@ On Apple Silicon, the Metal runner uses the same cached checkpoint resolution:
 celeg-metal-run --repo LiquidAI/LFM2.5-350M-GGUF \
   --prompt "Explain gravity in one sentence." \
   --max-new-tokens 32
+```
+
+The cached MoE checkpoint can be smoke-tested on Metal with demand-loaded
+experts:
+
+```text
+celeg-metal-run --repo LiquidAI/LFM2.5-8B-A1B \
+  --context 64 --prompt "Hello" --max-new-tokens 1
 ```
 
 The Metal benchmark uses the same cached file without downloading it:

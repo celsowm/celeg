@@ -24,6 +24,12 @@ bool terminal(RequestStatus status) {
            status == RequestStatus::Failed;
 }
 
+MetalModelOptions model_options_for_engine(MetalModelOptions options,
+                                           const MetalEngineOptions& engine) {
+    options.kv_page_tokens = engine.kv_page_tokens;
+    return options;
+}
+
 }
 
 struct MetalInferenceService::Impl {
@@ -48,7 +54,9 @@ struct MetalInferenceService::Impl {
          MetalEngineOptions engine_options,
          std::shared_ptr<const RuntimeContext> runtime)
         : device(),
-          model(model_path, max_context, model_options, {}, std::move(runtime)),
+          model(model_path, max_context,
+                model_options_for_engine(model_options, engine_options), {},
+                std::move(runtime)),
          session(model.session()),
           model_info(),
           engine_options(std::move(engine_options)) {
@@ -69,6 +77,7 @@ struct MetalInferenceService::Impl {
         model_info.limits.max_active_requests = this->engine_options.max_active_requests;
         model_info.limits.max_batched_tokens = this->engine_options.max_batched_tokens;
         model_info.limits.prefill_chunk_tokens = this->engine_options.prefill_chunk_tokens;
+        model_info.limits.supports_paged_kv = true;
     }
 
     void cache_prefix(const PrefixKey& key, const MetalSessionSnapshot& snapshot) {

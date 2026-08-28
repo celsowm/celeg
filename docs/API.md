@@ -60,6 +60,26 @@ celeg_engine_step(engine, &progressed);
 celeg_engine_destroy(engine);
 ```
 
+## Metal backend
+
+On Apple Silicon, select `metal` through `celeg_engine_options` and initialize
+the backend payload with `celeg_metal_backend_options_init`. The Metal options
+include the KV page size, request limits, and prefix-cache capacity. The
+currently validated cached fixtures are LFM2.5-350M Safetensors, its Q4_K_M
+GGUF variant, and a one-token LFM2.5-8B-A1B MoE smoke with demand-loaded
+experts.
+
+```c
+celeg_metal_backend_options metal;
+celeg_metal_backend_options_init(&metal);
+metal.engine.max_active_requests = 2;
+metal.engine.kv_page_tokens = 16;
+metal.engine.prefix_cache = 1;
+
+celeg_engine_options engine;
+celeg_engine_options_init(&engine, "metal", &metal, sizeof(metal));
+```
+
 ## Tokenizer API
 
 `celeg_tokenizer_create`, `celeg_tokenizer_encode`, and

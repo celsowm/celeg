@@ -26,6 +26,8 @@ struct MetalSessionSnapshot {
     std::vector<float> logits;
     std::vector<std::vector<float>> key_state;
     std::vector<std::vector<float>> value_state;
+    std::vector<std::vector<float>> mixer_state;
+    std::vector<std::vector<float>> recurrent_state;
 };
 
 class MetalInferenceSession {

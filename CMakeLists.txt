@@ -984,6 +984,11 @@ target_link_libraries(weight_plan_test PRIVATE celeg_base)
         target_link_libraries(metal_quantization_test PRIVATE
             celeg_cpu_backend celeg_base "${CELEG_METAL_FRAMEWORK}"
             "${CELEG_FOUNDATION_FRAMEWORK}")
+        add_executable(metal_recurrent_test tests/metal_recurrent_test.mm)
+        target_include_directories(metal_recurrent_test PRIVATE include
+            "${CMAKE_CURRENT_BINARY_DIR}/generated")
+        target_link_libraries(metal_recurrent_test PRIVATE
+            celeg_base "${CELEG_METAL_FRAMEWORK}" "${CELEG_FOUNDATION_FRAMEWORK}")
         add_executable(metal_c_api_smoke_test tests/metal_c_api_smoke_test.c)
         target_include_directories(metal_c_api_smoke_test PRIVATE include)
         target_link_libraries(metal_c_api_smoke_test PRIVATE celeg)

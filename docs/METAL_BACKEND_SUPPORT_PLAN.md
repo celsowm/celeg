@@ -8,15 +8,16 @@ The current implementation provides the backend build/configuration surface,
 Apple Silicon capability discovery, a runtime-compiled Metal command-buffer
 probe, serving/API registration, and cached-checkpoint smoke coverage. The
 macOS arm64 CPU baseline is verified with the complete 80-test CPU suite.
-native path currently covers the cached LFM2.5-350M convolution/attention/
+The native path currently covers the cached LFM2.5-350M convolution/attention/
 SwiGLU graph and runs its linear, convolutional, attention, and logits operations
 through Metal. Q4_K and Q6_K GGUF tensors remain in native block layout and
 use Metal dequantizing GEMV and embedding kernels; other quantized formats
 still use the explicit host fallback. The cached LFM2.5-8B-A1B MoE checkpoint
-now resolves through the common tensor grammar but remains explicitly rejected
-by the Metal model loader until MoE execution and memory-efficient weight
-residency are implemented. The remaining recurrent/MoE graph
-families, paging, batching, and serving scale-out are later roadmap phases.
+now runs a one-token Metal smoke using demand-loaded expert matrices. The
+service also has page-addressed KV storage, longest-prefix session reuse, and
+independent-request scheduling. Full recurrent graph coverage, a shared
+physical page allocator, batched GPU dispatch, and serving scale-out remain
+later roadmap phases.
 
 Audit baseline: `master` at `cdd716677364e5f52d1875f9b5e68e11e89afa81`.
 
@@ -1001,12 +1002,13 @@ Metal support is considered first-class only when all of the following are true:
 - [x] GGUF native quantized model smoke passes.
 - [x] standard attention path passes CPU numerical comparison.
 - [x] at least one hybrid/recurrent model passes.
-- [ ] paged KV and prefix-cache tests pass.
-- [ ] concurrent request tests pass.
-- [ ] at least one MoE checkpoint passes.
+- [x] page-addressed KV and prefix-cache tests pass.
+- [x] concurrent independent-request tests pass; batched GPU dispatch remains
+      a later optimization.
+- [x] the cached LFM2.5-8B-A1B MoE checkpoint passes a one-token smoke.
 - [x] M5 benchmark results are reproducible and committed as benchmark output,
       not hard-coded claims in implementation comments.
-- [ ] hosted macOS CI compiles the Metal backend and shaders.
+- [x] hosted macOS CI compiles the Metal backend and shaders.
 - [x] real Metal runtime is validated on the physical M5 or a self-hosted Apple
       Silicon runner.
 - [ ] optional M5 tensor fast paths are feature-detected and retain the generic

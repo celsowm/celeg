@@ -302,6 +302,9 @@ class SmokeCoordinator:
             commands.append([
                 str(executable(self.directory, "metal_device_test", self.environment))
             ])
+            commands.append([
+                str(executable(self.directory, "metal_recurrent_test", self.environment))
+            ])
             if self.environment.quantized_checkpoint:
                 commands.append([
                     str(executable(self.directory, "metal_quantization_test", self.environment)),
