@@ -4,13 +4,14 @@
 #include <cstdint>
 #include <iostream>
 #include <stdexcept>
+#include <utility>
 #include <vector>
 
 namespace {
 
-celeg::serve::GenerateRequest request() {
+celeg::serve::GenerateRequest request(std::vector<int32_t> prompt) {
     celeg::serve::GenerateRequest result;
-    result.prompt_tokens = {1, 36309};
+    result.prompt_tokens = std::move(prompt);
     result.max_output_tokens = 2;
     result.eos_token_ids = {-1};
     result.generation.temperature = 0.0f;
@@ -28,8 +29,8 @@ int main(int argc, char** argv) {
         options.max_batched_tokens = 4;
         options.prefill_chunk_tokens = 2;
         celeg::serve::MetalInferenceService service(argv[1], 128, {}, options);
-        const celeg::RequestId first = service.submit(request());
-        const celeg::RequestId second = service.submit(request());
+        const celeg::RequestId first = service.submit(request({1, 36309}));
+        const celeg::RequestId second = service.submit(request({1, 36309, 1}));
         service.start();
         std::vector<int32_t> first_tokens;
         std::vector<int32_t> second_tokens;

@@ -204,11 +204,14 @@ MetalModelOptions metal_options(const celeg_metal_model_options& input) {
 
 MetalEngineOptions metal_engine_options(const celeg_metal_engine_options& input) {
     if (input.max_active_requests <= 0 || input.max_batched_tokens <= 0 ||
-        input.prefill_chunk_tokens <= 0) {
+        input.prefill_chunk_tokens <= 0 || input.kv_page_tokens <= 0 ||
+        input.prefix_cache_max_entries == 0 ||
+        (input.prefix_cache != 0 && input.prefix_cache != 1)) {
         throw std::invalid_argument("Metal engine limits must be positive");
     }
     return {input.max_active_requests, input.max_batched_tokens,
-            input.prefill_chunk_tokens};
+            input.prefill_chunk_tokens, input.kv_page_tokens,
+            input.prefix_cache != 0, input.prefix_cache_max_entries};
 }
 #endif
 

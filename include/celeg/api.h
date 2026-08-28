@@ -133,6 +133,9 @@ typedef struct celeg_metal_engine_options {
     int32_t max_active_requests;
     int32_t max_batched_tokens;
     int32_t prefill_chunk_tokens;
+    int32_t kv_page_tokens;
+    int32_t prefix_cache;
+    uint32_t prefix_cache_max_entries;
 } celeg_metal_engine_options;
 
 typedef struct celeg_metal_backend_options {

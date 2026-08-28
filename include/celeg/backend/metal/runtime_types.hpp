@@ -25,12 +25,16 @@ struct MetalModelOptions {
     int32_t weight_mode = 0;
     int32_t kv_cache_mode = 0;
     int32_t storage_mode = 0;
+    int32_t kv_page_tokens = 16;
 };
 
 struct MetalEngineOptions {
     int32_t max_active_requests = 1;
     int32_t max_batched_tokens = 256;
     int32_t prefill_chunk_tokens = 256;
+    int32_t kv_page_tokens = 16;
+    bool prefix_cache = true;
+    std::size_t prefix_cache_max_entries = 32;
 };
 
 }

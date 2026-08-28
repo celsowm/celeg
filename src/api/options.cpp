@@ -93,6 +93,9 @@ void celeg_metal_backend_options_init(celeg_metal_backend_options* options) {
     options->engine.max_active_requests = 1;
     options->engine.max_batched_tokens = 256;
     options->engine.prefill_chunk_tokens = 256;
+    options->engine.kv_page_tokens = 16;
+    options->engine.prefix_cache = 1;
+    options->engine.prefix_cache_max_entries = 32;
 }
 
 void celeg_request_options_init(celeg_request_options* options) {

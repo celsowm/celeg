@@ -3,11 +3,14 @@
 #include "celeg/backend/metal/device.hpp"
 #include "celeg/backend/metal/model.hpp"
 
+#include <algorithm>
 #include <chrono>
+#include <deque>
 #include <filesystem>
 #include <map>
 #include <mutex>
 #include <optional>
+#include <span>
 #include <stdexcept>
 #include <utility>
 
@@ -35,6 +38,10 @@ struct MetalInferenceService::Impl {
         std::optional<MetalSessionSnapshot> snapshot;
     };
 
+    using PrefixKey = std::vector<int32_t>;
+    using PrefixCache = std::map<PrefixKey,
+                                 std::shared_ptr<const MetalSessionSnapshot>>;
+
     Impl(std::string model_path,
          int max_context,
          MetalModelOptions model_options,
@@ -42,22 +49,58 @@ struct MetalInferenceService::Impl {
          std::shared_ptr<const RuntimeContext> runtime)
         : device(),
           model(model_path, max_context, model_options, {}, std::move(runtime)),
-          session(model.session()),
-          model_info() {
-        if (engine_options.max_active_requests <= 0) {
+         session(model.session()),
+          model_info(),
+          engine_options(std::move(engine_options)) {
+        if (this->engine_options.max_active_requests <= 0) {
             throw std::invalid_argument("Metal service max_active_requests must be positive");
         }
-        if (engine_options.max_batched_tokens <= 0 ||
-            engine_options.prefill_chunk_tokens <= 0) {
+        if (this->engine_options.max_batched_tokens <= 0 ||
+            this->engine_options.prefill_chunk_tokens <= 0 ||
+            this->engine_options.kv_page_tokens <= 0 ||
+            (this->engine_options.prefix_cache &&
+             this->engine_options.prefix_cache_max_entries == 0)) {
             throw std::invalid_argument("Metal engine limits must be positive");
         }
         device.run_probe();
         model_info.name = std::filesystem::path(model_path).stem().string();
         model_info.backend = "metal";
         model_info.max_context = max_context;
-        model_info.limits.max_active_requests = engine_options.max_active_requests;
-        model_info.limits.max_batched_tokens = engine_options.max_batched_tokens;
-        model_info.limits.prefill_chunk_tokens = engine_options.prefill_chunk_tokens;
+        model_info.limits.max_active_requests = this->engine_options.max_active_requests;
+        model_info.limits.max_batched_tokens = this->engine_options.max_batched_tokens;
+        model_info.limits.prefill_chunk_tokens = this->engine_options.prefill_chunk_tokens;
+    }
+
+    void cache_prefix(const PrefixKey& key, const MetalSessionSnapshot& snapshot) {
+        if (!engine_options.prefix_cache || key.empty()) return;
+        auto value = std::make_shared<MetalSessionSnapshot>(snapshot);
+        const auto found = prefix_cache.find(key);
+        if (found != prefix_cache.end()) {
+            found->second = std::move(value);
+            const auto old = std::find(prefix_lru.begin(), prefix_lru.end(), key);
+            if (old != prefix_lru.end()) prefix_lru.erase(old);
+        } else {
+            prefix_cache.emplace(key, std::move(value));
+        }
+        prefix_lru.push_back(key);
+        while (prefix_lru.size() > engine_options.prefix_cache_max_entries) {
+            prefix_cache.erase(prefix_lru.front());
+            prefix_lru.pop_front();
+        }
+    }
+
+    std::shared_ptr<const MetalSessionSnapshot> find_prefix(
+        std::span<const int32_t> tokens, size_t& matched) const {
+        matched = 0;
+        std::shared_ptr<const MetalSessionSnapshot> result;
+        for (const auto& [key, snapshot] : prefix_cache) {
+            if (key.size() <= matched || key.size() > tokens.size()) continue;
+            if (std::equal(key.begin(), key.end(), tokens.begin())) {
+                matched = key.size();
+                result = snapshot;
+            }
+        }
+        return result;
     }
 
     void refresh_counts() {
@@ -104,10 +147,13 @@ struct MetalInferenceService::Impl {
     MetalModel model;
     MetalInferenceSession session;
     ModelInfo model_info;
+    MetalEngineOptions engine_options;
     mutable std::mutex mutex;
     std::map<RequestId, Request> requests;
     RequestId next_id = 1;
     RequestId last_scheduled_id = 0;
+    PrefixCache prefix_cache;
+    std::deque<PrefixKey> prefix_lru;
     ServingMetrics metrics;
     bool running = false;
 };
@@ -212,10 +258,25 @@ bool MetalInferenceService::step() {
     try {
         if (request->status == RequestStatus::Queued) {
             const auto started = std::chrono::steady_clock::now();
-            (*impl_).session.reset();
-            (*impl_).session.set_generation_config(request->input.generation);
-            (*impl_).session.prefill(request->input.prompt_tokens);
+            size_t cached_tokens = 0;
+            const auto cached = (*impl_).find_prefix(
+                request->input.prompt_tokens, cached_tokens);
+            if (cached) {
+                MetalSessionSnapshot snapshot = *cached;
+                snapshot.metrics = {};
+                (*impl_).model.restore_session_snapshot(std::move(snapshot));
+                (*impl_).session.set_generation_config(request->input.generation);
+                for (size_t index = cached_tokens;
+                     index < request->input.prompt_tokens.size(); ++index) {
+                    (*impl_).session.eval_token(request->input.prompt_tokens[index]);
+                }
+            } else {
+                (*impl_).session.reset();
+                (*impl_).session.set_generation_config(request->input.generation);
+                (*impl_).session.prefill(request->input.prompt_tokens);
+            }
             request->snapshot = (*impl_).model.export_session_snapshot();
+            (*impl_).cache_prefix(request->input.prompt_tokens, *request->snapshot);
             request->status = RequestStatus::Decoding;
             const auto elapsed = std::chrono::duration<double, std::milli>(
                 std::chrono::steady_clock::now() - started).count();
