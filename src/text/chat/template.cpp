@@ -222,5 +222,11 @@ std::string render_chat(
 
 #include "template/parser.cpp"
 #include "template/validation.cpp"
-#include "template/runtime.cpp"
+#include "template/runtime/values.cpp"
+#include "template/runtime/context.cpp"
+#include "template/runtime/expression.cpp"
+#include "template/runtime/filters.cpp"
+#include "template/runtime/calls.cpp"
+#include "template/runtime/render.cpp"
+#include "template/runtime/runtime.cpp"
 #include "template/tool_codec.cpp"
