@@ -196,10 +196,12 @@ ConcurrentEngineOptions cuda_engine_options(const celeg_cuda_engine_options& inp
 
 #ifdef CELEG_API_WITH_METAL
 MetalModelOptions metal_options(const celeg_metal_model_options& input) {
-    if (input.weight_mode < 0 || input.kv_cache_mode < 0 || input.storage_mode < 0) {
+    if (input.weight_mode < 0 || input.kv_cache_mode < 0 || input.storage_mode < 0 ||
+        input.kv_page_tokens <= 0) {
         throw std::invalid_argument("Metal model options must be non-negative");
     }
-    return {input.weight_mode, input.kv_cache_mode, input.storage_mode};
+    return {input.weight_mode, input.kv_cache_mode, input.storage_mode,
+            input.kv_page_tokens};
 }
 
 MetalEngineOptions metal_engine_options(const celeg_metal_engine_options& input) {

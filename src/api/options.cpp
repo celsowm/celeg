@@ -90,6 +90,7 @@ void celeg_metal_backend_options_init(celeg_metal_backend_options* options) {
     if (!options) return;
     *options = {};
     options->struct_size = sizeof(*options);
+    options->model.kv_page_tokens = 16;
     options->engine.max_active_requests = 1;
     options->engine.max_batched_tokens = 256;
     options->engine.prefill_chunk_tokens = 256;

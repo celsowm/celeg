@@ -127,6 +127,7 @@ typedef struct celeg_metal_model_options {
     int32_t weight_mode;
     int32_t kv_cache_mode;
     int32_t storage_mode;
+    int32_t kv_page_tokens;
 } celeg_metal_model_options;
 
 typedef struct celeg_metal_engine_options {
