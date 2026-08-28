@@ -31,7 +31,12 @@ set(CELEG_CUDA_BACKEND_SOURCES
     src/backend/cuda/model/attention_execution.cu
     src/backend/cuda/model/non_attention_execution.cu
     src/backend/cuda/model/sampler.cu
-    src/backend/cuda/model/decode.cpp
+    src/backend/cuda/model/decode/layers.cpp
+    src/backend/cuda/model/decode/attention.cpp
+    src/backend/cuda/model/decode/recurrent.cpp
+    src/backend/cuda/model/decode/feed_forward.cpp
+    src/backend/cuda/model/decode/logits.cpp
+    src/backend/cuda/model/decode/entrypoints.cpp
     src/backend/cuda/model/prefill.cpp
     src/backend/cuda/model/prefill_batched.cpp
     src/backend/cuda/model/paged_prefill.cpp

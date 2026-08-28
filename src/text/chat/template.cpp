@@ -220,7 +220,9 @@ std::string render_chat(
 
 }
 
-#include "template/parser.cpp"
+#include "template/parser/lexer.cpp"
+#include "template/parser/expression.cpp"
+#include "template/parser/template.cpp"
 #include "template/validation.cpp"
 #include "template/runtime/values.cpp"
 #include "template/runtime/context.cpp"

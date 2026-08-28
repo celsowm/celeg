@@ -672,18 +672,27 @@ target_link_libraries(weight_plan_test PRIVATE celeg_base)
     add_executable(quantization_test tests/quantization_test.cpp src/model/weights/quantization.cpp)
     target_include_directories(quantization_test PRIVATE include)
     add_test(NAME quantization_test COMMAND quantization_test)
-    add_executable(tokenizer_test tests/tokenizer_test.cpp src/text/tokenizer.cpp
+    add_executable(tokenizer_test tests/tokenizer_test.cpp
+        src/text/tokenizer/tokenizer.cpp src/text/tokenizer/utf8.cpp
+        src/text/tokenizer/pretokenize.cpp src/text/tokenizer/byte_codec.cpp
+        src/text/tokenizer/bpe.cpp src/text/tokenizer/sentencepiece.cpp
         src/text/tokenizer_json_loader.cpp
         src/text/chat/template.cpp
         src/checkpoint/formats/json.cpp src/checkpoint/formats/gguf.cpp src/checkpoint/metadata.cpp)
     target_include_directories(tokenizer_test PRIVATE include)
     add_test(NAME tokenizer_test COMMAND tokenizer_test)
-    add_executable(tokenizer_benchmark tests/tokenizer_benchmark.cpp src/text/tokenizer.cpp
+    add_executable(tokenizer_benchmark tests/tokenizer_benchmark.cpp
+        src/text/tokenizer/tokenizer.cpp src/text/tokenizer/utf8.cpp
+        src/text/tokenizer/pretokenize.cpp src/text/tokenizer/byte_codec.cpp
+        src/text/tokenizer/bpe.cpp src/text/tokenizer/sentencepiece.cpp
         src/text/tokenizer_json_loader.cpp
         src/text/chat/template.cpp
         src/checkpoint/formats/json.cpp src/checkpoint/formats/gguf.cpp src/checkpoint/metadata.cpp)
     target_include_directories(tokenizer_benchmark PRIVATE include)
-    add_executable(tokenizer_probe tests/tokenizer_probe.cpp src/text/tokenizer.cpp
+    add_executable(tokenizer_probe tests/tokenizer_probe.cpp
+        src/text/tokenizer/tokenizer.cpp src/text/tokenizer/utf8.cpp
+        src/text/tokenizer/pretokenize.cpp src/text/tokenizer/byte_codec.cpp
+        src/text/tokenizer/bpe.cpp src/text/tokenizer/sentencepiece.cpp
         src/text/tokenizer_json_loader.cpp
         src/text/chat/template.cpp
         src/checkpoint/formats/json.cpp src/checkpoint/formats/gguf.cpp src/checkpoint/metadata.cpp)

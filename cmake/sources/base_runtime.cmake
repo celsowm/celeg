@@ -38,7 +38,11 @@ set(CELEG_BASE_RUNTIME_SOURCES
     src/model/automatic_architecture.cpp
     src/model/inference.cpp
     src/model/inference/global_facts.cpp
-    src/model/inference/layer_bindings.cpp
+    src/model/inference/bindings/globals.cpp
+    src/model/inference/bindings/norms.cpp
+    src/model/inference/bindings/feed_forward.cpp
+    src/model/inference/bindings/attention_policy.cpp
+    src/model/inference/bindings/resolve.cpp
     src/model/inference/rules.cpp
     src/model/inference/rules_attention.cpp
     src/model/inference/rules_recurrent.cpp
@@ -58,7 +62,12 @@ set(CELEG_BASE_RUNTIME_SOURCES
     src/model/weights/quantization.cpp
     src/model/weights/roles.cpp
     src/model/reference.cpp
-    src/text/tokenizer.cpp
+    src/text/tokenizer/tokenizer.cpp
+    src/text/tokenizer/utf8.cpp
+    src/text/tokenizer/pretokenize.cpp
+    src/text/tokenizer/byte_codec.cpp
+    src/text/tokenizer/bpe.cpp
+    src/text/tokenizer/sentencepiece.cpp
     src/text/tokenizer_json_loader.cpp
     src/text/chat/template.cpp
     src/runtime/cache/host_expert_cache.cpp

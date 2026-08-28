@@ -1,0 +1,101 @@
+#include "celeg/backend/cpu/gguf.hpp"
+
+#include <stdexcept>
+#include <string>
+#include <utility>
+
+namespace celeg {
+
+size_t CpuGgufMatrix::row_bytes() const {
+    const GgmlTypeTrait trait = ggml_type_trait(type);
+    if (trait.block_size <= 0 || cols % static_cast<uint32_t>(trait.block_size) != 0) {
+        return 0;
+    }
+    return static_cast<size_t>(cols / static_cast<uint32_t>(trait.block_size)) *
+           static_cast<size_t>(trait.type_size);
+}
+
+void CpuGgufMatrix::validate() const {
+    if (!gguf_type_dequantizable(type)) {
+        throw std::invalid_argument("CPU GGUF matrix requires a supported quantization type");
+    }
+    if (rows == 0 || cols == 0 || !data || row_bytes() == 0 ||
+        bytes != static_cast<size_t>(rows) * row_bytes()) {
+        throw std::invalid_argument("invalid CPU GGUF matrix");
+    }
+}
+
+CpuLinearWeight CpuLinearWeight::from_q4(Q4GroupMatrix matrix) {
+    matrix.validate();
+    CpuLinearWeight result;
+    result.rows = matrix.rows;
+    result.cols = matrix.cols;
+    result.segments.emplace_back(std::move(matrix));
+    return result;
+}
+
+CpuLinearWeight CpuLinearWeight::from_gguf(CpuGgufMatrix matrix) {
+    matrix.validate();
+    CpuLinearWeight result;
+    result.rows = matrix.rows;
+    result.cols = matrix.cols;
+    result.segments.emplace_back(matrix);
+    return result;
+}
+
+void CpuInt8Matrix::validate() const {
+    if (rows == 0 || cols == 0 || !values || !scales ||
+        values->size() != static_cast<size_t>(rows) * cols ||
+        scales->size() != static_cast<size_t>(rows)) {
+        throw std::runtime_error("invalid CPU INT8 matrix");
+    }
+}
+
+CpuLinearWeight CpuLinearWeight::from_int8(CpuInt8Matrix matrix) {
+    matrix.validate();
+    CpuLinearWeight result;
+    result.rows = matrix.rows;
+    result.cols = matrix.cols;
+    result.segments.emplace_back(std::move(matrix));
+    return result;
+}
+
+size_t CpuLinearWeight::memory_bytes() const {
+    size_t total = 0;
+    for (const CpuLinearMatrix& segment : segments) {
+        total += std::visit([](const auto& value) {
+            return value.memory_bytes();
+        }, segment);
+    }
+    return total;
+}
+
+bool CpuLinearWeight::gguf_native() const {
+    return !segments.empty() &&
+        std::all_of(segments.begin(), segments.end(), [](const CpuLinearMatrix& value) {
+            return std::holds_alternative<CpuGgufMatrix>(value);
+        });
+}
+
+void CpuLinearWeight::validate() const {
+    if (rows == 0 || cols == 0 || segments.empty()) {
+        throw std::invalid_argument("invalid CPU linear weight rows=" +
+            std::to_string(rows) + " cols=" + std::to_string(cols) +
+            " segments=" + std::to_string(segments.size()));
+    }
+    size_t segment_rows = 0;
+    for (const CpuLinearMatrix& segment : segments) {
+        std::visit([&](const auto& value) {
+            value.validate();
+            if (value.cols != cols) {
+                throw std::invalid_argument("CPU linear segment width mismatch");
+            }
+            segment_rows += value.rows;
+        }, segment);
+    }
+    if (segment_rows != rows) {
+        throw std::invalid_argument("CPU linear segment row count mismatch");
+    }
+}
+
+}

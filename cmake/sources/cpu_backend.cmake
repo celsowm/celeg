@@ -23,7 +23,11 @@ set(CELEG_CPU_BACKEND_SOURCES
     src/backend/cpu/kernels/quantized_dot.cpp
     src/backend/cpu/kernels/quantized_dot_avx2_msvc.cpp
     src/backend/cpu/kernels/kernel_backend.cpp
-    src/backend/cpu/kernels/gguf.cpp
+    src/backend/cpu/kernels/gguf/validation.cpp
+    src/backend/cpu/kernels/gguf/quantize.cpp
+    src/backend/cpu/kernels/gguf/dot.cpp
+    src/backend/cpu/kernels/gguf/capabilities.cpp
+    src/backend/cpu/kernels/gguf/dequantize.cpp
     src/backend/cpu/kernels/gguf_avx2.cpp
     src/backend/cpu/kernels/linear.cpp
     src/backend/cpu/kernels/elementwise.cpp
