@@ -243,6 +243,8 @@ void MetalModel::Impl::encode_matmul(id<MTLComputeCommandEncoder> encoder,
                 ? "celeg_matmul_tensor_f16" : "celeg_matmul_tensor_bf16";
             id<MTLComputePipelineState> state = tensor_pipeline(kernel);
             [encoder setComputePipelineState:state];
+            [encoder setThreadgroupMemoryLength:64u * 32u * sizeof(uint16_t)
+                                        atIndex:0];
             [encoder dispatchThreadgroups:MTLSizeMake(
                 (weight.rows + 63u) / 64u, (rows + 127u) / 128u, 1)
                threadsPerThreadgroup:MTLSizeMake(128, 1, 1)];
