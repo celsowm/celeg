@@ -1,13 +1,13 @@
 #pragma once
 
-#include "celeg/backend/cpu/gguf.hpp"
 #include "celeg/checkpoint/gguf_blocks.hpp"
+#include "celeg/quantization/ggml.hpp"
 #include "celeg/checkpoint/gguf_iq.hpp"
 
 #include <cstdint>
 #include <cstring>
 
-namespace celeg::cpu_gguf_detail {
+namespace celeg::ggml_detail {
 
 using celeg::gguf_blocks::q4k_scale_min;
 
@@ -153,3 +153,4 @@ inline int q3k_value(const BlockQ3K& block, int col) {
 }
 
 }
+

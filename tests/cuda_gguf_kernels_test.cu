@@ -595,8 +595,8 @@ int main() {
              kIQ4_XSReference},
         };
         for (const IqCase& iq_case : iq_cases) {
-            if (!celeg::ggml_type_support(iq_case.type).cuda_dequantize) {
-                std::cerr << iq_case.name << ": registry says CUDA cannot dequantize\n";
+            if (!celeg::ggml_row_decoder(iq_case.type).has_value()) {
+                std::cerr << iq_case.name << ": neutral decoder is unavailable\n";
                 return 9;
             }
             celeg::HostTensorView view;

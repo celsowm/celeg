@@ -1,7 +1,7 @@
 
 #include "celeg/backend/cuda/weights_loader.hpp"
-#include "celeg/detail/model/device_weights.hpp"
-#include "celeg/detail/model/shared_weights.hpp"
+#include "celeg/backend/cuda/model/detail/device_weights.hpp"
+#include "celeg/backend/cuda/model/detail/shared_weights.hpp"
 #include "celeg/checkpoint/formats/safetensors.hpp"
 #include "celeg/checkpoint/formats/gguf.hpp"
 

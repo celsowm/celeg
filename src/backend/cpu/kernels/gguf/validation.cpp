@@ -7,25 +7,6 @@
 
 namespace celeg {
 
-size_t CpuGgufMatrix::row_bytes() const {
-    const GgmlTypeTrait trait = ggml_type_trait(type);
-    if (trait.block_size <= 0 || cols % static_cast<uint32_t>(trait.block_size) != 0) {
-        return 0;
-    }
-    return static_cast<size_t>(cols / static_cast<uint32_t>(trait.block_size)) *
-           static_cast<size_t>(trait.type_size);
-}
-
-void CpuGgufMatrix::validate() const {
-    if (!gguf_type_dequantizable(type)) {
-        throw std::invalid_argument("CPU GGUF matrix requires a supported quantization type");
-    }
-    if (rows == 0 || cols == 0 || !data || row_bytes() == 0 ||
-        bytes != static_cast<size_t>(rows) * row_bytes()) {
-        throw std::invalid_argument("invalid CPU GGUF matrix");
-    }
-}
-
 CpuLinearWeight CpuLinearWeight::from_q4(Q4GroupMatrix matrix) {
     matrix.validate();
     CpuLinearWeight result;
@@ -35,7 +16,7 @@ CpuLinearWeight CpuLinearWeight::from_q4(Q4GroupMatrix matrix) {
     return result;
 }
 
-CpuLinearWeight CpuLinearWeight::from_gguf(CpuGgufMatrix matrix) {
+CpuLinearWeight CpuLinearWeight::from_ggml(GgmlMatrixView matrix) {
     matrix.validate();
     CpuLinearWeight result;
     result.rows = matrix.rows;
@@ -74,7 +55,7 @@ size_t CpuLinearWeight::memory_bytes() const {
 bool CpuLinearWeight::gguf_native() const {
     return !segments.empty() &&
         std::all_of(segments.begin(), segments.end(), [](const CpuLinearMatrix& value) {
-            return std::holds_alternative<CpuGgufMatrix>(value);
+            return std::holds_alternative<GgmlMatrixView>(value);
         });
 }
 

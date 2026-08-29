@@ -1,6 +1,6 @@
 #include "../detail/model_internal.hpp"
 
-#include "celeg/backend/cpu/sampler.hpp"
+#include "celeg/runtime/sampler.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -143,7 +143,7 @@ CpuModel::decode_batch(std::span<CpuModel* const> models) {
         if (session.session_.phase != SessionPhase::Ready) {
             throw std::runtime_error("CPU session is not ready for packed decode");
         }
-        const int32_t token = CpuSampler::sample(
+        const int32_t token = Sampler::sample(
             session.workspace_.logits, session.shared->dims.vocab_size,
             session.session_.generation, session.session_.seen,
             session.session_.rng_state);

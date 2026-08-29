@@ -1,5 +1,5 @@
-#include "celeg/backend/cpu/gguf.hpp"
 #include "celeg/checkpoint/formats/gguf.hpp"
+#include "celeg/quantization/ggml.hpp"
 
 #include "metal_inference_source.hpp"
 
@@ -153,7 +153,7 @@ bool check_type(const celeg::GgufFile& file, celeg::GgmlType type,
             tensor.shape[1] == 0 || tensor.shape[1] % trait.block_size != 0) {
             continue;
         }
-        celeg::CpuGgufMatrix matrix;
+        celeg::GgmlMatrixView matrix;
         matrix.type = type;
         matrix.rows = static_cast<uint32_t>(tensor.shape[0]);
         matrix.cols = static_cast<uint32_t>(tensor.shape[1]);
@@ -161,7 +161,7 @@ bool check_type(const celeg::GgufFile& file, celeg::GgmlType type,
         matrix.bytes = tensor.bytes;
         matrix.validate();
         std::vector<float> expected(matrix.cols);
-        celeg::cpu_gguf_dequantize_row(matrix, 0, expected.data());
+        celeg::ggml_decode_row(matrix, 0, expected.data());
         const std::vector<float> actual = run_embedding(device, tensor);
         float maximum = 0.0f;
         for (size_t index = 0; index < expected.size(); ++index) {
@@ -194,7 +194,7 @@ bool check_matvec(const celeg::GgufFile& file, celeg::GgmlType type,
             input[index + 1] = std::sin(static_cast<float>(index + 1) * 0.017f);
         }
         const std::vector<float> actual = run_matvec(device, tensor, rows, input);
-        celeg::CpuGgufMatrix matrix;
+        celeg::GgmlMatrixView matrix;
         matrix.type = type;
         matrix.rows = static_cast<uint32_t>(tensor.shape.at(0));
         matrix.cols = cols;
@@ -204,7 +204,7 @@ bool check_matvec(const celeg::GgufFile& file, celeg::GgmlType type,
         std::vector<float> expected(cols);
         float maximum = 0.0f;
         for (uint32_t row = 0; row < rows; ++row) {
-            celeg::cpu_gguf_dequantize_row(matrix, row, expected.data());
+            celeg::ggml_decode_row(matrix, row, expected.data());
             float reference = 0.0f;
             for (uint32_t index = 0; index < cols; ++index) {
                 reference += expected[index] * input[index + 1];

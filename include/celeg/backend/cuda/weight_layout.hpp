@@ -1,7 +1,7 @@
 #pragma once
 
 #include "celeg/backend/cuda/runtime_types.hpp"
-#include "celeg/detail/model/linear_weights.hpp"
+#include "celeg/backend/cuda/model/detail/linear_weights.hpp"
 
 #include <cuda_bf16.h>
 #include <cuda_runtime.h>

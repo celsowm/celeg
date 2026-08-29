@@ -173,19 +173,13 @@ void test_type_registry() {
         CELEG_TEST_CHECK(celeg::ggml_type_trait(type).block_size == 0);
     }
 
-    // A type any backend claims to execute must first be decodable there.
+    // Every quantized type must expose the neutral decoder, while dense GGML
+    // types remain owned by their dtype loaders.
     for (const Expected& row : expected) {
-        const auto support = celeg::ggml_type_support(row.type);
-        if (support.cpu_native_dot) CELEG_TEST_CHECK(support.cpu_dequantize);
-        if (support.cuda_native_mmq) CELEG_TEST_CHECK(support.cuda_dequantize);
-        // Every quantized type must be decodable on both backends: the CPU
-        // and CUDA support lists drifting apart is the exact bug this
-        // registry exists to prevent.
         const bool quantized = celeg::ggml_type_trait(row.type).block_size > 1;
-        CELEG_TEST_CHECK(support.cpu_dequantize == quantized);
-        CELEG_TEST_CHECK(support.cuda_dequantize == quantized);
+        CELEG_TEST_CHECK(celeg::ggml_row_decoder(row.type).has_value() == quantized);
     }
-    CELEG_TEST_CHECK(celeg::ggml_type_support(celeg::GgmlType::Unknown).cpu_dequantize == false);
+    CELEG_TEST_CHECK(!celeg::ggml_row_decoder(celeg::GgmlType::Unknown).has_value());
 }
 
 void test_real_file_optional() {

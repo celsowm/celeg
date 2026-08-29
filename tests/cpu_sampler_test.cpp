@@ -1,4 +1,4 @@
-#include "celeg/backend/cpu/sampler.hpp"
+#include "celeg/runtime/sampler.hpp"
 #include "support/assertions.hpp"
 
 #include <cstdint>
@@ -13,7 +13,7 @@ int main() {
     const std::vector<float> logits{1.0f, 4.0f, 2.0f, 3.0f};
     std::vector<std::uint8_t> seen(4, 0);
     std::uint64_t rng = 17;
-    CELEG_TEST_CHECK(celeg::CpuSampler::sample(logits, vocab_size, greedy, seen, rng) == 1);
+    CELEG_TEST_CHECK(celeg::Sampler::sample(logits, vocab_size, greedy, seen, rng) == 1);
 
     celeg::GenerationConfig sampled;
     sampled.temperature = 1.0f;
@@ -21,9 +21,9 @@ int main() {
     sampled.top_p = 1.0f;
     sampled.seed = 123;
     rng = sampled.seed;
-    const auto first = celeg::CpuSampler::sample(logits, vocab_size, sampled, seen, rng);
+    const auto first = celeg::Sampler::sample(logits, vocab_size, sampled, seen, rng);
     rng = sampled.seed;
-    const auto second = celeg::CpuSampler::sample(logits, vocab_size, sampled, seen, rng);
+    const auto second = celeg::Sampler::sample(logits, vocab_size, sampled, seen, rng);
     CELEG_TEST_CHECK(first == second);
     CELEG_TEST_CHECK(first == 1 || first == 3);
 
@@ -32,7 +32,7 @@ int main() {
     forced.forced_prefix = std::make_shared<celeg::ForcedTokenPrefix>();
     forced.forced_prefix->tokens = {3, 2};
     rng = 99;
-    CELEG_TEST_CHECK(celeg::CpuSampler::sample(logits, vocab_size, forced, seen, rng) == 3);
-    CELEG_TEST_CHECK(celeg::CpuSampler::sample(logits, vocab_size, forced, seen, rng) == 2);
+    CELEG_TEST_CHECK(celeg::Sampler::sample(logits, vocab_size, forced, seen, rng) == 3);
+    CELEG_TEST_CHECK(celeg::Sampler::sample(logits, vocab_size, forced, seen, rng) == 2);
     CELEG_TEST_CHECK(forced.forced_prefix->position == 2);
 }

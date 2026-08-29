@@ -6,9 +6,9 @@
 #include "celeg/model/resolved.hpp"
 #include "celeg/model/session.hpp"
 #include "celeg/backend/cuda/weight_layout.hpp"
-#include "celeg/detail/model/layer_state.hpp"
-#include "celeg/detail/model/linear_weights.hpp"
-#include "celeg/detail/model/shared_weights.hpp"
+#include "celeg/backend/cuda/model/detail/layer_state.hpp"
+#include "celeg/backend/cuda/model/detail/linear_weights.hpp"
+#include "celeg/backend/cuda/model/detail/shared_weights.hpp"
 
 #include <cstddef>
 #include <cstdint>

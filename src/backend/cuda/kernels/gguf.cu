@@ -7,6 +7,10 @@
 #include <string>
 
 namespace celeg {
+
+bool cuda_gguf_native_mmq(GgmlType type) {
+    return type == GgmlType::Q4_K || type == GgmlType::Q6_K;
+}
 namespace {
 
 using celeg::gguf_blocks::q4k_scale_min;

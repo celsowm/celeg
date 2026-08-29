@@ -1,4 +1,4 @@
-#include "celeg/detail/model/shared_weights.hpp"
+#include "celeg/backend/cuda/model/detail/shared_weights.hpp"
 
 namespace celeg {
 

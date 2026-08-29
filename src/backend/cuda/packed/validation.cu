@@ -1,5 +1,5 @@
 #include "celeg/backend/cuda/packed/executor.hpp"
-#include "celeg/detail/model/layer_state.hpp"
+#include "celeg/backend/cuda/model/detail/layer_state.hpp"
 
 #include <algorithm>
 #include <stdexcept>

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "celeg/checkpoint/tensor.hpp"
+#include "celeg/quantization/ggml.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -10,27 +11,6 @@
 #include <vector>
 
 namespace celeg {
-
-enum class GgmlType : int32_t {
-    F32 = 0,
-    F16 = 1,
-    Q4_0 = 2,
-    Q4_1 = 3,
-    Q5_0 = 6,
-    Q8_0 = 8,
-    Q2_K = 10,
-    Q3_K = 11,
-    Q4_K = 12,
-    Q5_K = 13,
-    Q6_K = 14,
-    IQ3_XXS = 18,
-    IQ4_NL = 20,
-    IQ3_S = 21,
-    IQ2_S = 22,
-    IQ4_XS = 23,
-    BF16 = 30,
-    Unknown = -1,
-};
 
 enum class GgufValueKind : uint32_t {
     U8 = 0,
@@ -73,45 +53,6 @@ struct GgufTensorInfo {
     std::vector<int64_t> hf_shape() const;
     uint64_t element_count() const;
 };
-
-struct GgmlTypeTrait {
-    int block_size = 0;
-    int type_size = 0;
-};
-
-/// Which backend paths can actually consume a GGUF block type.
-///
-/// This is the single source of truth for every "is this quantization
-/// supported here?" question in the engine. Backends must query it rather
-/// than inlining their own type lists: the CUDA loader previously carried
-/// three independent hardcoded chains that drifted apart from the CPU's
-/// (see docs/inference_report.md), which is how Q4_1 ended up loading on CPU
-/// and failing on GPU for the same file.
-///
-/// A flag is set only when the corresponding decoder or kernel exists and is
-/// covered by a test; docs/QUANTIZATION_SUPPORT_MATRIX.md records the
-/// evidence per cell.
-struct GgufTypeSupport {
-    /// A dequantizer exists in the CPU kernels (cpu_gguf_dequantize_row).
-    bool cpu_dequantize = false;
-    /// cpu_gguf_dot_scalar can consume the packed blocks directly, so the
-    /// weight codec keeps them packed instead of repacking to groupwise Q4.
-    bool cpu_native_dot = false;
-    /// A host dequantizer exists for the CUDA loader (dequantize_gguf_to_bf16).
-    bool cuda_dequantize = false;
-    /// A native CUDA MMQ kernel exists, so WeightMode::NativeGguf can keep
-    /// the packed blocks resident on the device.
-    bool cuda_native_mmq = false;
-};
-
-GgmlTypeTrait ggml_type_trait(GgmlType type);
-const char* ggml_type_name(GgmlType type);
-GgufTypeSupport ggml_type_support(GgmlType type);
-
-/// Maps a raw GGUF type ordinal onto the enum, or Unknown when celeg has no
-/// entry for it. Kept public so diagnostics can report the ordinal a file
-/// actually carried.
-GgmlType ggml_type_from_ordinal(int32_t raw);
 
 inline TensorBlockEncoding block_encoding_from_ggml_type(GgmlType type) {
     return TensorBlockEncoding{static_cast<std::int32_t>(type)};

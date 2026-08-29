@@ -5,9 +5,11 @@
 #include <celeg/backend/cuda/utils.cuh>
 
 #include <celeg/checkpoint/formats/gguf.hpp>
-#include <celeg/detail/model/linear_weights.hpp>
+#include <celeg/backend/cuda/model/detail/linear_weights.hpp>
 
 namespace celeg {
+
+bool cuda_gguf_native_mmq(GgmlType type);
 
 void launch_gguf_linear_segment(const __nv_bfloat16* x, const uint8_t* blocks,
                                 GgmlType type, __nv_bfloat16* y, int m, int n, int k,

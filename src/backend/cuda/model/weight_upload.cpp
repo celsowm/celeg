@@ -88,7 +88,7 @@ const __nv_bfloat16* upload_bf16(SharedModelWeights& weights,
         const GgmlType ggml_type = ggml_type_from_block_encoding(tensor.block_encoding);
         // The dequantizer below handles every type the registry marks, so the
         // only genuine constraint here is the 2D shape it assumes.
-        if (tensor.shape.size() != 2 || !ggml_type_support(ggml_type).cuda_dequantize) {
+        if (tensor.shape.size() != 2 || !ggml_row_decoder(ggml_type).has_value()) {
             throw std::runtime_error(
                 std::string("router BF16 materialization needs a 2D dequantizable GGUF tensor: ") +
                 name + " (" + ggml_type_name(ggml_type) + ")");

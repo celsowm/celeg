@@ -9,6 +9,46 @@ namespace celeg {
 
 using metal_model_detail::ns_string;
 
+std::optional<std::string_view> MetalModel::Impl::linear_kernel(
+    LinearStorage storage, LinearOperationKind operation, bool tuned) const {
+    static constexpr const char* kGeneric[8][8] = {
+        {"celeg_matvec", "celeg_matvec_pair", "celeg_matmul", "celeg_matmul_pair", nullptr,
+         "celeg_embedding", "celeg_embedding_batch", nullptr},
+        {"celeg_matvec_f16", "celeg_matvec_pair_f16", "celeg_matmul_f16", "celeg_matmul_pair_f16",
+         "celeg_matmul_tensor_f16", "celeg_embedding_f16", "celeg_embedding_f16_batch", nullptr},
+        {"celeg_matvec_bf16", "celeg_matvec_pair_bf16", "celeg_matmul_bf16", "celeg_matmul_pair_bf16",
+         "celeg_matmul_tensor_bf16", "celeg_embedding_bf16", "celeg_embedding_bf16_batch", nullptr},
+        {"celeg_matvec_q4_0", "celeg_matvec_pair_q4_0", "celeg_matmul_q4_0", "celeg_matmul_pair_q4_0", nullptr,
+         "celeg_embedding_q4_0", "celeg_embedding_q4_0_batch", nullptr},
+        {"celeg_matvec_q4k", "celeg_matvec_pair_q4k", "celeg_matmul_q4k", "celeg_matmul_pair_q4k", nullptr,
+         "celeg_embedding_q4k", "celeg_embedding_q4k_batch", "celeg_swiglu_matvec_q4k"},
+        {"celeg_matvec_q5k", "celeg_matvec_pair_q5k", "celeg_matmul_q5k", "celeg_matmul_pair_q5k", nullptr,
+         "celeg_embedding_q5k", "celeg_embedding_q5k_batch", "celeg_swiglu_matvec_q5k"},
+        {"celeg_matvec_q6k", "celeg_matvec_pair_q6k", "celeg_matmul_q6k", "celeg_matmul_pair_q6k", nullptr,
+         "celeg_embedding_q6k", "celeg_embedding_q6k_batch", "celeg_swiglu_matvec_q6k"},
+        {"celeg_matvec_q8_0", "celeg_matvec_pair_q8_0", "celeg_matmul_q8_0", "celeg_matmul_pair_q8_0", nullptr,
+         "celeg_embedding_q8_0", "celeg_embedding_q8_0_batch", nullptr},
+    };
+    static constexpr const char* kTuned[8][8] = {
+        {nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr},
+        {"celeg_matvec_tuned_f16", nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr},
+        {"celeg_matvec_tuned_bf16", nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr},
+        {"celeg_matvec_q4_0_tuned", nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr},
+        {"celeg_matvec_q4k_tuned", nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr},
+        {"celeg_matvec_q5k_tuned", nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr},
+        {"celeg_matvec_q6k_tuned", nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr},
+        {nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr},
+    };
+    const auto storage_index = static_cast<std::size_t>(storage);
+    const auto operation_index = static_cast<std::size_t>(operation);
+    if (storage_index >= 8 || operation_index >= 8) return std::nullopt;
+    const char* name = tuned && kTuned[storage_index][operation_index] != nullptr
+        ? kTuned[storage_index][operation_index]
+        : kGeneric[storage_index][operation_index];
+    if (name == nullptr) return std::nullopt;
+    return std::string_view{name};
+}
+
 void MetalModel::Impl::begin_commands(
     id<MTLCommandBuffer>& command_buffer,
     id<MTLComputeCommandEncoder>& encoder) {
@@ -131,81 +171,42 @@ void MetalModel::Impl::set_bytes(id<MTLComputeCommandEncoder> encoder, const voi
 
 
 void MetalModel::Impl::encode_matvec(id<MTLComputeCommandEncoder> encoder,
-                       const MetalModel::Impl::Linear& weight,
-                       id<MTLBuffer> input, id<MTLBuffer> output,
-                       NSUInteger output_offset) {
-        set_buffer(encoder, weight.buffer, 0);
-        set_buffer(encoder, input, 1);
-        set_buffer(encoder, output, 2, output_offset);
-        set_bytes(encoder, &weight.rows, sizeof(weight.rows), 3);
-        set_bytes(encoder, &weight.cols, sizeof(weight.cols), 4);
-        const NSUInteger groups = (weight.rows + 7u) / 8u;
-        if (weight.storage == MetalModel::Impl::LinearStorage::Float32) {
-            dispatch_cooperative(encoder, "celeg_matvec", groups);
-            return;
-        }
-        if (weight.storage == MetalModel::Impl::LinearStorage::Float16) {
-            if (std::getenv("CELEG_METAL_TUNED_DISABLE")) {
-                dispatch_cooperative(encoder, "celeg_matvec_f16", groups);
-                return;
-            }
-            id<MTLComputePipelineState> state = pipeline("celeg_matvec_tuned_f16");
-            [encoder setComputePipelineState:state];
-            [encoder setThreadgroupMemoryLength:8u * sizeof(float) atIndex:0];
-            [encoder dispatchThreadgroups:MTLSizeMake((weight.rows + 1u) / 2u, 1, 1)
-               threadsPerThreadgroup:MTLSizeMake(128, 1, 1)];
-            ++command_dispatches;
-            return;
-        }
-        if (weight.storage == MetalModel::Impl::LinearStorage::BFloat16) {
-            if (std::getenv("CELEG_METAL_TUNED_DISABLE")) {
-                dispatch_cooperative(encoder, "celeg_matvec_bf16", groups);
-                return;
-            }
-            id<MTLComputePipelineState> state = pipeline("celeg_matvec_tuned_bf16");
-            [encoder setComputePipelineState:state];
-            [encoder setThreadgroupMemoryLength:8u * sizeof(float) atIndex:0];
-            [encoder dispatchThreadgroups:MTLSizeMake((weight.rows + 1u) / 2u, 1, 1)
-               threadsPerThreadgroup:MTLSizeMake(128, 1, 1)];
-            ++command_dispatches;
-            return;
-        }
+                                       const Linear& weight,
+                                       id<MTLBuffer> input,
+                                       id<MTLBuffer> output,
+                                       NSUInteger output_offset) {
+    set_buffer(encoder, weight.buffer, 0);
+    set_buffer(encoder, input, 1);
+    set_buffer(encoder, output, 2, output_offset);
+    set_bytes(encoder, &weight.rows, sizeof(weight.rows), 3);
+    set_bytes(encoder, &weight.cols, sizeof(weight.cols), 4);
+    if (weight.row_bytes != 0) {
         set_bytes(encoder, &weight.row_bytes, sizeof(weight.row_bytes), 5);
-        if (!std::getenv("CELEG_METAL_TUNED_DISABLE") &&
-            (weight.storage == MetalModel::Impl::LinearStorage::Q4_0 ||
-             weight.storage == MetalModel::Impl::LinearStorage::Q4K ||
-             weight.storage == MetalModel::Impl::LinearStorage::Q5K ||
-             weight.storage == MetalModel::Impl::LinearStorage::Q6K)) {
-            const char* name = "celeg_matvec_q4_0_tuned";
-            if (weight.storage == MetalModel::Impl::LinearStorage::Q4K) name = "celeg_matvec_q4k_tuned";
-            if (weight.storage == MetalModel::Impl::LinearStorage::Q5K) name = "celeg_matvec_q5k_tuned";
-            if (weight.storage == MetalModel::Impl::LinearStorage::Q6K) name = "celeg_matvec_q6k_tuned";
-            id<MTLComputePipelineState> state = pipeline(name);
-            [encoder setComputePipelineState:state];
-            [encoder setThreadgroupMemoryLength:8u * sizeof(float) atIndex:0];
-            [encoder dispatchThreadgroups:MTLSizeMake((weight.rows + 1u) / 2u, 1, 1)
-               threadsPerThreadgroup:MTLSizeMake(128, 1, 1)];
-            ++command_dispatches;
-            return;
-        }
-        std::string_view kernel;
-        switch (weight.storage) {
-            case MetalModel::Impl::LinearStorage::Q4_0: kernel = "celeg_matvec_q4_0"; break;
-            case MetalModel::Impl::LinearStorage::Q4K: kernel = "celeg_matvec_q4k"; break;
-            case MetalModel::Impl::LinearStorage::Q5K: kernel = "celeg_matvec_q5k"; break;
-            case MetalModel::Impl::LinearStorage::Q6K: kernel = "celeg_matvec_q6k"; break;
-            case MetalModel::Impl::LinearStorage::Q8_0: kernel = "celeg_matvec_q8_0"; break;
-            default: throw std::runtime_error("invalid Metal linear storage");
     }
-    dispatch_cooperative(encoder, kernel, groups);
+    const bool tuned = std::getenv("CELEG_METAL_TUNED_DISABLE") == nullptr;
+    const auto selected = linear_kernel(weight.storage, LinearOperationKind::MatVec, tuned);
+    if (!selected) throw std::runtime_error("unsupported Metal matvec binding");
+    const std::string_view kernel = *selected;
+    const NSUInteger groups = (weight.rows + 7u) / 8u;
+    if (kernel.find("tuned") == std::string_view::npos) {
+        dispatch_cooperative(encoder, kernel, groups);
+        return;
     }
+    id<MTLComputePipelineState> state = pipeline(kernel);
+    [encoder setComputePipelineState:state];
+    [encoder setThreadgroupMemoryLength:8u * sizeof(float) atIndex:0];
+    [encoder dispatchThreadgroups:MTLSizeMake((weight.rows + 1u) / 2u, 1, 1)
+             threadsPerThreadgroup:MTLSizeMake(128, 1, 1)];
+    ++command_dispatches;
+}
 
 bool MetalModel::Impl::encode_matvec_pair(
     id<MTLComputeCommandEncoder> encoder, const Linear& first,
     const Linear& second, id<MTLBuffer> input, id<MTLBuffer> output,
     uint32_t width) {
     if (first.storage != second.storage || first.rows != second.rows ||
-        first.cols != second.cols || first.rows != width) {
+        first.cols != second.cols || first.rows != width ||
+        first.row_bytes != second.row_bytes) {
         return false;
     }
     set_buffer(encoder, first.buffer, 0);
@@ -214,30 +215,12 @@ bool MetalModel::Impl::encode_matvec_pair(
     set_buffer(encoder, output, 3);
     set_bytes(encoder, &first.rows, sizeof(first.rows), 4);
     set_bytes(encoder, &first.cols, sizeof(first.cols), 5);
-    if (first.storage == LinearStorage::Float32) {
-        dispatch_cooperative(encoder, "celeg_matvec_pair", (width + 3u) / 4u);
-        return true;
+    if (first.row_bytes != 0) {
+        set_bytes(encoder, &first.row_bytes, sizeof(first.row_bytes), 6);
     }
-    if (first.storage == LinearStorage::Float16) {
-        dispatch_cooperative(encoder, "celeg_matvec_pair_f16", (width + 3u) / 4u);
-        return true;
-    }
-    if (first.storage == LinearStorage::BFloat16) {
-        dispatch_cooperative(encoder, "celeg_matvec_pair_bf16", (width + 3u) / 4u);
-        return true;
-    }
-    if (first.row_bytes != second.row_bytes) return false;
-    set_bytes(encoder, &first.row_bytes, sizeof(first.row_bytes), 6);
-    std::string_view kernel;
-    switch (first.storage) {
-        case LinearStorage::Q4_0: kernel = "celeg_matvec_pair_q4_0"; break;
-        case LinearStorage::Q4K: kernel = "celeg_matvec_pair_q4k"; break;
-        case LinearStorage::Q5K: kernel = "celeg_matvec_pair_q5k"; break;
-        case LinearStorage::Q6K: kernel = "celeg_matvec_pair_q6k"; break;
-        case LinearStorage::Q8_0: kernel = "celeg_matvec_pair_q8_0"; break;
-        default: return false;
-    }
-    dispatch_cooperative(encoder, kernel, (width + 3u) / 4u);
+    const auto kernel = linear_kernel(first.storage, LinearOperationKind::MatVecPair, false);
+    if (!kernel) return false;
+    dispatch_cooperative(encoder, *kernel, (width + 3u) / 4u);
     return true;
 }
 
@@ -245,13 +228,10 @@ bool MetalModel::Impl::encode_swiglu_matvec(
     id<MTLComputeCommandEncoder> encoder, const Linear& weight,
     id<MTLBuffer> gate_up, id<MTLBuffer> output) {
     if (std::getenv("CELEG_METAL_TUNED_DISABLE")) return false;
-    std::string_view kernel;
-    switch (weight.storage) {
-        case LinearStorage::Q4K: kernel = "celeg_swiglu_matvec_q4k"; break;
-        case LinearStorage::Q5K: kernel = "celeg_swiglu_matvec_q5k"; break;
-        case LinearStorage::Q6K: kernel = "celeg_swiglu_matvec_q6k"; break;
-        default: return false;
-    }
+    const auto selected = linear_kernel(weight.storage,
+                                        LinearOperationKind::SwiGluMatVec, true);
+    if (!selected) return false;
+    const std::string_view kernel = *selected;
     set_buffer(encoder, weight.buffer, 0);
     set_buffer(encoder, gate_up, 1);
     set_buffer(encoder, output, 2);
@@ -280,64 +260,31 @@ void MetalModel::Impl::encode_matmul(id<MTLComputeCommandEncoder> encoder,
     set_bytes(encoder, &weight.rows, sizeof(weight.rows), 5);
     const uint32_t stride = output_stride == 0 ? weight.rows : output_stride;
     set_bytes(encoder, &stride, sizeof(stride), 6);
-    if (weight.storage == LinearStorage::Float32) {
-        const NSUInteger groups = (weight.rows + 7u) / 8u;
-        id<MTLComputePipelineState> state = pipeline("celeg_matmul");
+    const bool dense = weight.row_bytes == 0;
+    const bool tensor = dense &&
+        ((weight.storage == LinearStorage::Float16 && tensor_matmul_f16) ||
+         (weight.storage == LinearStorage::BFloat16 && tensor_matmul_bf16));
+    if (tensor) {
+        const auto kernel = linear_kernel(weight.storage,
+                                           LinearOperationKind::MatMulTensor, false);
+        if (!kernel) throw std::runtime_error("unsupported Metal tensor matmul binding");
+        id<MTLComputePipelineState> state = tensor_pipeline(*kernel);
         [encoder setComputePipelineState:state];
-        [encoder dispatchThreadgroups:MTLSizeMake(groups, rows, 1)
-           threadsPerThreadgroup:MTLSizeMake(256, 1, 1)];
+        [encoder setThreadgroupMemoryLength:64u * 32u * sizeof(uint16_t) atIndex:0];
+        [encoder dispatchThreadgroups:MTLSizeMake(
+            (weight.rows + 63u) / 64u, (rows + 127u) / 128u, 1)
+         threadsPerThreadgroup:MTLSizeMake(128, 1, 1)];
         ++command_dispatches;
         return;
     }
-    if (weight.storage == LinearStorage::Float16 || weight.storage == LinearStorage::BFloat16) {
-        const bool use_tensor = weight.storage == LinearStorage::Float16
-            ? tensor_matmul_f16 : tensor_matmul_bf16;
-        if (use_tensor) {
-            set_buffer(encoder, weight.buffer, 0);
-            set_buffer(encoder, input, 1, input_offset);
-            set_buffer(encoder, output, 2, output_offset);
-            set_bytes(encoder, &rows, sizeof(rows), 3);
-            set_bytes(encoder, &weight.cols, sizeof(weight.cols), 4);
-            set_bytes(encoder, &weight.rows, sizeof(weight.rows), 5);
-            const uint32_t stride = output_stride == 0 ? weight.rows : output_stride;
-            set_bytes(encoder, &stride, sizeof(stride), 6);
-            const std::string_view kernel = weight.storage == LinearStorage::Float16
-                ? "celeg_matmul_tensor_f16" : "celeg_matmul_tensor_bf16";
-            id<MTLComputePipelineState> state = tensor_pipeline(kernel);
-            [encoder setComputePipelineState:state];
-            [encoder setThreadgroupMemoryLength:64u * 32u * sizeof(uint16_t)
-                                        atIndex:0];
-            [encoder dispatchThreadgroups:MTLSizeMake(
-                (weight.rows + 63u) / 64u, (rows + 127u) / 128u, 1)
-               threadsPerThreadgroup:MTLSizeMake(128, 1, 1)];
-            ++command_dispatches;
-            return;
-        }
-        const NSUInteger groups = (weight.rows + 7u) / 8u;
-        const std::string_view kernel = weight.storage == LinearStorage::Float16
-            ? "celeg_matmul_f16" : "celeg_matmul_bf16";
-        id<MTLComputePipelineState> state = pipeline(kernel);
-        [encoder setComputePipelineState:state];
-        [encoder dispatchThreadgroups:MTLSizeMake(groups, rows, 1)
-           threadsPerThreadgroup:MTLSizeMake(256, 1, 1)];
-        ++command_dispatches;
-        return;
-    }
-    set_bytes(encoder, &weight.row_bytes, sizeof(weight.row_bytes), 7);
-    std::string_view kernel;
-    switch (weight.storage) {
-        case LinearStorage::Q4_0: kernel = "celeg_matmul_q4_0"; break;
-        case LinearStorage::Q4K: kernel = "celeg_matmul_q4k"; break;
-        case LinearStorage::Q5K: kernel = "celeg_matmul_q5k"; break;
-        case LinearStorage::Q6K: kernel = "celeg_matmul_q6k"; break;
-        case LinearStorage::Q8_0: kernel = "celeg_matmul_q8_0"; break;
-        default: throw std::runtime_error("invalid Metal linear storage");
-    }
+    if (!dense) set_bytes(encoder, &weight.row_bytes, sizeof(weight.row_bytes), 7);
+    const auto kernel = linear_kernel(weight.storage, LinearOperationKind::MatMul, false);
+    if (!kernel) throw std::runtime_error("unsupported Metal matmul binding");
     const NSUInteger groups = (weight.rows + 7u) / 8u;
-    id<MTLComputePipelineState> state = pipeline(kernel);
+    id<MTLComputePipelineState> state = pipeline(*kernel);
     [encoder setComputePipelineState:state];
     [encoder dispatchThreadgroups:MTLSizeMake(groups, rows, 1)
-       threadsPerThreadgroup:MTLSizeMake(256, 1, 1)];
+             threadsPerThreadgroup:MTLSizeMake(256, 1, 1)];
     ++command_dispatches;
 }
 
@@ -346,7 +293,8 @@ bool MetalModel::Impl::encode_matmul_pair(
     const Linear& second, id<MTLBuffer> input, id<MTLBuffer> output,
     uint32_t rows, uint32_t width) {
     if (first.storage != second.storage || first.rows != second.rows ||
-        first.cols != second.cols || first.rows != width) {
+        first.cols != second.cols || first.rows != width ||
+        first.row_bytes != second.row_bytes) {
         return false;
     }
     set_buffer(encoder, first.buffer, 0);
@@ -357,82 +305,30 @@ bool MetalModel::Impl::encode_matmul_pair(
     set_bytes(encoder, &first.cols, sizeof(first.cols), 5);
     const uint32_t stride = width * 2;
     set_bytes(encoder, &stride, sizeof(stride), 6);
-    auto dispatch_pair = [&](std::string_view name) {
-        id<MTLComputePipelineState> state = pipeline(name);
-        [encoder setComputePipelineState:state];
-        [encoder dispatchThreadgroups:MTLSizeMake((width + 3u) / 4u, rows, 1)
-           threadsPerThreadgroup:MTLSizeMake(256, 1, 1)];
-        ++command_dispatches;
-    };
-    if (first.storage == LinearStorage::Float32) {
-        dispatch_pair("celeg_matmul_pair");
-        return true;
+    if (first.row_bytes != 0) {
+        set_bytes(encoder, &first.row_bytes, sizeof(first.row_bytes), 7);
     }
-    if (first.storage == LinearStorage::Float16) {
-        dispatch_pair("celeg_matmul_pair_f16");
-        return true;
-    }
-    if (first.storage == LinearStorage::BFloat16) {
-        dispatch_pair("celeg_matmul_pair_bf16");
-        return true;
-    }
-    if (first.row_bytes != second.row_bytes) return false;
-    set_bytes(encoder, &first.row_bytes, sizeof(first.row_bytes), 7);
-    std::string_view kernel;
-    switch (first.storage) {
-        case LinearStorage::Q4_0: kernel = "celeg_matmul_pair_q4_0"; break;
-        case LinearStorage::Q4K: kernel = "celeg_matmul_pair_q4k"; break;
-        case LinearStorage::Q5K: kernel = "celeg_matmul_pair_q5k"; break;
-        case LinearStorage::Q6K: kernel = "celeg_matmul_pair_q6k"; break;
-        case LinearStorage::Q8_0: kernel = "celeg_matmul_pair_q8_0"; break;
-        default: return false;
-    }
-    dispatch_pair(kernel);
+    const auto kernel = linear_kernel(first.storage, LinearOperationKind::MatMulPair, false);
+    if (!kernel) return false;
+    id<MTLComputePipelineState> state = pipeline(*kernel);
+    [encoder setComputePipelineState:state];
+    [encoder dispatchThreadgroups:MTLSizeMake((width + 3u) / 4u, rows, 1)
+             threadsPerThreadgroup:MTLSizeMake(256, 1, 1)];
+    ++command_dispatches;
     return true;
 }
 
-
-void MetalModel::Impl::encode_embedding(id<MTLComputeCommandEncoder> encoder, uint32_t width,
-                          uint32_t token) {
-        if (embedding.storage == MetalModel::Impl::LinearStorage::Float32) {
-            set_buffer(encoder, embedding.buffer, 0);
-            set_buffer(encoder, hidden, 1);
-            set_bytes(encoder, &width, sizeof(width), 2);
-            set_bytes(encoder, &token, sizeof(token), 3);
-            dispatch(encoder, "celeg_embedding", width);
-            return;
-        }
-        if (embedding.storage == MetalModel::Impl::LinearStorage::Float16) {
-            set_buffer(encoder, embedding.buffer, 0);
-            set_buffer(encoder, hidden, 1);
-            set_bytes(encoder, &width, sizeof(width), 2);
-            set_bytes(encoder, &token, sizeof(token), 3);
-            dispatch(encoder, "celeg_embedding_f16", width);
-            return;
-        }
-        if (embedding.storage == MetalModel::Impl::LinearStorage::BFloat16) {
-            set_buffer(encoder, embedding.buffer, 0);
-            set_buffer(encoder, hidden, 1);
-            set_bytes(encoder, &width, sizeof(width), 2);
-            set_bytes(encoder, &token, sizeof(token), 3);
-            dispatch(encoder, "celeg_embedding_bf16", width);
-            return;
-        }
-        set_buffer(encoder, embedding.buffer, 0);
-        set_buffer(encoder, hidden, 1);
-        set_bytes(encoder, &width, sizeof(width), 2);
-        set_bytes(encoder, &token, sizeof(token), 3);
-        std::string_view kernel;
-        switch (embedding.storage) {
-            case MetalModel::Impl::LinearStorage::Q4_0: kernel = "celeg_embedding_q4_0"; break;
-            case MetalModel::Impl::LinearStorage::Q4K: kernel = "celeg_embedding_q4k"; break;
-            case MetalModel::Impl::LinearStorage::Q5K: kernel = "celeg_embedding_q5k"; break;
-            case MetalModel::Impl::LinearStorage::Q6K: kernel = "celeg_embedding_q6k"; break;
-            case MetalModel::Impl::LinearStorage::Q8_0: kernel = "celeg_embedding_q8_0"; break;
-            default: throw std::runtime_error("invalid Metal embedding storage");
-    }
-    dispatch(encoder, kernel, width);
-    }
+void MetalModel::Impl::encode_embedding(id<MTLComputeCommandEncoder> encoder,
+                                      uint32_t width, uint32_t token) {
+    set_buffer(encoder, embedding.buffer, 0);
+    set_buffer(encoder, hidden, 1);
+    set_bytes(encoder, &width, sizeof(width), 2);
+    set_bytes(encoder, &token, sizeof(token), 3);
+    const auto kernel = linear_kernel(embedding.storage,
+                                      LinearOperationKind::Embedding, false);
+    if (!kernel) throw std::runtime_error("unsupported Metal embedding binding");
+    dispatch(encoder, *kernel, width);
+}
 
 void MetalModel::Impl::encode_embedding_batch(
     id<MTLComputeCommandEncoder> encoder, uint32_t rows,
@@ -446,19 +342,10 @@ void MetalModel::Impl::encode_embedding_batch(
     set_buffer(encoder, batch_hidden, 1);
     set_bytes(encoder, &width, sizeof(width), 2);
     set_buffer(encoder, batch_tokens, 3);
-    std::string_view kernel;
-    switch (embedding.storage) {
-        case LinearStorage::Float32: kernel = "celeg_embedding_batch"; break;
-        case LinearStorage::Float16: kernel = "celeg_embedding_f16_batch"; break;
-        case LinearStorage::BFloat16: kernel = "celeg_embedding_bf16_batch"; break;
-        case LinearStorage::Q4_0: kernel = "celeg_embedding_q4_0_batch"; break;
-        case LinearStorage::Q4K: kernel = "celeg_embedding_q4k_batch"; break;
-        case LinearStorage::Q5K: kernel = "celeg_embedding_q5k_batch"; break;
-        case LinearStorage::Q6K: kernel = "celeg_embedding_q6k_batch"; break;
-        case LinearStorage::Q8_0: kernel = "celeg_embedding_q8_0_batch"; break;
-        default: throw std::runtime_error("invalid Metal embedding storage");
-    }
-    dispatch(encoder, kernel, static_cast<NSUInteger>(rows) * width);
+    const auto kernel = linear_kernel(embedding.storage,
+                                      LinearOperationKind::EmbeddingBatch, false);
+    if (!kernel) throw std::runtime_error("unsupported Metal embedding batch binding");
+    dispatch(encoder, *kernel, static_cast<NSUInteger>(rows) * width);
 }
 
 

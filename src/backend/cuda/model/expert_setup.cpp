@@ -1,6 +1,6 @@
 #include "celeg/backend/cuda/weight_setup_support.hpp"
 
-#include "celeg/detail/model/compiled_model.hpp"
+#include "celeg/backend/cuda/model/detail/compiled_model.hpp"
 #include "celeg/backend/cuda/moe/offload.hpp"
 
 #include <cstdio>

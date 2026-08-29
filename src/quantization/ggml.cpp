@@ -1,19 +1,97 @@
-#include "celeg/backend/cpu/gguf.hpp"
+#include "celeg/quantization/ggml.hpp"
 #include "celeg/model/weights/quantization.hpp"
-#include "blocks.hpp"
+#include "celeg/quantization/gguf_blocks.hpp"
+#include "celeg/checkpoint/gguf_iq.hpp"
 
 #include <cstring>
 #include <stdexcept>
 #include <string>
 
 namespace celeg {
-using namespace cpu_gguf_detail;
+namespace {
 
-void cpu_gguf_dequantize_row(const CpuGgufMatrix& matrix, size_t row,
+struct GgmlTypeEntry {
+    std::int32_t ordinal;
+    GgmlType type;
+    const char* name;
+    GgmlTypeTrait trait;
+};
+
+constexpr GgmlTypeEntry kGgmlTypes[] = {
+    {0, GgmlType::F32, "F32", {1, 4}},
+    {1, GgmlType::F16, "F16", {1, 2}},
+    {30, GgmlType::BF16, "BF16", {1, 2}},
+    {2, GgmlType::Q4_0, "Q4_0", {32, 18}},
+    {3, GgmlType::Q4_1, "Q4_1", {32, 20}},
+    {6, GgmlType::Q5_0, "Q5_0", {32, 22}},
+    {8, GgmlType::Q8_0, "Q8_0", {32, 34}},
+    {10, GgmlType::Q2_K, "Q2_K", {256, 84}},
+    {11, GgmlType::Q3_K, "Q3_K", {256, 110}},
+    {12, GgmlType::Q4_K, "Q4_K", {256, 144}},
+    {13, GgmlType::Q5_K, "Q5_K", {256, 176}},
+    {14, GgmlType::Q6_K, "Q6_K", {256, 210}},
+    {18, GgmlType::IQ3_XXS, "IQ3_XXS", {256, 98}},
+    {20, GgmlType::IQ4_NL, "IQ4_NL", {32, 18}},
+    {21, GgmlType::IQ3_S, "IQ3_S", {256, 110}},
+    {22, GgmlType::IQ2_S, "IQ2_S", {256, 82}},
+    {23, GgmlType::IQ4_XS, "IQ4_XS", {256, 136}},
+};
+
+const GgmlTypeEntry* find_entry(GgmlType type) {
+    for (const GgmlTypeEntry& entry : kGgmlTypes) {
+        if (entry.type == type) return &entry;
+    }
+    return nullptr;
+}
+
+}
+
+GgmlTypeTrait ggml_type_trait(GgmlType type) {
+    const GgmlTypeEntry* entry = find_entry(type);
+    return entry ? entry->trait : GgmlTypeTrait{};
+}
+
+const char* ggml_type_name(GgmlType type) {
+    const GgmlTypeEntry* entry = find_entry(type);
+    return entry ? entry->name : "Unknown";
+}
+
+GgmlType ggml_type_from_ordinal(std::int32_t raw) {
+    for (const GgmlTypeEntry& entry : kGgmlTypes) {
+        if (entry.ordinal == raw) return entry.type;
+    }
+    return GgmlType::Unknown;
+}
+
+std::optional<GgmlDecodeRowFunction> ggml_row_decoder(GgmlType type) {
+    const GgmlTypeTrait trait = ggml_type_trait(type);
+    if (trait.block_size == 1 || trait.block_size == 0) return std::nullopt;
+    return &ggml_decode_row;
+}
+
+std::size_t GgmlMatrixView::row_bytes() const {
+    const GgmlTypeTrait trait = ggml_type_trait(type);
+    if (trait.block_size == 0 || trait.type_size == 0 ||
+        cols % trait.block_size != 0) {
+        return 0;
+    }
+    return static_cast<std::size_t>(cols / trait.block_size) * trait.type_size;
+}
+
+void GgmlMatrixView::validate() const {
+    if (!ggml_row_decoder(type).has_value() || rows == 0 || cols == 0 ||
+        data == nullptr || row_bytes() == 0 || bytes != rows * row_bytes()) {
+        throw std::invalid_argument("invalid GGML matrix");
+    }
+}
+
+using namespace ggml_detail;
+
+void ggml_decode_row(const GgmlMatrixView& matrix, size_t row,
                              float* output) {
     matrix.validate();
     if (row >= matrix.rows || !output) {
-        throw std::invalid_argument("invalid CPU GGUF embedding row");
+        throw std::invalid_argument("invalid GGML row decode");
     }
     const std::byte* packed = matrix.data + row * matrix.row_bytes();
     const size_t blocks = matrix.cols / 256;
@@ -222,7 +300,7 @@ void cpu_gguf_dequantize_row(const CpuGgufMatrix& matrix, size_t row,
         return;
     }
     if (matrix.type != GgmlType::Q6_K) {
-        throw std::invalid_argument(std::string("unsupported CPU GGUF dequantize type: ") +
+        throw std::invalid_argument(std::string("unsupported GGML dequantize type: ") +
                                     ggml_type_name(matrix.type));
     }
     const auto* weights = reinterpret_cast<const BlockQ6K*>(packed);

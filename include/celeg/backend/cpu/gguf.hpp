@@ -2,7 +2,7 @@
 
 #include "celeg/backend/cpu/isa.hpp"
 #include "celeg/backend/cpu/quantization.hpp"
-#include "celeg/checkpoint/formats/gguf.hpp"
+#include "celeg/quantization/ggml.hpp"
 
 #include <array>
 #include <cstddef>
@@ -12,18 +12,6 @@
 #include <vector>
 
 namespace celeg {
-
-struct CpuGgufMatrix {
-    GgmlType type = GgmlType::Unknown;
-    uint32_t rows = 0;
-    uint32_t cols = 0;
-    const std::byte* data = nullptr;
-    size_t bytes = 0;
-
-    size_t row_bytes() const;
-    size_t memory_bytes() const { return bytes; }
-    void validate() const;
-};
 
 struct CpuInt8Matrix {
     uint32_t rows = 0;
@@ -41,7 +29,7 @@ struct CpuInt8Matrix {
     void validate() const;
 };
 
-using CpuLinearMatrix = std::variant<Q4GroupMatrix, CpuGgufMatrix, CpuInt8Matrix>;
+using CpuLinearMatrix = std::variant<Q4GroupMatrix, GgmlMatrixView, CpuInt8Matrix>;
 
 struct CpuLinearWeight {
     uint32_t rows = 0;
@@ -49,7 +37,7 @@ struct CpuLinearWeight {
     std::vector<CpuLinearMatrix> segments;
 
     static CpuLinearWeight from_q4(Q4GroupMatrix matrix);
-    static CpuLinearWeight from_gguf(CpuGgufMatrix matrix);
+    static CpuLinearWeight from_ggml(GgmlMatrixView matrix);
     static CpuLinearWeight from_int8(CpuInt8Matrix matrix);
     size_t memory_bytes() const;
     bool gguf_native() const;
@@ -81,7 +69,4 @@ CpuGgufDotFunction select_cpu_gguf_dot_kernel(CpuIsa isa);
 CpuGgufDot4Function select_cpu_gguf_dot4_kernel(CpuIsa isa);
 bool gguf_type_is_native_dot(GgmlType type);
 bool gguf_type_dequantizable(GgmlType type);
-void cpu_gguf_dequantize_row(const CpuGgufMatrix& matrix, size_t row,
-                             float* output);
-
 }

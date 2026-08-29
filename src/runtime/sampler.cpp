@@ -1,4 +1,4 @@
-#include "celeg/backend/cpu/sampler.hpp"
+#include "celeg/runtime/sampler.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -23,7 +23,7 @@ float random_unit(std::uint64_t& state) {
 
 }
 
-std::int32_t CpuSampler::sample(std::span<const float> logits,
+std::int32_t Sampler::sample(std::span<const float> logits,
                                 int vocab_size,
                                 const GenerationConfig& generation,
                                 std::span<const std::uint8_t> seen,
@@ -101,3 +101,4 @@ std::int32_t CpuSampler::sample(std::span<const float> logits,
 }
 
 }
+

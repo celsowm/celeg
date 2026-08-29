@@ -12,7 +12,6 @@ set(CELEG_CPU_BACKEND_SOURCES
     src/backend/cpu/operators/feed_forward.cpp
     src/backend/cpu/operators/moe.cpp
     src/backend/cpu/operators/recurrent.cpp
-    src/backend/cpu/sampler.cpp
     src/backend/cpu/packed/execution.cpp
     src/backend/cpu/packed/api.cpp
     src/backend/cpu/concurrent.cpp
@@ -27,7 +26,6 @@ set(CELEG_CPU_BACKEND_SOURCES
     src/backend/cpu/kernels/gguf/quantize.cpp
     src/backend/cpu/kernels/gguf/dot.cpp
     src/backend/cpu/kernels/gguf/capabilities.cpp
-    src/backend/cpu/kernels/gguf/dequantize.cpp
     src/backend/cpu/kernels/gguf_avx2.cpp
     src/backend/cpu/kernels/linear.cpp
     src/backend/cpu/kernels/elementwise.cpp

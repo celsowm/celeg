@@ -1,6 +1,6 @@
 #include "celeg/backend/cpu/gguf.hpp"
 #include "celeg/model/weights/quantization.hpp"
-#include "blocks.hpp"
+#include "celeg/quantization/gguf_blocks.hpp"
 
 #if defined(__x86_64__) || defined(__i386__) || defined(_M_X64) || defined(_M_IX86)
 #include "../gguf_avx2.hpp"
@@ -10,7 +10,7 @@
 #include <string>
 
 namespace celeg {
-using namespace cpu_gguf_detail;
+using namespace ggml_detail;
 
 float cpu_gguf_dot_scalar(const std::byte* packed_row, GgmlType type,
                           const CpuQ8KBlock* activation, size_t cols) {

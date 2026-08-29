@@ -1,7 +1,7 @@
 #include "../detail/model_internal.hpp"
 #include "../operators/attention.hpp"
 #include "../operators/moe.hpp"
-#include "celeg/backend/cpu/sampler.hpp"
+#include "celeg/runtime/sampler.hpp"
 #include "celeg/backend/cpu/kernels.hpp"
 #include "celeg/backend/cpu/model.hpp"
 

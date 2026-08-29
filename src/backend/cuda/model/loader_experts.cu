@@ -1,4 +1,5 @@
 #include "celeg/backend/cuda/weights_loader.hpp"
+#include "celeg/backend/cuda/kernels/gguf.cuh"
 #include "celeg/checkpoint/formats/gguf.hpp"
 #include "celeg/checkpoint/tensor_names.hpp"
 #include "celeg/checkpoint/packed/int4.hpp"
@@ -38,7 +39,7 @@ void validate_expert_dimensions(int experts, int intermediate, int hidden,
 size_t gguf_row_bytes(int columns, GgmlType type, const std::string& name) {
     // Only MMQ-capable types can stay packed as expert blocks on the device;
     // everything else must have been routed to the host-decoded path already.
-    if (!ggml_type_support(type).cuda_native_mmq) {
+    if (!cuda_gguf_native_mmq(type)) {
         throw std::runtime_error("unsupported GGUF MoE quantization: " + name +
                                  " (" + ggml_type_name(type) + ")");
     }
@@ -53,8 +54,7 @@ size_t gguf_row_bytes(int columns, GgmlType type, const std::string& name) {
 /// Expert weights of a type with no native MMQ kernel are decoded on the
 /// host at load time instead of being kept packed on the device.
 bool is_host_decoded_moe_type(GgmlType type) {
-    const GgufTypeSupport support = ggml_type_support(type);
-    return support.cuda_dequantize && !support.cuda_native_mmq;
+    return ggml_row_decoder(type).has_value() && !cuda_gguf_native_mmq(type);
 }
 
 void validate_named_bf16(const HostTensorView& tensor,

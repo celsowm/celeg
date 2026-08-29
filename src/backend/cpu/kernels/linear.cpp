@@ -229,7 +229,7 @@ void CpuLinearEngine::gemv(const CpuLinearWeight& weight, const float* input,
         cpu_quantize_q8k(input, weight.cols, isa_);
     size_t offset = 0;
     for (const CpuLinearMatrix& segment : weight.segments) {
-        gemv_gguf(std::get<CpuGgufMatrix>(segment), activation, output + offset, beta);
+        gemv_gguf(std::get<GgmlMatrixView>(segment), activation, output + offset, beta);
         offset += segment_rows(segment);
     }
 }
@@ -268,7 +268,7 @@ void CpuLinearEngine::gemv_transpose(const CpuLinearWeight& weight,
                                 matrix.scales->at(r);
                         }
                     } else {
-                        cpu_gguf_dequantize_row(matrix, r, row.data());
+                        ggml_decode_row(matrix, r, row.data());
                     }
                 }, segment);
                 const float scale = input[base + r - row_offset];
@@ -337,7 +337,7 @@ void CpuLinearEngine::gemv_int8(const CpuInt8Matrix& matrix, const float* input,
     });
 }
 
-void CpuLinearEngine::gemv_gguf(const CpuGgufMatrix& matrix,
+void CpuLinearEngine::gemv_gguf(const GgmlMatrixView& matrix,
                                std::span<const CpuQ8KBlock> activation,
                                float* output, float beta) const {
     const size_t grain = std::max<size_t>(
@@ -400,7 +400,7 @@ void CpuLinearEngine::gemm_gguf(std::span<const CpuQ8KBlock> activation,
 
     size_t output_offset = 0;
     for (const CpuLinearMatrix& segment : weight.segments) {
-        const CpuGgufMatrix& matrix = std::get<CpuGgufMatrix>(segment);
+        const GgmlMatrixView& matrix = std::get<GgmlMatrixView>(segment);
         constexpr size_t output_tile = 16;
         const size_t tiles =
             (static_cast<size_t>(matrix.rows) + output_tile - 1) / output_tile;
@@ -453,7 +453,7 @@ void CpuLinearEngine::gemm_grouped(std::span<const CpuGroupedGemmJob> jobs,
     if (!first) throw std::invalid_argument("grouped CPU GEMM has null weight");
     first->validate();
     const bool native = first->segments.size() == 1 &&
-        std::holds_alternative<CpuGgufMatrix>(first->segments.front());
+        std::holds_alternative<GgmlMatrixView>(first->segments.front());
     const size_t input_width = first->cols;
     const size_t output_width = first->rows;
     size_t total_rows = 0;
@@ -462,7 +462,7 @@ void CpuLinearEngine::gemm_grouped(std::span<const CpuGroupedGemmJob> jobs,
         job.weight->validate();
         if (job.weight->cols != input_width || job.weight->rows != output_width ||
             job.weight->segments.size() != 1 ||
-            !std::holds_alternative<CpuGgufMatrix>(job.weight->segments.front())) {
+            !std::holds_alternative<GgmlMatrixView>(job.weight->segments.front())) {
             for (const CpuGroupedGemmJob& fallback : jobs) {
                 gemm(*fallback.weight, input + fallback.row_offset * input_width,
                      output + fallback.row_offset * output_width, fallback.rows);
@@ -481,7 +481,7 @@ void CpuLinearEngine::gemm_grouped(std::span<const CpuGroupedGemmJob> jobs,
     constexpr size_t output_tile = 8;
     std::vector<Tile> tiles;
     for (size_t job_index = 0; job_index < jobs.size(); ++job_index) {
-        const auto& matrix = std::get<CpuGgufMatrix>(jobs[job_index].weight->segments.front());
+        const auto& matrix = std::get<GgmlMatrixView>(jobs[job_index].weight->segments.front());
         for (size_t begin = 0; begin < matrix.rows; begin += output_tile) {
             tiles.push_back({job_index, begin, std::min(begin + output_tile,
                                                         static_cast<size_t>(matrix.rows))});
@@ -491,7 +491,7 @@ void CpuLinearEngine::gemm_grouped(std::span<const CpuGroupedGemmJob> jobs,
         for (size_t task = begin; task < end; ++task) {
             const Tile& tile = tiles[task];
             const CpuGroupedGemmJob& job = jobs[tile.job];
-            const auto& matrix = std::get<CpuGgufMatrix>(job.weight->segments.front());
+            const auto& matrix = std::get<GgmlMatrixView>(job.weight->segments.front());
             for (size_t out = tile.begin; out < tile.end; ++out) {
                 size_t row = 0;
                 if (gguf_dot4_) {
@@ -539,8 +539,8 @@ void CpuLinearEngine::embedding(const CpuLinearWeight& table, int32_t token,
                 output[col] = static_cast<float>(weights[col]) * int8->scales->at(row);
             }
         } else {
-            cpu_gguf_dequantize_row(
-                std::get<CpuGgufMatrix>(segment), row, output);
+            ggml_decode_row(
+                std::get<GgmlMatrixView>(segment), row, output);
         }
         return;
     }

@@ -1,7 +1,7 @@
 #include "celeg/backend/cpu/model.hpp"
 
 #include "detail/model_internal.hpp"
-#include "celeg/backend/cpu/sampler.hpp"
+#include "celeg/runtime/sampler.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -146,7 +146,7 @@ int32_t CpuModel::decode_session() {
         throw std::runtime_error("CPU model is not ready for decode");
     }
     const auto started = std::chrono::steady_clock::now();
-    const int32_t token = CpuSampler::sample(
+    const int32_t token = Sampler::sample(
         state_->workspace_.logits, state_->shared->dims.vocab_size,
         state_->session_.generation, state_->session_.seen,
         state_->session_.rng_state);

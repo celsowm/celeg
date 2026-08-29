@@ -24,58 +24,6 @@ namespace {
 
 constexpr uint32_t kGgufMagic = 0x46554747u;
 
-/// One row per GGUF block type celeg knows about.
-///
-/// Ordinal, geometry, display name and backend capabilities used to live in
-/// three separate switch statements plus five hand-maintained type lists in
-/// the CUDA loader. Keeping them in a single table is what makes it
-/// impossible for a type to be parseable but unnamed, or accepted by one
-/// backend and rejected by the other for the same file.
-struct GgmlTypeEntry {
-    int32_t ordinal;
-    GgmlType type;
-    const char* name;
-    GgmlTypeTrait trait;
-    GgufTypeSupport support;
-};
-
-// support = {cpu_dequantize, cpu_native_dot, cuda_dequantize, cuda_native_mmq}
-constexpr GgmlTypeEntry kGgmlTypes[] = {
-    // Dense types carry no block decoders; they are handled by the dtype
-    // paths in the weight loaders, not by the GGUF quant kernels.
-    { 0, GgmlType::F32,     "F32",     {1, 4},     {false, false, false, false}},
-    { 1, GgmlType::F16,     "F16",     {1, 2},     {false, false, false, false}},
-    {30, GgmlType::BF16,    "BF16",    {1, 2},     {false, false, false, false}},
-    { 2, GgmlType::Q4_0,    "Q4_0",    {32, 18},   {true,  true,  true,  false}},
-    { 3, GgmlType::Q4_1,    "Q4_1",    {32, 20},   {true,  true,  true,  false}},
-    { 6, GgmlType::Q5_0,    "Q5_0",    {32, 22},   {true,  true,  true,  false}},
-    { 8, GgmlType::Q8_0,    "Q8_0",    {32, 34},   {true,  true,  true,  false}},
-    {10, GgmlType::Q2_K,    "Q2_K",    {256, 84},  {true,  true,  true,  false}},
-    {11, GgmlType::Q3_K,    "Q3_K",    {256, 110}, {true,  true,  true,  false}},
-    {12, GgmlType::Q4_K,    "Q4_K",    {256, 144}, {true,  true,  true,  true }},
-    {13, GgmlType::Q5_K,    "Q5_K",    {256, 176}, {true,  true,  true,  false}},
-    {14, GgmlType::Q6_K,    "Q6_K",    {256, 210}, {true,  true,  true,  true }},
-    // The IQ types have working scalar dot kernels (cpu_gguf_dot_scalar,
-    // covered by cpu_gguf_kernels_test against ggml's own reference), but
-    // cpu_native_dot is deliberately off: their codebook lookups do not
-    // vectorize the way the K-quants' bit-slicing does, and running them in
-    // place measured 2.2 tok/s prefill on Nanbeige-3B-IQ4_XS versus 17.3
-    // tok/s for the dequantize-and-repack-to-groupwise-Q4 path this flag
-    // selects instead. Flip to true once an AVX2 kernel exists to beat it.
-    {18, GgmlType::IQ3_XXS, "IQ3_XXS", {256, 98},  {true,  false, true,  false}},
-    {20, GgmlType::IQ4_NL,  "IQ4_NL",  {32, 18},   {true,  false, true,  false}},
-    {21, GgmlType::IQ3_S,   "IQ3_S",   {256, 110}, {true,  false, true,  false}},
-    {22, GgmlType::IQ2_S,   "IQ2_S",   {256, 82},  {true,  false, true,  false}},
-    {23, GgmlType::IQ4_XS,  "IQ4_XS",  {256, 136}, {true,  false, true,  false}},
-};
-
-const GgmlTypeEntry* find_ggml_type_entry(GgmlType type) {
-    for (const GgmlTypeEntry& entry : kGgmlTypes) {
-        if (entry.type == type) return &entry;
-    }
-    return nullptr;
-}
-
 class Cursor {
 public:
     Cursor(const std::byte* base, size_t size) : base_(base), size_(size) {}
@@ -215,28 +163,6 @@ GgufValue read_value(Cursor& c, GgufValueKind kind) {
 
 }
 
-
-GgmlTypeTrait ggml_type_trait(GgmlType type) {
-    const GgmlTypeEntry* entry = find_ggml_type_entry(type);
-    return entry ? entry->trait : GgmlTypeTrait{0, 0};
-}
-
-const char* ggml_type_name(GgmlType type) {
-    const GgmlTypeEntry* entry = find_ggml_type_entry(type);
-    return entry ? entry->name : "Unknown";
-}
-
-GgufTypeSupport ggml_type_support(GgmlType type) {
-    const GgmlTypeEntry* entry = find_ggml_type_entry(type);
-    return entry ? entry->support : GgufTypeSupport{};
-}
-
-GgmlType ggml_type_from_ordinal(int32_t raw) {
-    for (const GgmlTypeEntry& entry : kGgmlTypes) {
-        if (entry.ordinal == raw) return entry.type;
-    }
-    return GgmlType::Unknown;
-}
 
 std::vector<int64_t> GgufTensorInfo::hf_shape() const {
     std::vector<int64_t> out;

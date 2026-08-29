@@ -1,6 +1,6 @@
 #include "detail.hpp"
 
-#include "celeg/backend/cpu/sampler.hpp"
+#include "celeg/runtime/sampler.hpp"
 
 #include <chrono>
 #include <cstring>
@@ -78,7 +78,7 @@ int32_t MetalModel::decode_session() {
     if (!(*impl_).ready) throw std::runtime_error("Metal model is not ready for decode");
     const auto started = std::chrono::steady_clock::now();
     std::vector<float> values = session_logits();
-    const int32_t token = CpuSampler::sample(values, vocab_size(), (*impl_).generation,
+    const int32_t token = Sampler::sample(values, vocab_size(), (*impl_).generation,
                                              (*impl_).seen, (*impl_).rng_state);
     (*impl_).seen[static_cast<size_t>(token)] = 1;
     (*impl_).run_token(token);

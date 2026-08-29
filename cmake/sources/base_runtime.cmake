@@ -10,6 +10,7 @@ set(CELEG_BASE_RUNTIME_SOURCES
     src/checkpoint/packed/nvfp4.cpp
     src/checkpoint/formats/gguf.cpp
     src/checkpoint/formats/gguf_iq_tables.cpp
+    src/quantization/ggml.cpp
     src/checkpoint/catalog.cpp
     src/checkpoint/metadata.cpp
     src/checkpoint/gguf_position_profile.cpp
@@ -82,6 +83,7 @@ set(CELEG_BASE_RUNTIME_SOURCES
     src/runtime/moe/reference.cpp
     src/runtime/moe/offload.cpp
     src/runtime/context.cpp
+    src/runtime/sampler.cpp
     src/runtime/tokenizer_providers.cpp
     src/runtime/vision/image.cpp
     src/runtime/vision/gguf_projection.cpp

@@ -115,8 +115,7 @@ const LinearWeight* WeightLoader::load_linear_weight(
 
     if (tensor.dtype == TensorDType::Quantized) {
         const GgmlType ggml_type = ggml_type_from_block_encoding(tensor.block_encoding);
-        const GgufTypeSupport support = ggml_type_support(ggml_type);
-        if (!support.cuda_dequantize) {
+        if (!ggml_row_decoder(ggml_type).has_value()) {
             throw std::runtime_error("unsupported GGUF linear quantization: " + name +
                                      " (" + ggml_type_name(ggml_type) + ")");
         }
@@ -138,7 +137,7 @@ const LinearWeight* WeightLoader::load_linear_weight(
         // time; only the MMQ-capable ones can stay packed on the device.
         // Deriving this from the registry rather than an inline list is what
         // keeps a newly added quantization working on both backends at once.
-        if (!support.cuda_native_mmq) {
+        if (!cuda_gguf_native_mmq(ggml_type)) {
             std::vector<__nv_bfloat16> host_bf16;
             dequantize_gguf_to_bf16(tensor, host_bf16);
             weight.bf16_storage.reset(static_cast<size_t>(rows) * cols);
@@ -437,8 +436,8 @@ const LinearWeight* WeightLoader::load_concat_linear_weight(
         bool requires_host_dequantization = false;
         for (const auto& v : views) {
             const GgmlType v_ggml_type = ggml_type_from_block_encoding(v.block_encoding);
-            const GgufTypeSupport v_support = ggml_type_support(v_ggml_type);
-            if (v.dtype != TensorDType::Quantized || !v_support.cuda_dequantize) {
+            if (v.dtype != TensorDType::Quantized ||
+                !ggml_row_decoder(v_ggml_type).has_value()) {
                 throw std::runtime_error("mixed dense/unsupported quantized concat is not supported: " +
                                          synthetic_name + " (" + ggml_type_name(v_ggml_type) + ")");
             }
@@ -446,7 +445,7 @@ const LinearWeight* WeightLoader::load_concat_linear_weight(
             // the host-dequantized path, since the segments must end up in a
             // single storage kind.
             requires_host_dequantization =
-                requires_host_dequantization || !v_support.cuda_native_mmq;
+                    requires_host_dequantization || !cuda_gguf_native_mmq(v_ggml_type);
         }
 
         if (requires_host_dequantization) {

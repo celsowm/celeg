@@ -131,24 +131,24 @@ int main() {
     std::vector<BlockQ6K> q6_rows(2, unit_q6k());
     for (int8_t& value : q6_rows[1].scales) value = 2;
 
-    celeg::CpuGgufMatrix q4{
+    celeg::GgmlMatrixView q4{
         celeg::GgmlType::Q4_K, 2, 256, bytes(q4_rows),
         q4_rows.size() * sizeof(BlockQ4K)};
-    celeg::CpuGgufMatrix q6{
+    celeg::GgmlMatrixView q6{
         celeg::GgmlType::Q6_K, 2, 256, bytes(q6_rows),
         q6_rows.size() * sizeof(BlockQ6K)};
     std::vector<BlockQ5K> q5_rows(2, unit_q5k());
     for (uint8_t& value : q5_rows[1].qh) value = 0xAA;
-    celeg::CpuGgufMatrix q5{
+    celeg::GgmlMatrixView q5{
         celeg::GgmlType::Q5_K, 2, 256, bytes(q5_rows),
         q5_rows.size() * sizeof(BlockQ5K)};
     BlockQ2K q2_block;
     for (uint8_t& value : q2_block.scales) value = 1;
     BlockQ3K q3_block;
-    celeg::CpuGgufMatrix q2{
+    celeg::GgmlMatrixView q2{
         celeg::GgmlType::Q2_K, 1, 256,
         reinterpret_cast<const std::byte*>(&q2_block), sizeof(q2_block)};
-    celeg::CpuGgufMatrix q3{
+    celeg::GgmlMatrixView q3{
         celeg::GgmlType::Q3_K, 1, 256,
         reinterpret_cast<const std::byte*>(&q3_block), sizeof(q3_block)};
     q4.validate();
@@ -158,15 +158,15 @@ int main() {
     q3.validate();
 
     std::vector<float> row(256);
-    celeg::cpu_gguf_dequantize_row(q4, 1, row.data());
+    celeg::ggml_decode_row(q4, 1, row.data());
     for (float value : row) CELEG_TEST_CHECK(std::abs(value - 1.0f) < 1e-6f);
-    celeg::cpu_gguf_dequantize_row(q6, 0, row.data());
+    celeg::ggml_decode_row(q6, 0, row.data());
     for (float value : row) CELEG_TEST_CHECK(std::abs(value - 1.0f) < 1e-6f);
-    celeg::cpu_gguf_dequantize_row(q6, 1, row.data());
+    celeg::ggml_decode_row(q6, 1, row.data());
     for (float value : row) CELEG_TEST_CHECK(std::abs(value - 2.0f) < 1e-6f);
-    celeg::cpu_gguf_dequantize_row(q2, 0, row.data());
+    celeg::ggml_decode_row(q2, 0, row.data());
     for (float value : row) CELEG_TEST_CHECK(std::abs(value) < 1e-6f);
-    celeg::cpu_gguf_dequantize_row(q3, 0, row.data());
+    celeg::ggml_decode_row(q3, 0, row.data());
     for (float value : row) CELEG_TEST_CHECK(std::abs(value - 128.0f) < 1e-6f);
 
     std::vector<float> input(256);
@@ -268,8 +268,8 @@ int main() {
         for (uint8_t& value : block.qs) value = 0x11;
     }
     std::vector<float> dequant_q4_1(32);
-    celeg::cpu_gguf_dequantize_row(
-        celeg::CpuGgufMatrix{
+    celeg::ggml_decode_row(
+        celeg::GgmlMatrixView{
             celeg::GgmlType::Q4_1, 1, 32,
             reinterpret_cast<const std::byte*>(&known_q4_1[0]), sizeof(known_q4_1[0])},
         0, dequant_q4_1.data());
@@ -278,36 +278,36 @@ int main() {
         CELEG_TEST_CHECK(std::abs(dequant_q4_1[i] - expected) < 1e-6f);
     }
     for (const auto matrix : {
-             celeg::CpuGgufMatrix{
+             celeg::GgmlMatrixView{
                  celeg::GgmlType::Q4_K, 1, 256,
                  reinterpret_cast<const std::byte*>(&known_q4),
                  sizeof(known_q4)},
-             celeg::CpuGgufMatrix{
+             celeg::GgmlMatrixView{
                  celeg::GgmlType::Q6_K, 1, 256,
                  reinterpret_cast<const std::byte*>(&known_q6),
                  sizeof(known_q6)},
-             celeg::CpuGgufMatrix{
+             celeg::GgmlMatrixView{
                  celeg::GgmlType::Q2_K, 1, 256,
                  reinterpret_cast<const std::byte*>(&known_q2k),
                  sizeof(known_q2k)},
-             celeg::CpuGgufMatrix{
+             celeg::GgmlMatrixView{
                   celeg::GgmlType::Q3_K, 1, 256,
                   reinterpret_cast<const std::byte*>(&known_q3k),
                   sizeof(known_q3k)},
-             celeg::CpuGgufMatrix{
+             celeg::GgmlMatrixView{
                   celeg::GgmlType::Q5_K, 1, 256,
                   reinterpret_cast<const std::byte*>(&known_q5k),
                   sizeof(known_q5k)},
-             celeg::CpuGgufMatrix{
+             celeg::GgmlMatrixView{
                   celeg::GgmlType::Q8_0, 1, 256,
                   reinterpret_cast<const std::byte*>(known_q8_0.data()),
                   known_q8_0.size() * sizeof(BlockQ8_0)},
-             celeg::CpuGgufMatrix{
+             celeg::GgmlMatrixView{
                   celeg::GgmlType::Q4_1, 1, 256,
                   reinterpret_cast<const std::byte*>(known_q4_1.data()),
                   known_q4_1.size() * sizeof(BlockQ4_1)}}) {
         std::vector<float> dequantized(256);
-        celeg::cpu_gguf_dequantize_row(matrix, 0, dequantized.data());
+        celeg::ggml_decode_row(matrix, 0, dequantized.data());
         float reference = 0.0f;
         for (size_t i = 0; i < dequantized.size(); ++i) {
             reference += dequantized[i] * activation[0].d *
@@ -341,16 +341,16 @@ int main() {
         }
     }
     for (const auto matrix : {
-             celeg::CpuGgufMatrix{
+             celeg::GgmlMatrixView{
                  celeg::GgmlType::Q4_0, 1, 256,
                  reinterpret_cast<const std::byte*>(known_q4_0.data()),
                  known_q4_0.size() * sizeof(BlockQ4_0)},
-             celeg::CpuGgufMatrix{
+             celeg::GgmlMatrixView{
                  celeg::GgmlType::Q5_0, 1, 256,
                  reinterpret_cast<const std::byte*>(known_q5_0.data()),
                  known_q5_0.size() * sizeof(BlockQ5_0)}}) {
         std::vector<float> dequantized(256);
-        celeg::cpu_gguf_dequantize_row(matrix, 0, dequantized.data());
+        celeg::ggml_decode_row(matrix, 0, dequantized.data());
         float reference = 0.0f;
         for (size_t i = 0; i < dequantized.size(); ++i) {
             reference += dequantized[i] * activation[0].d *
@@ -430,20 +430,20 @@ int main() {
             }
         }
         for (const auto matrix : {
-                 celeg::CpuGgufMatrix{
+                 celeg::GgmlMatrixView{
                      celeg::GgmlType::Q8_0, 1, 256,
                      reinterpret_cast<const std::byte*>(scaled_q8_0.data()),
                      scaled_q8_0.size() * sizeof(BlockQ8_0)},
-                 celeg::CpuGgufMatrix{
+                 celeg::GgmlMatrixView{
                      celeg::GgmlType::Q4_0, 1, 256,
                      reinterpret_cast<const std::byte*>(scaled_q4_0.data()),
                      scaled_q4_0.size() * sizeof(BlockQ4_0)},
-                 celeg::CpuGgufMatrix{
+                 celeg::GgmlMatrixView{
                      celeg::GgmlType::Q5_0, 1, 256,
                      reinterpret_cast<const std::byte*>(scaled_q5_0.data()),
                      scaled_q5_0.size() * sizeof(BlockQ5_0)}}) {
             std::vector<float> dequantized(256);
-            celeg::cpu_gguf_dequantize_row(matrix, 0, dequantized.data());
+            celeg::ggml_decode_row(matrix, 0, dequantized.data());
             float reference = 0.0f;
             for (size_t i = 0; i < dequantized.size(); ++i) {
                 reference += dequantized[i] * activation[0].d *
@@ -495,8 +495,8 @@ int main() {
                      (2.0f * gemm[r * 4] - 0.5f)) < 1e-3f);
     }
 
-    celeg::CpuLinearWeight q4_weight = celeg::CpuLinearWeight::from_gguf(q4);
-    celeg::CpuLinearWeight q6_weight = celeg::CpuLinearWeight::from_gguf(q6);
+    celeg::CpuLinearWeight q4_weight = celeg::CpuLinearWeight::from_ggml(q4);
+    celeg::CpuLinearWeight q6_weight = celeg::CpuLinearWeight::from_ggml(q6);
     std::vector<float> grouped_input(4 * input.size());
     for (size_t row_index = 0; row_index < 4; ++row_index) {
         for (size_t col = 0; col < input.size(); ++col) {
@@ -545,20 +545,19 @@ int main() {
         constexpr uint32_t iq_rows = 4;
         constexpr uint32_t iq_cols = 256;
         for (const IqCase& iq_case : iq_cases) {
-            const celeg::GgufTypeSupport support = celeg::ggml_type_support(iq_case.type);
-            CELEG_TEST_CHECK(support.cpu_dequantize);
+            CELEG_TEST_CHECK(celeg::ggml_row_decoder(iq_case.type).has_value());
             // cpu_native_dot is off for IQ by policy (the repack path is
             // faster), but the scalar kernel must stay correct so the flag
             // can be flipped the moment a vectorized version lands.
 
-            const celeg::CpuGgufMatrix matrix{
+            const celeg::GgmlMatrixView matrix{
                 iq_case.type, iq_rows, iq_cols,
                 reinterpret_cast<const std::byte*>(iq_case.blocks), iq_case.block_bytes};
             matrix.validate();
 
             for (uint32_t row = 0; row < iq_rows; ++row) {
                 std::vector<float> dequantized(iq_cols);
-                celeg::cpu_gguf_dequantize_row(matrix, row, dequantized.data());
+                celeg::ggml_decode_row(matrix, row, dequantized.data());
                 const float* expected = iq_case.reference + row * iq_cols;
                 for (uint32_t i = 0; i < iq_cols; ++i) {
                     // fp16 scales round-trip exactly, so the only slack needed

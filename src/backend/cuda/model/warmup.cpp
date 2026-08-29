@@ -1,4 +1,4 @@
-#include "celeg/detail/model/compiled_model.hpp"
+#include "celeg/backend/cuda/model/detail/compiled_model.hpp"
 #include "celeg/backend/cuda/kernels/kernels.cuh"
 #include "celeg/backend/cuda/weight_layout.hpp"
 

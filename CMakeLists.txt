@@ -216,6 +216,7 @@ if(CELEG_ENABLE_METAL)
     endif()
     enable_language(OBJCXX)
     set(CELEG_METAL_INFERENCE_SOURCES
+        src/backend/metal/kernels/inference/common.metal
         src/backend/metal/kernels/inference/vector.metal
         src/backend/metal/kernels/inference/state.metal
         src/backend/metal/kernels/inference/projection.metal
@@ -271,7 +272,7 @@ if(CELEG_ENABLE_METAL)
     target_include_directories(celeg_serve_metal PRIVATE
         "${CMAKE_CURRENT_BINARY_DIR}/generated")
     target_link_libraries(celeg_serve_metal PUBLIC
-        celeg_metal_backend celeg_cpu_backend)
+        celeg_metal_backend)
     target_compile_definitions(celeg_serve_metal PUBLIC CELEG_SERVE_METAL=1)
     target_link_libraries(celeg PRIVATE celeg_serve_metal)
     if(TARGET celeg-serve)
@@ -577,6 +578,7 @@ set(CELEG_PUBLIC_HEADERS
     include/celeg/backend/cpu/paged_kv.hpp
     include/celeg/backend/cpu/prefix_cache.hpp
     include/celeg/backend/cpu/quantization.hpp
+    include/celeg/runtime/sampler.hpp
     include/celeg/backend/cpu/runtime_types.hpp
     include/celeg/backend/cpu/thread_pool.hpp
     include/celeg/backend/cpu/weight_codec.hpp
@@ -740,7 +742,9 @@ target_link_libraries(weight_plan_test PRIVATE celeg_base)
         src/text/tokenizer/bpe.cpp src/text/tokenizer/sentencepiece.cpp
         src/text/tokenizer_json_loader.cpp
         src/text/chat/template.cpp
-        src/checkpoint/formats/json.cpp src/checkpoint/formats/gguf.cpp src/checkpoint/metadata.cpp)
+        src/checkpoint/formats/json.cpp src/checkpoint/formats/gguf.cpp
+        src/quantization/ggml.cpp src/checkpoint/formats/gguf_iq_tables.cpp
+        src/checkpoint/metadata.cpp)
     target_include_directories(tokenizer_test PRIVATE include)
     add_test(NAME tokenizer_test COMMAND tokenizer_test)
     add_executable(tokenizer_benchmark tests/tokenizer_benchmark.cpp
@@ -749,7 +753,9 @@ target_link_libraries(weight_plan_test PRIVATE celeg_base)
         src/text/tokenizer/bpe.cpp src/text/tokenizer/sentencepiece.cpp
         src/text/tokenizer_json_loader.cpp
         src/text/chat/template.cpp
-        src/checkpoint/formats/json.cpp src/checkpoint/formats/gguf.cpp src/checkpoint/metadata.cpp)
+        src/checkpoint/formats/json.cpp src/checkpoint/formats/gguf.cpp
+        src/quantization/ggml.cpp src/checkpoint/formats/gguf_iq_tables.cpp
+        src/checkpoint/metadata.cpp)
     target_include_directories(tokenizer_benchmark PRIVATE include)
     add_executable(tokenizer_probe tests/tokenizer_probe.cpp
         src/text/tokenizer/tokenizer.cpp src/text/tokenizer/utf8.cpp
@@ -757,7 +763,9 @@ target_link_libraries(weight_plan_test PRIVATE celeg_base)
         src/text/tokenizer/bpe.cpp src/text/tokenizer/sentencepiece.cpp
         src/text/tokenizer_json_loader.cpp
         src/text/chat/template.cpp
-        src/checkpoint/formats/json.cpp src/checkpoint/formats/gguf.cpp src/checkpoint/metadata.cpp)
+        src/checkpoint/formats/json.cpp src/checkpoint/formats/gguf.cpp
+        src/quantization/ggml.cpp src/checkpoint/formats/gguf_iq_tables.cpp
+        src/checkpoint/metadata.cpp)
     target_include_directories(tokenizer_probe PRIVATE include)
     add_executable(safetensors_test tests/safetensors_test.cpp src/checkpoint/formats/safetensors.cpp src/checkpoint/formats/json.cpp)
     target_include_directories(safetensors_test PRIVATE include)
@@ -765,7 +773,9 @@ target_link_libraries(weight_plan_test PRIVATE celeg_base)
     add_executable(safetensors_repo_test tests/safetensors_repo_test.cpp src/checkpoint/formats/safetensors.cpp src/checkpoint/repositories/safetensors.cpp src/checkpoint/formats/json.cpp)
     target_include_directories(safetensors_repo_test PRIVATE include)
     add_test(NAME safetensors_repo_test COMMAND safetensors_repo_test)
-    add_executable(gguf_parse_test tests/gguf_parse_test.cpp src/checkpoint/formats/gguf.cpp)
+    add_executable(gguf_parse_test tests/gguf_parse_test.cpp
+        src/checkpoint/formats/gguf.cpp src/quantization/ggml.cpp
+        src/checkpoint/formats/gguf_iq_tables.cpp)
     target_include_directories(gguf_parse_test PRIVATE include)
     add_test(NAME gguf_parse_test COMMAND gguf_parse_test)
     add_executable(gguf_repository_test tests/gguf_repository_test.cpp)
@@ -1057,7 +1067,7 @@ target_link_libraries(weight_plan_test PRIVATE celeg_base)
         target_include_directories(metal_quantization_test PRIVATE include
             "${CMAKE_CURRENT_BINARY_DIR}/generated")
         target_link_libraries(metal_quantization_test PRIVATE
-            celeg_cpu_backend "${CELEG_METAL_FRAMEWORK}"
+            celeg_base "${CELEG_METAL_FRAMEWORK}"
             "${CELEG_FOUNDATION_FRAMEWORK}")
         add_executable(metal_recurrent_test tests/metal_recurrent_test.mm)
         target_include_directories(metal_recurrent_test PRIVATE include

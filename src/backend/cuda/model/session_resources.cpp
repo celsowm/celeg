@@ -1,4 +1,4 @@
-#include "celeg/detail/model/compiled_model.hpp"
+#include "celeg/backend/cuda/model/detail/compiled_model.hpp"
 #include "celeg/backend/cuda/workspace_plan.hpp"
 #include "celeg/backend/cuda/kernels/kernels.cuh"
 
@@ -181,4 +181,3 @@ void CudaCompiledModel::release_prefill_workspace() {
 }
 
 }
-

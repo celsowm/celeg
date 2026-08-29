@@ -2,7 +2,7 @@
 #include "celeg/detail/binary_codec.hpp"
 #include "support/assertions.hpp"
 #include "celeg/checkpoint/repositories/safetensors.hpp"
-#include "celeg/detail/model/expert_weights.hpp"
+#include "celeg/backend/cuda/model/detail/expert_weights.hpp"
 #include "celeg/backend/cuda/utils.cuh"
 #include <bit>
 #include <cstdint>

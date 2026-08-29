@@ -3,6 +3,7 @@
 #include "celeg/backend/metal/model.hpp"
 #include "celeg/detail/checkpoint/bootstrap.hpp"
 #include "celeg/model/program.hpp"
+#include "celeg/model/linear_operation.hpp"
 #include "celeg/model/weights/roles.hpp"
 
 #import <Metal/Metal.h>
@@ -53,6 +54,11 @@ struct MetalModel::Impl {
         uint32_t cols = 0;
         uint32_t row_bytes = 0;
         LinearStorage storage = LinearStorage::Float32;
+    };
+
+    struct MetalKernelBinding {
+        const char* generic = nullptr;
+        const char* tuned = nullptr;
     };
 
     struct Layer {
@@ -203,6 +209,8 @@ struct MetalModel::Impl {
 
     id<MTLComputePipelineState> pipeline(std::string_view name);
     id<MTLComputePipelineState> tensor_pipeline(std::string_view name);
+    std::optional<std::string_view> linear_kernel(
+        LinearStorage storage, LinearOperationKind operation, bool tuned) const;
     void begin_commands(id<MTLCommandBuffer>& command_buffer,
                         id<MTLComputeCommandEncoder>& encoder);
     void finish_commands(id<MTLCommandBuffer>& command_buffer,

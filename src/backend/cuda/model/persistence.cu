@@ -1,5 +1,5 @@
 #include "celeg/backend/cuda/session_store.hpp"
-#include "celeg/detail/model/compiled_model.hpp"
+#include "celeg/backend/cuda/model/detail/compiled_model.hpp"
 
 #include <fstream>
 #include <stdexcept>
@@ -513,4 +513,3 @@ void SessionStore::restore_prefix(const PrefixSnapshot& snapshot,
 }
 
 }
-

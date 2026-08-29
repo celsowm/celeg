@@ -1,4 +1,5 @@
 #include "celeg/backend/cpu/weight_codec.hpp"
+#include "celeg/checkpoint/formats/gguf.hpp"
 
 #include "celeg/checkpoint/weight_repository.hpp"
 #include "celeg/checkpoint/packed/int8.hpp"
@@ -69,14 +70,14 @@ std::vector<float> read_vector(const HostTensorView& tensor,
     throw std::runtime_error("CPU vector requires F32, F16 or BF16 source: " + name);
 }
 
-CpuGgufMatrix gguf_matrix(const HostTensorView& tensor,
+GgmlMatrixView gguf_matrix(const HostTensorView& tensor,
                           const std::string& name) {
     const GgmlType type = ggml_type_from_block_encoding(tensor.block_encoding);
     if (!gguf_type_dequantizable(type)) {
         throw std::runtime_error("unsupported CPU GGUF linear quantization: " +
             name + " (" + std::string(ggml_type_name(type)) + ")");
     }
-    CpuGgufMatrix matrix;
+    GgmlMatrixView matrix;
     matrix.type = type;
     matrix.rows = static_cast<uint32_t>(tensor.shape[0]);
     matrix.cols = static_cast<uint32_t>(tensor.shape[1]);
@@ -86,10 +87,10 @@ CpuGgufMatrix gguf_matrix(const HostTensorView& tensor,
     return matrix;
 }
 
-std::vector<float> dequantize_matrix(const CpuGgufMatrix& matrix) {
+std::vector<float> dequantize_matrix(const GgmlMatrixView& matrix) {
     std::vector<float> values(static_cast<size_t>(matrix.rows) * matrix.cols);
     for (size_t row = 0; row < matrix.rows; ++row) {
-        cpu_gguf_dequantize_row(matrix, row, values.data() + row * matrix.cols);
+        ggml_decode_row(matrix, row, values.data() + row * matrix.cols);
     }
     return values;
 }
@@ -131,7 +132,7 @@ CpuLinearWeight CpuWeightCodec::matrix(
             "x" + std::to_string(tensor.shape.size() > 1 ? tensor.shape[1] : 0));
     }
     if (tensor.dtype == TensorDType::Quantized) {
-        const CpuGgufMatrix matrix = gguf_matrix(tensor, name);
+        const GgmlMatrixView matrix = gguf_matrix(tensor, name);
         /// Every GGUF quant type now has a native dot kernel, so route it
         /// natively whenever the column count is a multiple of 256. Anything
         /// else (non-256 width, or a type without a native kernel) is
@@ -143,7 +144,7 @@ CpuLinearWeight CpuWeightCodec::matrix(
             return CpuLinearWeight::from_q4(quantize_float_groupwise_q4(
                 values.data(), matrix.rows, matrix.cols, group_size_));
         }
-        return CpuLinearWeight::from_gguf(matrix);
+        return CpuLinearWeight::from_ggml(matrix);
     }
     // F16 and F32 both widen to float first; read_vector already decodes
     // either. GGUF checkpoints published in plain F16 reach this path just as
@@ -234,7 +235,7 @@ CpuLinearWeight CpuWeightCodec::concat(
     }
     if (quantized) {
         bool needs_repack = false;
-        std::vector<CpuGgufMatrix> matrices;
+        std::vector<GgmlMatrixView> matrices;
         matrices.reserve(tensors.size());
         for (size_t i = 0; i < tensors.size(); ++i) {
             matrices.push_back(gguf_matrix(tensors[i], parts[i].first));
@@ -245,7 +246,7 @@ CpuLinearWeight CpuWeightCodec::concat(
         if (needs_repack) {
             std::vector<float> joined(total_rows * static_cast<size_t>(cols));
             size_t row_offset = 0;
-            for (const CpuGgufMatrix& matrix : matrices) {
+            for (const GgmlMatrixView& matrix : matrices) {
                 const std::vector<float> values = dequantize_matrix(matrix);
                 std::copy(values.begin(), values.end(), joined.begin() +
                     static_cast<ptrdiff_t>(row_offset * static_cast<size_t>(cols)));
@@ -257,7 +258,7 @@ CpuLinearWeight CpuWeightCodec::concat(
         CpuLinearWeight result;
         result.rows = static_cast<uint32_t>(total_rows);
         result.cols = static_cast<uint32_t>(cols);
-        for (const CpuGgufMatrix& matrix : matrices) {
+        for (const GgmlMatrixView& matrix : matrices) {
             result.segments.emplace_back(matrix);
         }
         result.validate();

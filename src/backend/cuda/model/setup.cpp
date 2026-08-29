@@ -1,4 +1,4 @@
-#include "celeg/detail/model/compiled_model.hpp"
+#include "celeg/backend/cuda/model/detail/compiled_model.hpp"
 #include "celeg/detail/checkpoint/bootstrap.hpp"
 #include "celeg/backend/cuda/kernels/mmq.hpp"
 
@@ -65,4 +65,3 @@ CudaCompiledModel::CudaCompiledModel(const std::string& model_path,
 }
 
 }
-

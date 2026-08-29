@@ -31,7 +31,7 @@ def main() -> int:
     source_files = tuple(
         path for relative in ("include/celeg", "src", "tests")
         for path in files(root / relative, "**/*")
-        if path.suffix in {".h", ".hpp", ".c", ".cpp", ".cu", ".cuh", ".inl"}
+        if path.suffix in {".h", ".hpp", ".c", ".cpp", ".cu", ".cuh", ".mm", ".m", ".inl"}
     )
 
     for path in source_files:
@@ -189,6 +189,41 @@ def main() -> int:
                     errors.append(
                         f"compatibility-named CELEG symbol remains: {path}:{line_number}")
                     break
+
+    backend_names = ("cpu", "cuda", "metal")
+    for backend in backend_names:
+        backend_root = root / "src/backend" / backend
+        if not backend_root.exists():
+            continue
+        for path in files(backend_root, "**/*"):
+            if path.suffix not in {".h", ".hpp", ".c", ".cpp", ".cu", ".cuh", ".mm", ".m", ".inl"}:
+                continue
+            text = path.read_text(encoding="utf-8")
+            for other in backend_names:
+                if other != backend and re.search(
+                        rf"#\s*(?:include|import)\s*[<\"]celeg/backend/{other}/", text):
+                    errors.append(f"cross-backend include {backend}->{other}: {path}")
+
+    neutral_roots = (
+        root / "include/celeg/model",
+        root / "include/celeg/detail/model",
+        root / "include/celeg/runtime",
+        root / "include/celeg/checkpoint",
+        root / "include/celeg/quantization",
+        root / "src/model",
+        root / "src/checkpoint",
+        root / "src/quantization",
+    )
+    for directory in neutral_roots:
+        for path in files(directory, "**/*"):
+            if path.suffix not in {".h", ".hpp", ".c", ".cpp", ".cu", ".cuh", ".mm", ".m", ".inl"}:
+                continue
+            text = path.read_text(encoding="utf-8")
+            if re.search(r"#\s*(?:include|import)\s*[<\"]celeg/backend/", text):
+                errors.append(f"backend dependency in neutral file: {path}")
+            if path.parts[-2:] == ("formats", "gguf.hpp") or "src/checkpoint" in str(path):
+                if re.search(r"GgufTypeSupport|cpu_dequantize|cpu_native_dot|cuda_dequantize|cuda_native_mmq", text):
+                    errors.append(f"backend capability in checkpoint format code: {path}")
 
     removed_paths = (
         root / "include/celeg/model/execution/runtime_types.hpp",

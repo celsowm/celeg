@@ -7,7 +7,7 @@
 
 namespace celeg {
 
-class CpuSampler final {
+class Sampler final {
 public:
     static std::int32_t sample(std::span<const float> logits,
                                int vocab_size,

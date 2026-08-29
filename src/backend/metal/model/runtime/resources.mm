@@ -1,6 +1,7 @@
 #include "detail.hpp"
 
-#include "celeg/backend/cpu/gguf.hpp"
+#include "celeg/checkpoint/formats/gguf.hpp"
+#include "celeg/quantization/ggml.hpp"
 
 #include <algorithm>
 #include <bit>
@@ -83,7 +84,7 @@ std::vector<float> tensor_values(const HostTensorView& view,
         return values;
     }
     if (view.dtype == TensorDType::Quantized && expected.size() == 2) {
-        CpuGgufMatrix matrix;
+        GgmlMatrixView matrix;
         matrix.type = ggml_type_from_block_encoding(view.block_encoding);
         matrix.rows = static_cast<uint32_t>(expected[0]);
         matrix.cols = static_cast<uint32_t>(expected[1]);
@@ -91,7 +92,7 @@ std::vector<float> tensor_values(const HostTensorView& view,
         matrix.bytes = view.bytes;
         matrix.validate();
         for (size_t row = 0; row < matrix.rows; ++row) {
-            cpu_gguf_dequantize_row(matrix, row,
+            ggml_decode_row(matrix, row,
                                     values.data() + row * matrix.cols);
         }
         return values;
