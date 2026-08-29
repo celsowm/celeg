@@ -54,8 +54,12 @@ export function App() {
   }, [settings.theme])
   useEffect(() => {
     fetch('/v1/models').then(async r => { if (!r.ok) throw await httpError(r); return r.json() }).then((v: { data?: Model[] } | Model[]) => {
-      const list = Array.isArray(v) ? v : v.data || []; setModels(list)
-      if (!settings.model && list[0]) setSettings(s => ({ ...s, model: list[0].id }))
+      const list = Array.isArray(v) ? v : v.data || []
+      setModels(list)
+      setSettings(s => {
+        const model = list.some(candidate => candidate.id === s.model) ? s.model : list[0]?.id || ''
+        return model === s.model ? s : { ...s, model }
+      })
     }).catch(e => setError(`Could not load models: ${e instanceof Error ? e.message : e}`))
   }, [])
 
