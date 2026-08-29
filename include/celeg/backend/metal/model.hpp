@@ -70,6 +70,7 @@ public:
     const std::string& model_identity() const;
     std::string backend_description() const;
     RuntimeMetrics metrics() const;
+    MetalExecutionMetrics execution_metrics() const;
     MetalSessionSnapshot export_session_snapshot() const;
     void restore_session_snapshot(MetalSessionSnapshot snapshot);
 

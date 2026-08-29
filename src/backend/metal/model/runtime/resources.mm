@@ -132,6 +132,8 @@ id<MTLBuffer> MetalModel::Impl::buffer(const std::vector<float>& values) const {
                                                     length:values.size() * sizeof(float)
                                                    options:MTLResourceStorageModeShared];
         if (!result) throw std::runtime_error("Metal buffer allocation failed");
+        const_cast<MetalModel::Impl*>(this)->execution_metrics.resident_weight_bytes +=
+            values.size() * sizeof(float);
         return result;
     }
 
@@ -140,6 +142,7 @@ id<MTLBuffer> MetalModel::Impl::zero_buffer(size_t bytes) const {
         id<MTLBuffer> result = [device newBufferWithLength:bytes
                                                    options:MTLResourceStorageModeShared];
         if (!result) throw std::runtime_error("Metal state allocation failed");
+        const_cast<MetalModel::Impl*>(this)->execution_metrics.resident_state_bytes += bytes;
         std::memset(result.contents, 0, bytes);
         return result;
     }
@@ -150,6 +153,7 @@ id<MTLBuffer> MetalModel::Impl::raw_buffer(const std::byte* data, size_t bytes) 
                                                     length:bytes
                                                    options:MTLResourceStorageModeShared];
         if (!result) throw std::runtime_error("Metal raw buffer allocation failed");
+        const_cast<MetalModel::Impl*>(this)->execution_metrics.resident_weight_bytes += bytes;
         return result;
     }
 
@@ -209,8 +213,10 @@ MetalModel::Impl::Linear MetalModel::Impl::load_linear_source(const std::string&
         }
         if (view.dtype == TensorDType::Quantized) {
             const GgmlType type = ggml_type_from_block_encoding(view.block_encoding);
-            if ((type == GgmlType::Q4_K || type == GgmlType::Q6_K) &&
-                cols % 256 == 0) {
+            if ((type == GgmlType::Q4_0 || type == GgmlType::Q4_K ||
+                 type == GgmlType::Q5_K || type == GgmlType::Q6_K ||
+                 type == GgmlType::Q8_0) &&
+                cols % static_cast<int>(ggml_type_trait(type).block_size) == 0) {
                 const GgmlTypeTrait trait = ggml_type_trait(type);
                 const size_t row_bytes = static_cast<size_t>(cols) /
                     static_cast<size_t>(trait.block_size) *
@@ -221,9 +227,23 @@ MetalModel::Impl::Linear MetalModel::Impl::load_linear_source(const std::string&
                 return {raw_buffer(view.data, view.bytes),
                         static_cast<uint32_t>(rows), static_cast<uint32_t>(cols),
                         static_cast<uint32_t>(row_bytes),
-                        type == GgmlType::Q4_K ? LinearStorage::Q4K
-                                               : LinearStorage::Q6K};
+                        type == GgmlType::Q4_0 ? LinearStorage::Q4_0
+                        : type == GgmlType::Q4_K ? LinearStorage::Q4K
+                        : type == GgmlType::Q5_K ? LinearStorage::Q5K
+                        : type == GgmlType::Q6_K ? LinearStorage::Q6K
+                                               : LinearStorage::Q8_0};
             }
+        }
+        if (view.dtype == TensorDType::F16 || view.dtype == TensorDType::BF16) {
+            const size_t bytes = static_cast<size_t>(rows) * static_cast<size_t>(cols) *
+                sizeof(uint16_t);
+            if (view.bytes != bytes) {
+                throw std::runtime_error("invalid Metal 16-bit tensor bytes: " + name);
+            }
+            return {raw_buffer(view.data, bytes), static_cast<uint32_t>(rows),
+                    static_cast<uint32_t>(cols), 0,
+                    view.dtype == TensorDType::F16 ? LinearStorage::Float16
+                                                   : LinearStorage::BFloat16};
         }
         std::vector<float> values = tensor_values(view, expected, name);
         if (values.size() != static_cast<size_t>(rows) * cols) {

@@ -22,6 +22,11 @@ void MetalModel::prefill_session(const std::vector<int32_t>& tokens) {
         throw std::invalid_argument("Metal prefill exceeds context");
     }
     (*impl_).reset();
+    (*impl_).execution_metrics.command_encoding_ms = 0.0;
+    (*impl_).execution_metrics.command_wait_ms = 0.0;
+    (*impl_).execution_metrics.gpu_execution_ms = 0.0;
+    (*impl_).execution_metrics.command_buffers = 0;
+    (*impl_).execution_metrics.dispatches = 0;
     const auto started = std::chrono::steady_clock::now();
     for (const int32_t token : tokens) {
         if (token < 0 || token >= (*impl_).model.topology.dims.vocab_size) {
@@ -78,6 +83,7 @@ std::string MetalModel::backend_description() const {
     return std::string("metal-native device=") + (*impl_).device.name.UTF8String;
 }
 RuntimeMetrics MetalModel::metrics() const { return (*impl_).metrics; }
+MetalExecutionMetrics MetalModel::execution_metrics() const { return (*impl_).execution_metrics; }
 MetalSessionSnapshot MetalModel::export_session_snapshot() const {
     return (*impl_).export_snapshot();
 }
@@ -100,4 +106,3 @@ int MetalInferenceSession::position() const { return owner_->session_position();
 bool MetalInferenceSession::ready_for_decode() const { return owner_->session_ready_for_decode(); }
 
 }
-

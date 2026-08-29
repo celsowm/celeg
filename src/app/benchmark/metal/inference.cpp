@@ -59,7 +59,21 @@ Arguments parse(int argc, char** argv) {
 struct Sample {
     double prefill_ms = 0.0;
     double decode_ms = 0.0;
+    celeg::MetalExecutionMetrics prefill_execution;
+    celeg::MetalExecutionMetrics decode_execution;
 };
+
+celeg::MetalExecutionMetrics difference(const celeg::MetalExecutionMetrics& after,
+                                        const celeg::MetalExecutionMetrics& before) {
+    return {
+        after.command_encoding_ms - before.command_encoding_ms,
+        after.command_wait_ms - before.command_wait_ms,
+        after.gpu_execution_ms - before.gpu_execution_ms,
+        after.command_buffers - before.command_buffers,
+        after.dispatches - before.dispatches,
+        after.resident_weight_bytes,
+        after.resident_state_bytes};
+}
 
 Sample run(celeg::MetalModel& model,
            const std::vector<int32_t>& prompt,
@@ -68,18 +82,49 @@ Sample run(celeg::MetalModel& model,
     const auto prefill_start = std::chrono::steady_clock::now();
     session.prefill(prompt);
     const auto prefill_end = std::chrono::steady_clock::now();
+    const celeg::MetalExecutionMetrics prefill_execution = model.execution_metrics();
     const auto decode_start = std::chrono::steady_clock::now();
     for (const int32_t token : decode) session.eval_token(token);
     const auto decode_end = std::chrono::steady_clock::now();
     return {
         std::chrono::duration<double, std::milli>(prefill_end - prefill_start).count(),
-        std::chrono::duration<double, std::milli>(decode_end - decode_start).count()};
+        std::chrono::duration<double, std::milli>(decode_end - decode_start).count(),
+        prefill_execution,
+        difference(model.execution_metrics(), prefill_execution)};
 }
 
 double average(const std::vector<Sample>& samples, double Sample::*field) {
     double total = 0.0;
     for (const Sample& sample : samples) total += sample.*field;
     return total / static_cast<double>(samples.size());
+}
+
+double average_execution(const std::vector<Sample>& samples,
+                         double celeg::MetalExecutionMetrics::*field,
+                         bool decode) {
+    double total = 0.0;
+    for (const Sample& sample : samples) total += (decode ? sample.decode_execution
+                                                          : sample.prefill_execution).*field;
+    return total / static_cast<double>(samples.size());
+}
+
+uint64_t average_execution(const std::vector<Sample>& samples,
+                           uint64_t celeg::MetalExecutionMetrics::*field,
+                           bool decode) {
+    uint64_t total = 0;
+    for (const Sample& sample : samples) total += (decode ? sample.decode_execution
+                                                          : sample.prefill_execution).*field;
+    return total / static_cast<uint64_t>(samples.size());
+}
+
+void json_samples(std::ostream& output, const std::vector<Sample>& samples,
+                  double Sample::*field) {
+    output << '[';
+    for (size_t index = 0; index < samples.size(); ++index) {
+        if (index != 0) output << ", ";
+        output << samples[index].*field;
+    }
+    output << ']';
 }
 
 std::string json_string(const std::string& value) {
@@ -121,6 +166,7 @@ int main(int argc, char** argv) {
         const double prefill_rate = static_cast<double>(args.prompt_tokens) * 1000.0 / prefill_ms;
         const double decode_rate = args.decode_tokens == 0
             ? 0.0 : static_cast<double>(args.decode_tokens) * 1000.0 / decode_ms;
+        const celeg::MetalExecutionMetrics resident = model.execution_metrics();
         std::cout << "{\n"
                   << "  \"model\": " << json_string(std::filesystem::path(args.model).string()) << ",\n"
                   << "  \"backend\": " << json_string(model.backend_description()) << ",\n"
@@ -130,9 +176,38 @@ int main(int argc, char** argv) {
                   << "  \"warmup\": " << args.warmup << ",\n"
                   << "  \"repetitions\": " << args.repetitions << ",\n"
                   << "  \"prefill_ms\": " << std::setprecision(10) << prefill_ms << ",\n"
+                  << "  \"prefill_samples_ms\": ";
+        json_samples(std::cout, samples, &Sample::prefill_ms);
+        std::cout << ",\n"
                   << "  \"prefill_tokens_per_second\": " << prefill_rate << ",\n"
+                  << "  \"prefill_command_encoding_ms\": "
+                  << average_execution(samples, &celeg::MetalExecutionMetrics::command_encoding_ms, false) << ",\n"
+                  << "  \"prefill_command_wait_ms\": "
+                  << average_execution(samples, &celeg::MetalExecutionMetrics::command_wait_ms, false) << ",\n"
+                  << "  \"prefill_gpu_execution_ms\": "
+                  << average_execution(samples, &celeg::MetalExecutionMetrics::gpu_execution_ms, false) << ",\n"
+                  << "  \"prefill_command_buffers\": "
+                  << average_execution(samples, &celeg::MetalExecutionMetrics::command_buffers, false) << ",\n"
+                  << "  \"prefill_dispatches\": "
+                  << average_execution(samples, &celeg::MetalExecutionMetrics::dispatches, false) << ",\n"
                   << "  \"decode_ms\": " << decode_ms << ",\n"
+                  << "  \"decode_samples_ms\": ";
+        json_samples(std::cout, samples, &Sample::decode_ms);
+        std::cout << ",\n"
                   << "  \"decode_tokens_per_second\": " << decode_rate << "\n"
+                  << "  ,\"decode_command_encoding_ms\": "
+                  << average_execution(samples, &celeg::MetalExecutionMetrics::command_encoding_ms, true) << "\n"
+                  << "  ,\"decode_command_wait_ms\": "
+                  << average_execution(samples, &celeg::MetalExecutionMetrics::command_wait_ms, true) << "\n"
+                  << "  ,\"decode_gpu_execution_ms\": "
+                  << average_execution(samples, &celeg::MetalExecutionMetrics::gpu_execution_ms, true) << "\n"
+                  << "  ,\"decode_command_buffers\": "
+                  << average_execution(samples, &celeg::MetalExecutionMetrics::command_buffers, true) << "\n"
+                  << "  ,\"decode_dispatches\": "
+                  << average_execution(samples, &celeg::MetalExecutionMetrics::dispatches, true) << "\n"
+                  << "  ,\"resident_weight_bytes\": " << resident.resident_weight_bytes << "\n"
+                  << "  ,\"resident_state_bytes\": " << resident.resident_state_bytes << "\n"
+                  << "  ,\"resident_bytes\": " << resident.resident_bytes() << "\n"
                   << "}\n";
         return 0;
     } catch (const std::exception& error) {

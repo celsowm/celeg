@@ -37,4 +37,18 @@ struct MetalEngineOptions {
     std::size_t prefix_cache_max_entries = 32;
 };
 
+struct MetalExecutionMetrics {
+    double command_encoding_ms = 0.0;
+    double command_wait_ms = 0.0;
+    double gpu_execution_ms = 0.0;
+    uint64_t command_buffers = 0;
+    uint64_t dispatches = 0;
+    std::size_t resident_weight_bytes = 0;
+    std::size_t resident_state_bytes = 0;
+
+    std::size_t resident_bytes() const {
+        return resident_weight_bytes + resident_state_bytes;
+    }
+};
+
 }

@@ -2,6 +2,8 @@
 
 using namespace metal;
 
+float celeg_half_to_float(ushort bits);
+
 kernel void celeg_embedding(device const float* table [[buffer(0)]],
                             device float* output [[buffer(1)]],
                             constant uint& width [[buffer(2)]],
@@ -10,17 +12,184 @@ kernel void celeg_embedding(device const float* table [[buffer(0)]],
     if (index < width) output[index] = table[static_cast<size_t>(token) * width + index];
 }
 
+kernel void celeg_embedding_f16(device const half* table [[buffer(0)]],
+                                device float* output [[buffer(1)]],
+                                constant uint& width [[buffer(2)]],
+                                constant uint& token [[buffer(3)]],
+                                uint index [[thread_position_in_grid]]) {
+    if (index < width) output[index] = static_cast<float>(
+        table[static_cast<size_t>(token) * width + index]);
+}
+
+float celeg_bf16_to_float(ushort bits) {
+    return as_type<float>(static_cast<uint>(bits) << 16);
+}
+
+kernel void celeg_embedding_bf16(device const ushort* table [[buffer(0)]],
+                                 device float* output [[buffer(1)]],
+                                 constant uint& width [[buffer(2)]],
+                                 constant uint& token [[buffer(3)]],
+                                 uint index [[thread_position_in_grid]]) {
+    if (index < width) output[index] = celeg_bf16_to_float(
+        table[static_cast<size_t>(token) * width + index]);
+}
+
 kernel void celeg_matvec(device const float* weights [[buffer(0)]],
                          device const float* input [[buffer(1)]],
                          device float* output [[buffer(2)]],
                          constant uint& rows [[buffer(3)]],
                          constant uint& cols [[buffer(4)]],
-                         uint row [[thread_position_in_grid]]) {
+                         uint lane [[thread_index_in_simdgroup]],
+                         uint simd [[simdgroup_index_in_threadgroup]],
+                         uint group [[threadgroup_position_in_grid]]) {
+    const uint row = group * 8 + simd;
     if (row >= rows) return;
     float sum = 0.0f;
     const size_t base = static_cast<size_t>(row) * cols;
-    for (uint col = 0; col < cols; ++col) sum += weights[base + col] * input[col];
-    output[row] = sum;
+    for (uint col = lane; col < cols; col += 32) sum += weights[base + col] * input[col];
+    const float reduced = simd_sum(sum);
+    if (lane == 0) output[row] = reduced;
+}
+
+kernel void celeg_matvec_f16(device const half* weights [[buffer(0)]],
+                             device const float* input [[buffer(1)]],
+                             device float* output [[buffer(2)]],
+                             constant uint& rows [[buffer(3)]],
+                             constant uint& cols [[buffer(4)]],
+                             uint lane [[thread_index_in_simdgroup]],
+                             uint simd [[simdgroup_index_in_threadgroup]],
+                             uint group [[threadgroup_position_in_grid]]) {
+    const uint row = group * 8 + simd;
+    if (row >= rows) return;
+    float sum = 0.0f;
+    const size_t base = static_cast<size_t>(row) * cols;
+    for (uint col = lane; col < cols; col += 32) {
+        sum += static_cast<float>(weights[base + col]) * input[col];
+    }
+    const float reduced = simd_sum(sum);
+    if (lane == 0) output[row] = reduced;
+}
+
+kernel void celeg_matvec_bf16(device const ushort* weights [[buffer(0)]],
+                              device const float* input [[buffer(1)]],
+                              device float* output [[buffer(2)]],
+                              constant uint& rows [[buffer(3)]],
+                              constant uint& cols [[buffer(4)]],
+                              uint lane [[thread_index_in_simdgroup]],
+                              uint simd [[simdgroup_index_in_threadgroup]],
+                              uint group [[threadgroup_position_in_grid]]) {
+    const uint row = group * 8 + simd;
+    if (row >= rows) return;
+    float sum = 0.0f;
+    const size_t base = static_cast<size_t>(row) * cols;
+    for (uint col = lane; col < cols; col += 32) {
+        sum += celeg_bf16_to_float(weights[base + col]) * input[col];
+    }
+    const float reduced = simd_sum(sum);
+    if (lane == 0) output[row] = reduced;
+}
+
+float celeg_q4_0_value(device const uchar* block, uint column) {
+    const uchar packed = block[2 + (column & 15)];
+    const uint value = (column & 16) == 0 ? packed & 0x0f : packed >> 4;
+    return static_cast<float>(value) - 8.0f;
+}
+
+kernel void celeg_matvec_q4_0(device const uchar* weights [[buffer(0)]],
+                              device const float* input [[buffer(1)]],
+                              device float* output [[buffer(2)]],
+                              constant uint& rows [[buffer(3)]],
+                              constant uint& cols [[buffer(4)]],
+                              constant uint& row_bytes [[buffer(5)]],
+                              uint lane [[thread_index_in_simdgroup]],
+                              uint simd [[simdgroup_index_in_threadgroup]],
+                              uint group [[threadgroup_position_in_grid]]) {
+    const uint row = group * 8 + simd;
+    if (row >= rows) return;
+    const device uchar* row_data = weights + static_cast<size_t>(row) * row_bytes;
+    float sum = 0.0f;
+    for (uint column = lane; column < cols; column += 32) {
+        const device uchar* block = row_data + static_cast<size_t>(column / 32) * 18;
+        const float d = celeg_half_to_float(static_cast<ushort>(block[0]) |
+                                            (static_cast<ushort>(block[1]) << 8));
+        sum += d * celeg_q4_0_value(block, column) * input[column];
+    }
+    const float reduced = simd_sum(sum);
+    if (lane == 0) output[row] = reduced;
+}
+
+float celeg_q5k_value(device const uchar* block, uint column) {
+    const uint sub = column >> 5;
+    const uint within = column & 31;
+    const uchar packed = block[48 + (sub >> 1) * 32 + within];
+    const uint low = (sub & 1) != 0 ? packed >> 4 : packed & 0x0f;
+    return static_cast<float>(low | (((block[16 + within] >> sub) & 1) << 4));
+}
+
+void celeg_q5k_scale_min(device const uchar* scales, uint index,
+                         thread uchar& scale, thread uchar& minimum) {
+    if (index < 4) {
+        scale = scales[index] & 63;
+        minimum = scales[index + 4] & 63;
+        return;
+    }
+    scale = (scales[index + 4] & 0x0f) | ((scales[index - 4] >> 6) << 4);
+    minimum = (scales[index + 4] >> 4) | ((scales[index] >> 6) << 4);
+}
+
+kernel void celeg_matvec_q5k(device const uchar* weights [[buffer(0)]],
+                             device const float* input [[buffer(1)]],
+                             device float* output [[buffer(2)]],
+                             constant uint& rows [[buffer(3)]],
+                             constant uint& cols [[buffer(4)]],
+                             constant uint& row_bytes [[buffer(5)]],
+                             uint lane [[thread_index_in_simdgroup]],
+                             uint simd [[simdgroup_index_in_threadgroup]],
+                             uint group [[threadgroup_position_in_grid]]) {
+    const uint row = group * 8 + simd;
+    if (row >= rows) return;
+    const device uchar* row_data = weights + static_cast<size_t>(row) * row_bytes;
+    float sum = 0.0f;
+    for (uint column = lane; column < cols; column += 32) {
+        const device uchar* block = row_data + static_cast<size_t>(column / 256) * 176;
+        const float d = celeg_half_to_float(static_cast<ushort>(block[0]) |
+                                            (static_cast<ushort>(block[1]) << 8));
+        const float dmin = celeg_half_to_float(static_cast<ushort>(block[2]) |
+                                               (static_cast<ushort>(block[3]) << 8));
+        const uint within = column & 255;
+        const uint sub = within >> 5;
+        uchar scale = 0;
+        uchar minimum = 0;
+        celeg_q5k_scale_min(block + 4, sub, scale, minimum);
+        sum += (d * static_cast<float>(scale) * celeg_q5k_value(block, within) -
+                dmin * static_cast<float>(minimum)) * input[column];
+    }
+    const float reduced = simd_sum(sum);
+    if (lane == 0) output[row] = reduced;
+}
+
+kernel void celeg_matvec_q8_0(device const uchar* weights [[buffer(0)]],
+                              device const float* input [[buffer(1)]],
+                              device float* output [[buffer(2)]],
+                              constant uint& rows [[buffer(3)]],
+                              constant uint& cols [[buffer(4)]],
+                              constant uint& row_bytes [[buffer(5)]],
+                              uint lane [[thread_index_in_simdgroup]],
+                              uint simd [[simdgroup_index_in_threadgroup]],
+                              uint group [[threadgroup_position_in_grid]]) {
+    const uint row = group * 8 + simd;
+    if (row >= rows) return;
+    const device uchar* row_data = weights + static_cast<size_t>(row) * row_bytes;
+    float sum = 0.0f;
+    for (uint column = lane; column < cols; column += 32) {
+        const device uchar* block = row_data + static_cast<size_t>(column / 32) * 34;
+        const float d = celeg_half_to_float(static_cast<ushort>(block[0]) |
+                                            (static_cast<ushort>(block[1]) << 8));
+        sum += d * static_cast<float>(static_cast<char>(block[2 + (column & 31)])) *
+            input[column];
+    }
+    const float reduced = simd_sum(sum);
+    if (lane == 0) output[row] = reduced;
 }
 
 float celeg_half_to_float(ushort bits) {
@@ -69,30 +238,32 @@ kernel void celeg_matvec_q4k(device const uchar* weights [[buffer(0)]],
                              constant uint& rows [[buffer(3)]],
                              constant uint& cols [[buffer(4)]],
                              constant uint& row_bytes [[buffer(5)]],
-                             uint row [[thread_position_in_grid]]) {
+                             uint lane [[thread_index_in_simdgroup]],
+                             uint simd [[simdgroup_index_in_threadgroup]],
+                             uint group [[threadgroup_position_in_grid]]) {
+    const uint row = group * 8 + simd;
     if (row >= rows) return;
     float sum = 0.0f;
     const device uchar* row_data = weights + static_cast<size_t>(row) * row_bytes;
-    for (uint block_index = 0; block_index < cols / 256; ++block_index) {
+    for (uint column = lane; column < cols; column += 32) {
+        const uint block_index = column / 256;
         const device uchar* block = row_data + static_cast<size_t>(block_index) * 144;
         const float d = celeg_half_to_float(static_cast<ushort>(block[0]) |
                                             (static_cast<ushort>(block[1]) << 8));
         const float dmin = celeg_half_to_float(static_cast<ushort>(block[2]) |
                                                (static_cast<ushort>(block[3]) << 8));
-        for (uint sub = 0; sub < 8; ++sub) {
-            uchar scale = 0;
-            uchar minimum = 0;
-            celeg_q4k_scale_min(block + 4, sub, scale, minimum);
-            const uint base = block_index * 256 + sub * 32;
-            for (uint index = 0; index < 32; ++index) {
-                const float value = d * static_cast<float>(scale) *
-                                    static_cast<float>(celeg_q4k_value(block, sub * 32 + index)) -
-                                    dmin * static_cast<float>(minimum);
-                sum += value * input[base + index];
-            }
-        }
+        const uint within = column & 255;
+        const uint sub = within >> 5;
+        uchar scale = 0;
+        uchar minimum = 0;
+        celeg_q4k_scale_min(block + 4, sub, scale, minimum);
+        const float value = d * static_cast<float>(scale) *
+                            static_cast<float>(celeg_q4k_value(block, within)) -
+                            dmin * static_cast<float>(minimum);
+        sum += value * input[column];
     }
-    output[row] = sum;
+    const float reduced = simd_sum(sum);
+    if (lane == 0) output[row] = reduced;
 }
 
 int celeg_q6k_value(device const uchar* block, uint column) {
@@ -114,26 +285,25 @@ kernel void celeg_matvec_q6k(device const uchar* weights [[buffer(0)]],
                              constant uint& rows [[buffer(3)]],
                              constant uint& cols [[buffer(4)]],
                              constant uint& row_bytes [[buffer(5)]],
-                             uint row [[thread_position_in_grid]]) {
+                             uint lane [[thread_index_in_simdgroup]],
+                             uint simd [[simdgroup_index_in_threadgroup]],
+                             uint group [[threadgroup_position_in_grid]]) {
+    const uint row = group * 8 + simd;
     if (row >= rows) return;
     float sum = 0.0f;
     const device uchar* row_data = weights + static_cast<size_t>(row) * row_bytes;
-    for (uint block_index = 0; block_index < cols / 256; ++block_index) {
+    for (uint column = lane; column < cols; column += 32) {
+        const uint block_index = column / 256;
         const device uchar* block = row_data + static_cast<size_t>(block_index) * 210;
         const float d = celeg_half_to_float(static_cast<ushort>(block[208]) |
                                             (static_cast<ushort>(block[209]) << 8));
-        const uint base = block_index * 256;
-        for (uint sub = 0; sub < 16; ++sub) {
-            const float scale = d * static_cast<float>(static_cast<char>(block[192 + sub]));
-            for (uint index = 0; index < 16; ++index) {
-                const uint column = sub * 16 + index;
-                const float value = scale * static_cast<float>(
-                    celeg_q6k_value(block, column) - 32);
-                sum += value * input[base + column];
-            }
-        }
+        const uint within = column & 255;
+        const float scale = d * static_cast<float>(
+            static_cast<char>(block[192 + within / 16]));
+        sum += scale * static_cast<float>(celeg_q6k_value(block, within) - 32) * input[column];
     }
-    output[row] = sum;
+    const float reduced = simd_sum(sum);
+    if (lane == 0) output[row] = reduced;
 }
 
 kernel void celeg_embedding_q4k(device const uchar* weights [[buffer(0)]],
@@ -176,17 +346,75 @@ kernel void celeg_embedding_q6k(device const uchar* weights [[buffer(0)]],
     output[index] = scale * static_cast<float>(celeg_q6k_value(block, column) - 32);
 }
 
+kernel void celeg_embedding_q4_0(device const uchar* weights [[buffer(0)]],
+                                 device float* output [[buffer(1)]],
+                                 constant uint& width [[buffer(2)]],
+                                 constant uint& token [[buffer(3)]],
+                                 uint index [[thread_position_in_grid]]) {
+    if (index >= width) return;
+    const device uchar* block = weights + static_cast<size_t>(token) * (width / 32) * 18 +
+        static_cast<size_t>(index / 32) * 18;
+    const float d = celeg_half_to_float(static_cast<ushort>(block[0]) |
+                                        (static_cast<ushort>(block[1]) << 8));
+    output[index] = d * celeg_q4_0_value(block, index);
+}
+
+kernel void celeg_embedding_q5k(device const uchar* weights [[buffer(0)]],
+                                device float* output [[buffer(1)]],
+                                constant uint& width [[buffer(2)]],
+                                constant uint& token [[buffer(3)]],
+                                uint index [[thread_position_in_grid]]) {
+    if (index >= width) return;
+    const uint block_index = index / 256;
+    const uint column = index & 255;
+    const device uchar* block = weights + static_cast<size_t>(token) * (width / 256) * 176 +
+        static_cast<size_t>(block_index) * 176;
+    const float d = celeg_half_to_float(static_cast<ushort>(block[0]) |
+                                        (static_cast<ushort>(block[1]) << 8));
+    const float dmin = celeg_half_to_float(static_cast<ushort>(block[2]) |
+                                           (static_cast<ushort>(block[3]) << 8));
+    uchar scale = 0;
+    uchar minimum = 0;
+    celeg_q5k_scale_min(block + 4, column >> 5, scale, minimum);
+    output[index] = d * static_cast<float>(scale) * celeg_q5k_value(block, column) -
+        dmin * static_cast<float>(minimum);
+}
+
+kernel void celeg_embedding_q8_0(device const uchar* weights [[buffer(0)]],
+                                 device float* output [[buffer(1)]],
+                                 constant uint& width [[buffer(2)]],
+                                 constant uint& token [[buffer(3)]],
+                                 uint index [[thread_position_in_grid]]) {
+    if (index >= width) return;
+    const device uchar* block = weights + static_cast<size_t>(token) * (width / 32) * 34 +
+        static_cast<size_t>(index / 32) * 34;
+    const float d = celeg_half_to_float(static_cast<ushort>(block[0]) |
+                                        (static_cast<ushort>(block[1]) << 8));
+    output[index] = d * static_cast<float>(static_cast<char>(block[2 + (index & 31)]));
+}
+
 kernel void celeg_rmsnorm(device const float* input [[buffer(0)]],
                           device const float* weight [[buffer(1)]],
                           device float* output [[buffer(2)]],
                           constant uint& width [[buffer(3)]],
                           constant float& epsilon [[buffer(4)]],
-                          uint index [[thread_position_in_grid]]) {
-    if (index != 0) return;
+                          uint index [[thread_position_in_threadgroup]],
+                          uint lane [[thread_index_in_simdgroup]],
+                          uint simd [[simdgroup_index_in_threadgroup]]) {
     float sum = 0.0f;
-    for (uint i = 0; i < width; ++i) sum += input[i] * input[i];
-    const float inverse = rsqrt(sum / static_cast<float>(width) + epsilon);
-    for (uint i = 0; i < width; ++i) output[i] = input[i] * inverse * weight[i];
+    for (uint i = index; i < width; i += 256) sum += input[i] * input[i];
+    threadgroup float partial[8];
+    threadgroup float inverse;
+    const float reduced = simd_sum(sum);
+    if (lane == 0) partial[simd] = reduced;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    if (index == 0) {
+        float total = 0.0f;
+        for (uint group = 0; group < 8; ++group) total += partial[group];
+        inverse = rsqrt(total / static_cast<float>(width) + epsilon);
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    for (uint i = index; i < width; i += 256) output[i] = input[i] * inverse * weight[i];
 }
 
 kernel void celeg_copy(device const float* input [[buffer(0)]],

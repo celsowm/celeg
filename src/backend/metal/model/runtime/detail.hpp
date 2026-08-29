@@ -7,6 +7,7 @@
 
 #import <Metal/Metal.h>
 
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -37,8 +38,13 @@ namespace celeg {
 struct MetalModel::Impl {
     enum class LinearStorage {
         Float32,
+        Float16,
+        BFloat16,
+        Q4_0,
         Q4K,
+        Q5K,
         Q6K,
+        Q8_0,
     };
 
     struct Linear {
@@ -161,6 +167,9 @@ struct MetalModel::Impl {
     int position = 0;
     bool ready = false;
     RuntimeMetrics metrics;
+    MetalExecutionMetrics execution_metrics;
+    std::chrono::steady_clock::time_point command_started;
+    uint64_t command_dispatches = 0;
 
 
     id<MTLBuffer> buffer(const std::vector<float>& values) const;
@@ -182,6 +191,8 @@ struct MetalModel::Impl {
                          id<MTLComputeCommandEncoder>& encoder);
     void dispatch(id<MTLComputeCommandEncoder> encoder, std::string_view name,
                   NSUInteger count);
+    void dispatch_cooperative(id<MTLComputeCommandEncoder> encoder, std::string_view name,
+                              NSUInteger groups);
     void set_buffer(id<MTLComputeCommandEncoder> encoder, id<MTLBuffer> value,
                     NSUInteger index, NSUInteger offset = 0);
     void set_bytes(id<MTLComputeCommandEncoder> encoder, const void* value,
