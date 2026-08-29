@@ -241,6 +241,32 @@ bool MetalModel::Impl::encode_matvec_pair(
     return true;
 }
 
+bool MetalModel::Impl::encode_swiglu_matvec(
+    id<MTLComputeCommandEncoder> encoder, const Linear& weight,
+    id<MTLBuffer> gate_up, id<MTLBuffer> output) {
+    if (std::getenv("CELEG_METAL_TUNED_DISABLE")) return false;
+    std::string_view kernel;
+    switch (weight.storage) {
+        case LinearStorage::Q4K: kernel = "celeg_swiglu_matvec_q4k"; break;
+        case LinearStorage::Q5K: kernel = "celeg_swiglu_matvec_q5k"; break;
+        case LinearStorage::Q6K: kernel = "celeg_swiglu_matvec_q6k"; break;
+        default: return false;
+    }
+    set_buffer(encoder, weight.buffer, 0);
+    set_buffer(encoder, gate_up, 1);
+    set_buffer(encoder, output, 2);
+    set_bytes(encoder, &weight.rows, sizeof(weight.rows), 3);
+    set_bytes(encoder, &weight.cols, sizeof(weight.cols), 4);
+    set_bytes(encoder, &weight.row_bytes, sizeof(weight.row_bytes), 5);
+    id<MTLComputePipelineState> state = pipeline(kernel);
+    [encoder setComputePipelineState:state];
+    [encoder setThreadgroupMemoryLength:8u * sizeof(float) atIndex:0];
+    [encoder dispatchThreadgroups:MTLSizeMake((weight.rows + 1u) / 2u, 1, 1)
+       threadsPerThreadgroup:MTLSizeMake(128, 1, 1)];
+    ++command_dispatches;
+    return true;
+}
+
 void MetalModel::Impl::encode_matmul(id<MTLComputeCommandEncoder> encoder,
                                      const Linear& weight, id<MTLBuffer> input,
                                      id<MTLBuffer> output, uint32_t rows,

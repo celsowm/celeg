@@ -11,11 +11,13 @@ void MetalModel::Impl::encode_dense_feed_forward(
         encode_matvec(encoder, layer.ffn_up, normed, gate_up,
                       static_cast<NSUInteger>(layer.intermediate) * sizeof(float));
     }
-    set_buffer(encoder, gate_up, 0);
-    set_buffer(encoder, activated, 1);
-    set_bytes(encoder, &intermediate, sizeof(intermediate), 2);
-    dispatch(encoder, "celeg_swiglu", intermediate);
-    encode_matvec(encoder, layer.ffn_down, activated, operation);
+    if (!encode_swiglu_matvec(encoder, layer.ffn_down, gate_up, operation)) {
+        set_buffer(encoder, gate_up, 0);
+        set_buffer(encoder, activated, 1);
+        set_bytes(encoder, &intermediate, sizeof(intermediate), 2);
+        dispatch(encoder, "celeg_swiglu", intermediate);
+        encode_matvec(encoder, layer.ffn_down, activated, operation);
+    }
 }
 
 void MetalModel::Impl::encode_dense_feed_forward_batch(

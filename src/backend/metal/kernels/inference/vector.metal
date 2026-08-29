@@ -542,6 +542,78 @@ kernel void celeg_matvec_q6k_tuned(device const uchar* weights [[buffer(0)]],
     }
 }
 
+float celeg_swiglu_activation(device const float* gate_up, uint cols, uint column) {
+    const float gate = gate_up[column];
+    return gate / (1.0f + exp(-gate)) * gate_up[cols + column];
+}
+
+float celeg_swiglu_q4k_weight(device const uchar* block, uint within) {
+    uchar scale = 0;
+    uchar minimum = 0;
+    celeg_q4k_scale_min(block + 4, within >> 5, scale, minimum);
+    const float d = celeg_half_to_float(static_cast<ushort>(block[0]) |
+                                        (static_cast<ushort>(block[1]) << 8));
+    const float dmin = celeg_half_to_float(static_cast<ushort>(block[2]) |
+                                           (static_cast<ushort>(block[3]) << 8));
+    return d * static_cast<float>(scale) * celeg_q4k_value(block, within) -
+           dmin * static_cast<float>(minimum);
+}
+
+float celeg_swiglu_q5k_weight(device const uchar* block, uint within) {
+    uchar scale = 0;
+    uchar minimum = 0;
+    celeg_q5k_scale_min(block + 4, within >> 5, scale, minimum);
+    const float d = celeg_half_to_float(static_cast<ushort>(block[0]) |
+                                        (static_cast<ushort>(block[1]) << 8));
+    const float dmin = celeg_half_to_float(static_cast<ushort>(block[2]) |
+                                           (static_cast<ushort>(block[3]) << 8));
+    return d * static_cast<float>(scale) * celeg_q5k_value(block, within) -
+           dmin * static_cast<float>(minimum);
+}
+
+float celeg_swiglu_q6k_weight(device const uchar* block, uint within) {
+    const float d = celeg_half_to_float(static_cast<ushort>(block[208]) |
+                                        (static_cast<ushort>(block[209]) << 8));
+    return d * static_cast<float>(static_cast<char>(block[192 + within / 16])) *
+           static_cast<float>(celeg_q6k_value(block, within) - 32);
+}
+
+#define CELEG_SWIGLU_MATVEC(NAME, BLOCK_BYTES, DECODE) \
+kernel void celeg_swiglu_matvec_##NAME( \
+    device const uchar* weights [[buffer(0)]], device const float* gate_up [[buffer(1)]], \
+    device float* output [[buffer(2)]], constant uint& rows [[buffer(3)]], \
+    constant uint& cols [[buffer(4)]], constant uint& row_bytes [[buffer(5)]], \
+    threadgroup float* partial [[threadgroup(0)]], uint lane [[thread_index_in_simdgroup]], \
+    uint simd [[simdgroup_index_in_threadgroup]], uint group [[threadgroup_position_in_grid]]) { \
+    const uint row = group * 2; \
+    if (row >= rows) return; \
+    float sums[2] = {0.0f, 0.0f}; \
+    for (uint column = simd * 32 + lane; column < cols; column += 128) { \
+        const uint within = column & 255; \
+        const float activated = celeg_swiglu_activation(gate_up, cols, column); \
+        const device uchar* first = weights + static_cast<size_t>(row) * row_bytes + \
+            static_cast<size_t>(column / 256) * BLOCK_BYTES; \
+        sums[0] += DECODE(first, within) * activated; \
+        if (row + 1 < rows) { \
+            const device uchar* second = weights + static_cast<size_t>(row + 1) * row_bytes + \
+                static_cast<size_t>(column / 256) * BLOCK_BYTES; \
+            sums[1] += DECODE(second, within) * activated; \
+        } \
+    } \
+    if (lane == 0) { partial[simd * 2] = simd_sum(sums[0]); partial[simd * 2 + 1] = simd_sum(sums[1]); } \
+    threadgroup_barrier(mem_flags::mem_threadgroup); \
+    if (simd == 0 && lane < 2) { \
+        float total = partial[lane]; \
+        for (uint other = 1; other < 4; ++other) total += partial[other * 2 + lane]; \
+        if (row + lane < rows) output[row + lane] = total; \
+    } \
+}
+
+CELEG_SWIGLU_MATVEC(q4k, 144, celeg_swiglu_q4k_weight)
+CELEG_SWIGLU_MATVEC(q5k, 176, celeg_swiglu_q5k_weight)
+CELEG_SWIGLU_MATVEC(q6k, 210, celeg_swiglu_q6k_weight)
+#undef CELEG_SWIGLU_MATVEC
+
 kernel void celeg_embedding_q4k(device const uchar* weights [[buffer(0)]],
                                 device float* output [[buffer(1)]],
                                 constant uint& width [[buffer(2)]],

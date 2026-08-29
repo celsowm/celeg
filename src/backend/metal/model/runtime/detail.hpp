@@ -218,6 +218,9 @@ struct MetalModel::Impl {
     void encode_matvec(id<MTLComputeCommandEncoder> encoder, const Linear& weight,
                        id<MTLBuffer> input, id<MTLBuffer> output,
                        NSUInteger output_offset = 0);
+    bool encode_swiglu_matvec(id<MTLComputeCommandEncoder> encoder,
+                              const Linear& weight, id<MTLBuffer> gate_up,
+                              id<MTLBuffer> output);
     bool encode_matvec_pair(id<MTLComputeCommandEncoder> encoder,
                             const Linear& first, const Linear& second,
                             id<MTLBuffer> input, id<MTLBuffer> output,
