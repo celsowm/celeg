@@ -609,6 +609,62 @@ kernel void celeg_attention(device const float* query [[buffer(0)]],
     output[index] = value / denominator;
 }
 
+kernel void celeg_attention_cooperative(device const float* query [[buffer(0)]],
+                                        device const float* key_cache [[buffer(1)]],
+                                        device const float* value_cache [[buffer(2)]],
+                                        device float* output [[buffer(3)]],
+                                        constant uint& sequence_length [[buffer(4)]],
+                                        constant uint& query_heads [[buffer(5)]],
+                                        constant uint& key_heads [[buffer(6)]],
+                                        constant uint& head_dim [[buffer(7)]],
+                                        constant float& scale [[buffer(8)]],
+                                        constant uint& page_tokens [[buffer(9)]],
+                                        uint lane [[thread_index_in_simdgroup]],
+                                        uint2 grid [[threadgroup_position_in_grid]]) {
+    const uint head = grid.x;
+    if (head >= query_heads || sequence_length > 1024) return;
+    const uint key_head = head / (query_heads / key_heads);
+    const size_t query_base = static_cast<size_t>(head) * head_dim;
+    const size_t key_width = static_cast<size_t>(key_heads) * head_dim;
+    threadgroup float scores[1024];
+    for (uint position = 0; position < sequence_length; ++position) {
+        const size_t key_base = (static_cast<size_t>(position / page_tokens) * page_tokens +
+            position % page_tokens) * key_width + static_cast<size_t>(key_head) * head_dim;
+        float partial = 0.0f;
+        for (uint d = lane; d < head_dim; d += 32) {
+            partial += query[query_base + d] * key_cache[key_base + d];
+        }
+        const float score = simd_sum(partial) * scale;
+        if (lane == 0) scores[position] = score;
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    threadgroup float maximum;
+    threadgroup float denominator;
+    if (lane == 0) {
+        float maximum_value = -INFINITY;
+        for (uint position = 0; position < sequence_length; ++position) {
+            maximum_value = max(maximum_value, scores[position]);
+        }
+        maximum = maximum_value;
+        float denominator_value = 0.0f;
+        for (uint position = 0; position < sequence_length; ++position) {
+            denominator_value += exp(scores[position] - maximum_value);
+        }
+        denominator = denominator_value;
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    for (uint dimension = lane; dimension < head_dim; dimension += 32) {
+        float value = 0.0f;
+        for (uint position = 0; position < sequence_length; ++position) {
+            const size_t key_base = (static_cast<size_t>(position / page_tokens) * page_tokens +
+                position % page_tokens) * key_width + static_cast<size_t>(key_head) * head_dim;
+            value += exp(scores[position] - maximum) / denominator *
+                value_cache[key_base + dimension];
+        }
+        output[query_base + dimension] = value;
+    }
+}
+
 float celeg_silu(float value) {
     return value / (1.0f + exp(-value));
 }
@@ -1395,6 +1451,68 @@ kernel void celeg_attention_batch(device const float* query [[buffer(0)]],
     output[static_cast<size_t>(row) * width + dimension] = value_sum;
 }
 
+kernel void celeg_attention_batch_cooperative(device const float* query [[buffer(0)]],
+                                              device const float* key_cache [[buffer(1)]],
+                                              device const float* value_cache [[buffer(2)]],
+                                              device float* output [[buffer(3)]],
+                                              constant uint& rows [[buffer(4)]],
+                                              constant uint& base_position [[buffer(5)]],
+                                              constant uint& query_heads [[buffer(6)]],
+                                              constant uint& key_heads [[buffer(7)]],
+                                              constant uint& head_dim [[buffer(8)]],
+                                              constant float& scale [[buffer(9)]],
+                                              constant uint& page_tokens [[buffer(10)]],
+                                              uint lane [[thread_index_in_simdgroup]],
+                                              uint2 grid [[threadgroup_position_in_grid]]) {
+    const uint row = grid.y;
+    const uint head = grid.x;
+    if (row >= rows || head >= query_heads || base_position + row + 1 > 1024) return;
+    const uint key_head = head / (query_heads / key_heads);
+    const size_t query_width = static_cast<size_t>(query_heads) * head_dim;
+    const size_t query_base = static_cast<size_t>(row) * query_width +
+        static_cast<size_t>(head) * head_dim;
+    const size_t key_width = static_cast<size_t>(key_heads) * head_dim;
+    const uint sequence_length = base_position + row + 1;
+    threadgroup float scores[1024];
+    for (uint position = 0; position < sequence_length; ++position) {
+        const size_t key_base = (static_cast<size_t>(position / page_tokens) * page_tokens +
+            position % page_tokens) * key_width + static_cast<size_t>(key_head) * head_dim;
+        float partial = 0.0f;
+        for (uint d = lane; d < head_dim; d += 32) {
+            partial += query[query_base + d] * key_cache[key_base + d];
+        }
+        const float score = simd_sum(partial) * scale;
+        if (lane == 0) scores[position] = score;
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    threadgroup float maximum;
+    threadgroup float denominator;
+    if (lane == 0) {
+        float maximum_value = -INFINITY;
+        for (uint position = 0; position < sequence_length; ++position) {
+            maximum_value = max(maximum_value, scores[position]);
+        }
+        maximum = maximum_value;
+        float denominator_value = 0.0f;
+        for (uint position = 0; position < sequence_length; ++position) {
+            denominator_value += exp(scores[position] - maximum_value);
+        }
+        denominator = denominator_value;
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    for (uint dimension = lane; dimension < head_dim; dimension += 32) {
+        float value = 0.0f;
+        for (uint position = 0; position < sequence_length; ++position) {
+            const size_t key_base = (static_cast<size_t>(position / page_tokens) * page_tokens +
+                position % page_tokens) * key_width + static_cast<size_t>(key_head) * head_dim;
+            value += exp(scores[position] - maximum) / denominator *
+                value_cache[key_base + dimension];
+        }
+        output[static_cast<size_t>(row) * query_width + static_cast<size_t>(head) * head_dim +
+               dimension] = value;
+    }
+}
+
 kernel void celeg_matvec_pair(device const float* first [[buffer(0)]],
                               device const float* second [[buffer(1)]],
                               device const float* input [[buffer(2)]],
@@ -1604,4 +1722,242 @@ kernel void celeg_matvec_pair_q6k(device const uchar* first [[buffer(0)]],
     }
     const float reduced = simd_sum(sum);
     if (lane == 0) output[(upper ? rows : 0) + row] = reduced;
+}
+
+kernel void celeg_matmul_pair(device const float* first [[buffer(0)]],
+                              device const float* second [[buffer(1)]],
+                              device const float* input [[buffer(2)]],
+                              device float* output [[buffer(3)]],
+                              constant uint& rows [[buffer(4)]],
+                              constant uint& cols [[buffer(5)]],
+                              constant uint& output_stride [[buffer(6)]],
+                              uint lane [[thread_index_in_simdgroup]],
+                              uint simd [[simdgroup_index_in_threadgroup]],
+                              uint2 grid [[threadgroup_position_in_grid]]) {
+    const bool upper = simd >= 4;
+    const uint row = grid.x * 4 + (simd & 3);
+    if (row >= rows) return;
+    const device float* weights = upper ? second : first;
+    const size_t input_base = static_cast<size_t>(grid.y) * cols;
+    const size_t weight_base = static_cast<size_t>(row) * cols;
+    float sum = 0.0f;
+    for (uint col = lane; col < cols; col += 32) {
+        sum += weights[weight_base + col] * input[input_base + col];
+    }
+    const float reduced = simd_sum(sum);
+    if (lane == 0) output[static_cast<size_t>(grid.y) * output_stride +
+                          (upper ? rows : 0) + row] = reduced;
+}
+
+kernel void celeg_matmul_pair_f16(device const half* first [[buffer(0)]],
+                                  device const half* second [[buffer(1)]],
+                                  device const float* input [[buffer(2)]],
+                                  device float* output [[buffer(3)]],
+                                  constant uint& rows [[buffer(4)]],
+                                  constant uint& cols [[buffer(5)]],
+                                  constant uint& output_stride [[buffer(6)]],
+                                  uint lane [[thread_index_in_simdgroup]],
+                                  uint simd [[simdgroup_index_in_threadgroup]],
+                                  uint2 grid [[threadgroup_position_in_grid]]) {
+    const bool upper = simd >= 4;
+    const uint row = grid.x * 4 + (simd & 3);
+    if (row >= rows) return;
+    const device half* weights = upper ? second : first;
+    const size_t input_base = static_cast<size_t>(grid.y) * cols;
+    const size_t weight_base = static_cast<size_t>(row) * cols;
+    float sum = 0.0f;
+    for (uint col = lane; col < cols; col += 32) {
+        sum += static_cast<float>(weights[weight_base + col]) * input[input_base + col];
+    }
+    const float reduced = simd_sum(sum);
+    if (lane == 0) output[static_cast<size_t>(grid.y) * output_stride +
+                          (upper ? rows : 0) + row] = reduced;
+}
+
+kernel void celeg_matmul_pair_bf16(device const ushort* first [[buffer(0)]],
+                                   device const ushort* second [[buffer(1)]],
+                                   device const float* input [[buffer(2)]],
+                                   device float* output [[buffer(3)]],
+                                   constant uint& rows [[buffer(4)]],
+                                   constant uint& cols [[buffer(5)]],
+                                   constant uint& output_stride [[buffer(6)]],
+                                   uint lane [[thread_index_in_simdgroup]],
+                                   uint simd [[simdgroup_index_in_threadgroup]],
+                                   uint2 grid [[threadgroup_position_in_grid]]) {
+    const bool upper = simd >= 4;
+    const uint row = grid.x * 4 + (simd & 3);
+    if (row >= rows) return;
+    const device ushort* weights = upper ? second : first;
+    const size_t input_base = static_cast<size_t>(grid.y) * cols;
+    const size_t weight_base = static_cast<size_t>(row) * cols;
+    float sum = 0.0f;
+    for (uint col = lane; col < cols; col += 32) {
+        sum += celeg_bf16_to_float(weights[weight_base + col]) * input[input_base + col];
+    }
+    const float reduced = simd_sum(sum);
+    if (lane == 0) output[static_cast<size_t>(grid.y) * output_stride +
+                          (upper ? rows : 0) + row] = reduced;
+}
+
+kernel void celeg_matmul_pair_q4_0(device const uchar* first [[buffer(0)]],
+                                   device const uchar* second [[buffer(1)]],
+                                   device const float* input [[buffer(2)]],
+                                   device float* output [[buffer(3)]],
+                                   constant uint& rows [[buffer(4)]],
+                                   constant uint& cols [[buffer(5)]],
+                                   constant uint& output_stride [[buffer(6)]],
+                                   constant uint& row_bytes [[buffer(7)]],
+                                   uint lane [[thread_index_in_simdgroup]],
+                                   uint simd [[simdgroup_index_in_threadgroup]],
+                                   uint2 grid [[threadgroup_position_in_grid]]) {
+    const bool upper = simd >= 4;
+    const uint row = grid.x * 4 + (simd & 3);
+    if (row >= rows) return;
+    const device uchar* matrix = upper ? second : first;
+    const device uchar* row_data = matrix + static_cast<size_t>(row) * row_bytes;
+    const size_t input_base = static_cast<size_t>(grid.y) * cols;
+    float sum = 0.0f;
+    for (uint col = lane; col < cols; col += 32) {
+        const device uchar* block = row_data + static_cast<size_t>(col / 32) * 18;
+        const float d = celeg_half_to_float(static_cast<ushort>(block[0]) |
+                                            (static_cast<ushort>(block[1]) << 8));
+        sum += d * celeg_q4_0_value(block, col) * input[input_base + col];
+    }
+    const float reduced = simd_sum(sum);
+    if (lane == 0) output[static_cast<size_t>(grid.y) * output_stride +
+                          (upper ? rows : 0) + row] = reduced;
+}
+
+kernel void celeg_matmul_pair_q5k(device const uchar* first [[buffer(0)]],
+                                  device const uchar* second [[buffer(1)]],
+                                  device const float* input [[buffer(2)]],
+                                  device float* output [[buffer(3)]],
+                                  constant uint& rows [[buffer(4)]],
+                                  constant uint& cols [[buffer(5)]],
+                                  constant uint& output_stride [[buffer(6)]],
+                                  constant uint& row_bytes [[buffer(7)]],
+                                  uint lane [[thread_index_in_simdgroup]],
+                                  uint simd [[simdgroup_index_in_threadgroup]],
+                                  uint2 grid [[threadgroup_position_in_grid]]) {
+    const bool upper = simd >= 4;
+    const uint row = grid.x * 4 + (simd & 3);
+    if (row >= rows) return;
+    const device uchar* matrix = upper ? second : first;
+    const device uchar* row_data = matrix + static_cast<size_t>(row) * row_bytes;
+    const size_t input_base = static_cast<size_t>(grid.y) * cols;
+    float sum = 0.0f;
+    for (uint col = lane; col < cols; col += 32) {
+        const device uchar* block = row_data + static_cast<size_t>(col / 256) * 176;
+        const float d = celeg_half_to_float(static_cast<ushort>(block[0]) |
+                                            (static_cast<ushort>(block[1]) << 8));
+        const float dmin = celeg_half_to_float(static_cast<ushort>(block[2]) |
+                                               (static_cast<ushort>(block[3]) << 8));
+        const uint within = col & 255;
+        uchar scale = 0;
+        uchar minimum = 0;
+        celeg_q5k_scale_min(block + 4, within >> 5, scale, minimum);
+        sum += (d * static_cast<float>(scale) * celeg_q5k_value(block, within) -
+                dmin * static_cast<float>(minimum)) * input[input_base + col];
+    }
+    const float reduced = simd_sum(sum);
+    if (lane == 0) output[static_cast<size_t>(grid.y) * output_stride +
+                          (upper ? rows : 0) + row] = reduced;
+}
+
+kernel void celeg_matmul_pair_q8_0(device const uchar* first [[buffer(0)]],
+                                   device const uchar* second [[buffer(1)]],
+                                   device const float* input [[buffer(2)]],
+                                   device float* output [[buffer(3)]],
+                                   constant uint& rows [[buffer(4)]],
+                                   constant uint& cols [[buffer(5)]],
+                                   constant uint& output_stride [[buffer(6)]],
+                                   constant uint& row_bytes [[buffer(7)]],
+                                   uint lane [[thread_index_in_simdgroup]],
+                                   uint simd [[simdgroup_index_in_threadgroup]],
+                                   uint2 grid [[threadgroup_position_in_grid]]) {
+    const bool upper = simd >= 4;
+    const uint row = grid.x * 4 + (simd & 3);
+    if (row >= rows) return;
+    const device uchar* matrix = upper ? second : first;
+    const device uchar* row_data = matrix + static_cast<size_t>(row) * row_bytes;
+    const size_t input_base = static_cast<size_t>(grid.y) * cols;
+    float sum = 0.0f;
+    for (uint col = lane; col < cols; col += 32) {
+        const device uchar* block = row_data + static_cast<size_t>(col / 32) * 34;
+        const float d = celeg_half_to_float(static_cast<ushort>(block[0]) |
+                                            (static_cast<ushort>(block[1]) << 8));
+        sum += d * static_cast<float>(static_cast<char>(block[2 + (col & 31)])) *
+            input[input_base + col];
+    }
+    const float reduced = simd_sum(sum);
+    if (lane == 0) output[static_cast<size_t>(grid.y) * output_stride +
+                          (upper ? rows : 0) + row] = reduced;
+}
+
+kernel void celeg_matmul_pair_q4k(device const uchar* first [[buffer(0)]],
+                                  device const uchar* second [[buffer(1)]],
+                                  device const float* input [[buffer(2)]],
+                                  device float* output [[buffer(3)]],
+                                  constant uint& rows [[buffer(4)]],
+                                  constant uint& cols [[buffer(5)]],
+                                  constant uint& output_stride [[buffer(6)]],
+                                  constant uint& row_bytes [[buffer(7)]],
+                                  uint lane [[thread_index_in_simdgroup]],
+                                  uint simd [[simdgroup_index_in_threadgroup]],
+                                  uint2 grid [[threadgroup_position_in_grid]]) {
+    const bool upper = simd >= 4;
+    const uint row = grid.x * 4 + (simd & 3);
+    if (row >= rows) return;
+    const device uchar* matrix = upper ? second : first;
+    const device uchar* row_data = matrix + static_cast<size_t>(row) * row_bytes;
+    const size_t input_base = static_cast<size_t>(grid.y) * cols;
+    float sum = 0.0f;
+    for (uint col = lane; col < cols; col += 32) {
+        const device uchar* block = row_data + static_cast<size_t>(col / 256) * 144;
+        const float d = celeg_half_to_float(static_cast<ushort>(block[0]) |
+                                            (static_cast<ushort>(block[1]) << 8));
+        const float dmin = celeg_half_to_float(static_cast<ushort>(block[2]) |
+                                               (static_cast<ushort>(block[3]) << 8));
+        const uint within = col & 255;
+        uchar scale = 0;
+        uchar minimum = 0;
+        celeg_q4k_scale_min(block + 4, within >> 5, scale, minimum);
+        sum += (d * static_cast<float>(scale) * celeg_q4k_value(block, within) -
+                dmin * static_cast<float>(minimum)) * input[input_base + col];
+    }
+    const float reduced = simd_sum(sum);
+    if (lane == 0) output[static_cast<size_t>(grid.y) * output_stride +
+                          (upper ? rows : 0) + row] = reduced;
+}
+
+kernel void celeg_matmul_pair_q6k(device const uchar* first [[buffer(0)]],
+                                  device const uchar* second [[buffer(1)]],
+                                  device const float* input [[buffer(2)]],
+                                  device float* output [[buffer(3)]],
+                                  constant uint& rows [[buffer(4)]],
+                                  constant uint& cols [[buffer(5)]],
+                                  constant uint& output_stride [[buffer(6)]],
+                                  constant uint& row_bytes [[buffer(7)]],
+                                  uint lane [[thread_index_in_simdgroup]],
+                                  uint simd [[simdgroup_index_in_threadgroup]],
+                                  uint2 grid [[threadgroup_position_in_grid]]) {
+    const bool upper = simd >= 4;
+    const uint row = grid.x * 4 + (simd & 3);
+    if (row >= rows) return;
+    const device uchar* matrix = upper ? second : first;
+    const device uchar* row_data = matrix + static_cast<size_t>(row) * row_bytes;
+    const size_t input_base = static_cast<size_t>(grid.y) * cols;
+    float sum = 0.0f;
+    for (uint col = lane; col < cols; col += 32) {
+        const uint within = col & 255;
+        const device uchar* block = row_data + static_cast<size_t>(col / 256) * 210;
+        const float d = celeg_half_to_float(static_cast<ushort>(block[208]) |
+                                            (static_cast<ushort>(block[209]) << 8));
+        const float scale = d * static_cast<float>(static_cast<char>(block[192 + within / 16]));
+        sum += scale * static_cast<float>(celeg_q6k_value(block, within) - 32) *
+            input[input_base + col];
+    }
+    const float reduced = simd_sum(sum);
+    if (lane == 0) output[static_cast<size_t>(grid.y) * output_stride +
+                          (upper ? rows : 0) + row] = reduced;
 }

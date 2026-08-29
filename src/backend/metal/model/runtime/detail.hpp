@@ -221,6 +221,10 @@ struct MetalModel::Impl {
                        id<MTLBuffer> input, id<MTLBuffer> output, uint32_t rows,
                        NSUInteger input_offset = 0, NSUInteger output_offset = 0,
                        uint32_t output_stride = 0);
+    bool encode_matmul_pair(id<MTLComputeCommandEncoder> encoder,
+                            const Linear& first, const Linear& second,
+                            id<MTLBuffer> input, id<MTLBuffer> output,
+                            uint32_t rows, uint32_t width);
     void encode_embedding(id<MTLComputeCommandEncoder> encoder, uint32_t width,
                           uint32_t token);
     void encode_embedding_batch(id<MTLComputeCommandEncoder> encoder,

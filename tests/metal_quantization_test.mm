@@ -76,16 +76,72 @@ std::vector<float> run_embedding(id<MTLDevice> device,
     return values;
 }
 
+std::vector<float> run_matvec(id<MTLDevice> device,
+                              const celeg::GgufTensorView& tensor,
+                              uint32_t rows,
+                              const std::vector<float>& input) {
+    NSError* error = nil;
+    NSString* source = [NSString stringWithUTF8String:celeg::metal_detail::kInferenceShader];
+    id<MTLLibrary> library = [device newLibraryWithSource:source options:nil error:&error];
+    if (!library) throw std::runtime_error("Metal matvec shader compilation failed");
+    const char* kernel = nullptr;
+    switch (tensor.type) {
+        case celeg::GgmlType::Q4_0: kernel = "celeg_matvec_q4_0"; break;
+        case celeg::GgmlType::Q4_K: kernel = "celeg_matvec_q4k"; break;
+        case celeg::GgmlType::Q5_K: kernel = "celeg_matvec_q5k"; break;
+        case celeg::GgmlType::Q6_K: kernel = "celeg_matvec_q6k"; break;
+        case celeg::GgmlType::Q8_0: kernel = "celeg_matvec_q8_0"; break;
+        default: throw std::runtime_error("unsupported Metal matvec test type");
+    }
+    id<MTLFunction> function = [library newFunctionWithName:
+        [NSString stringWithUTF8String:kernel]];
+    if (!function) throw std::runtime_error("Metal matvec function is missing");
+    id<MTLComputePipelineState> pipeline = [device newComputePipelineStateWithFunction:function
+                                                                                      error:&error];
+    if (!pipeline) throw std::runtime_error("Metal matvec pipeline creation failed");
+    id<MTLBuffer> weights = [device newBufferWithBytes:tensor.data
+                                                 length:tensor.bytes
+                                                options:MTLResourceStorageModeShared];
+    id<MTLBuffer> input_buffer = [device newBufferWithBytes:input.data()
+                                                       length:input.size() * sizeof(float)
+                                                      options:MTLResourceStorageModeShared];
+    std::vector<float> output(rows + 1, 0.0f);
+    id<MTLBuffer> output_buffer = [device newBufferWithBytes:output.data()
+                                                        length:output.size() * sizeof(float)
+                                                       options:MTLResourceStorageModeShared];
+    id<MTLCommandQueue> queue = [device newCommandQueue];
+    id<MTLCommandBuffer> command_buffer = [queue commandBuffer];
+    id<MTLComputeCommandEncoder> encoder = [command_buffer computeCommandEncoder];
+    const uint32_t cols = static_cast<uint32_t>(tensor.shape.at(1));
+    const uint32_t row_bytes = static_cast<uint32_t>(tensor.bytes / tensor.shape.at(0));
+    [encoder setComputePipelineState:pipeline];
+    [encoder setBuffer:weights offset:0 atIndex:0];
+    [encoder setBuffer:input_buffer offset:sizeof(float) atIndex:1];
+    [encoder setBuffer:output_buffer offset:sizeof(float) atIndex:2];
+    [encoder setBytes:&rows length:sizeof(rows) atIndex:3];
+    [encoder setBytes:&cols length:sizeof(cols) atIndex:4];
+    [encoder setBytes:&row_bytes length:sizeof(row_bytes) atIndex:5];
+    [encoder dispatchThreadgroups:MTLSizeMake((rows + 7u) / 8u, 1, 1)
+             threadsPerThreadgroup:MTLSizeMake(256, 1, 1)];
+    [encoder endEncoding];
+    [command_buffer commit];
+    [command_buffer waitUntilCompleted];
+    if (command_buffer.status != MTLCommandBufferStatusCompleted) {
+        throw std::runtime_error("Metal matvec dispatch failed");
+    }
+    std::memcpy(output.data(), output_buffer.contents, output.size() * sizeof(float));
+    return std::vector<float>(output.begin() + 1, output.end());
+}
+
 bool check_type(const celeg::GgufFile& file, celeg::GgmlType type,
                 id<MTLDevice> device) {
     for (const std::string& name : file.tensor_names()) {
-        const celeg::GgufTensorInfo& info = file.tensor_info(name);
+        const celeg::GgufTensorView tensor = file.tensor(name);
         const celeg::GgmlTypeTrait trait = celeg::ggml_type_trait(type);
-        if (info.type != type || info.dims.size() != 2 || info.dims[0] == 0 ||
-            info.dims[1] == 0 || info.dims[1] % trait.block_size != 0) {
+        if (tensor.type != type || tensor.shape.size() != 2 || tensor.shape[0] == 0 ||
+            tensor.shape[1] == 0 || tensor.shape[1] % trait.block_size != 0) {
             continue;
         }
-        const celeg::GgufTensorView tensor = file.tensor(name);
         celeg::CpuGgufMatrix matrix;
         matrix.type = type;
         matrix.rows = static_cast<uint32_t>(tensor.shape[0]);
@@ -111,6 +167,49 @@ bool check_type(const celeg::GgufFile& file, celeg::GgmlType type,
     return false;
 }
 
+bool check_matvec(const celeg::GgufFile& file, celeg::GgmlType type,
+                  id<MTLDevice> device) {
+    for (const std::string& name : file.tensor_names()) {
+        const celeg::GgufTensorView tensor = file.tensor(name);
+        const celeg::GgmlTypeTrait trait = celeg::ggml_type_trait(type);
+        if (tensor.type != type || tensor.shape.size() != 2 || tensor.shape[0] == 0 ||
+            tensor.shape[1] == 0 || tensor.shape[1] % trait.block_size != 0) {
+            continue;
+        }
+        const uint32_t rows = 3;
+        const uint32_t cols = static_cast<uint32_t>(tensor.shape.at(1));
+        std::vector<float> input(cols + 1);
+        for (uint32_t index = 0; index < cols; ++index) {
+            input[index + 1] = std::sin(static_cast<float>(index + 1) * 0.017f);
+        }
+        const std::vector<float> actual = run_matvec(device, tensor, rows, input);
+        celeg::CpuGgufMatrix matrix;
+        matrix.type = type;
+        matrix.rows = static_cast<uint32_t>(tensor.shape.at(0));
+        matrix.cols = cols;
+        matrix.data = tensor.data;
+        matrix.bytes = tensor.bytes;
+        matrix.validate();
+        std::vector<float> expected(cols);
+        float maximum = 0.0f;
+        for (uint32_t row = 0; row < rows; ++row) {
+            celeg::cpu_gguf_dequantize_row(matrix, row, expected.data());
+            float reference = 0.0f;
+            for (uint32_t index = 0; index < cols; ++index) {
+                reference += expected[index] * input[index + 1];
+            }
+            maximum = std::max(maximum, std::abs(reference - actual[row]));
+        }
+        std::cout << celeg::ggml_type_name(type) << " matvec=" << name
+                  << " max_error=" << maximum << '\n';
+        if (!(maximum < 1.0e-3f)) {
+            throw std::runtime_error("Metal quantized matvec differs from FP32 reference");
+        }
+        return true;
+    }
+    return false;
+}
+
 }
 
 int main(int argc, char** argv) {
@@ -126,10 +225,15 @@ int main(int argc, char** argv) {
             celeg::GgmlType::Q6_K,
             celeg::GgmlType::Q8_0};
         int checked = 0;
+        int matvec_checked = 0;
         for (const celeg::GgmlType type : types) {
             checked += check_type(file, type, device) ? 1 : 0;
+            matvec_checked += check_matvec(file, type, device) ? 1 : 0;
         }
         if (checked == 0) throw std::runtime_error("cached GGUF has no native Metal test tensor");
+        if (matvec_checked == 0) {
+            throw std::runtime_error("cached GGUF has no native Metal matvec test tensor");
+        }
         return 0;
     } catch (const std::exception& error) {
         std::cerr << "error: " << error.what() << '\n';

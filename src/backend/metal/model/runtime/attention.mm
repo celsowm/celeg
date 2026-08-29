@@ -55,7 +55,11 @@ void MetalModel::Impl::encode_attention(
     set_bytes(encoder, &head_dim, sizeof(head_dim), 7);
     set_bytes(encoder, &attention_scale, sizeof(attention_scale), 8);
     set_bytes(encoder, &page_tokens, sizeof(page_tokens), 9);
-    dispatch(encoder, "celeg_attention", query_heads * head_dim);
+    if (sequence_length <= 1024) {
+        dispatch_cooperative(encoder, "celeg_attention_cooperative", query_heads);
+    } else {
+        dispatch(encoder, "celeg_attention", query_heads * head_dim);
+    }
     encode_matvec(encoder, layer.attention_out, operation, hidden);
 }
 
@@ -113,8 +117,16 @@ void MetalModel::Impl::encode_attention_batch(
     set_bytes(encoder, &head_dim, sizeof(head_dim), 8);
     set_bytes(encoder, &attention_scale, sizeof(attention_scale), 9);
     set_bytes(encoder, &page_tokens, sizeof(page_tokens), 10);
-    dispatch(encoder, "celeg_attention_batch",
-             static_cast<NSUInteger>(rows) * query_heads * head_dim);
+    if (base_position + rows <= 1024) {
+        id<MTLComputePipelineState> state = pipeline("celeg_attention_batch_cooperative");
+        [encoder setComputePipelineState:state];
+        [encoder dispatchThreadgroups:MTLSizeMake(query_heads, rows, 1)
+           threadsPerThreadgroup:MTLSizeMake(32, 1, 1)];
+        ++command_dispatches;
+    } else {
+        dispatch(encoder, "celeg_attention_batch",
+                 static_cast<NSUInteger>(rows) * query_heads * head_dim);
+    }
     encode_matmul(encoder, layer.attention_out, batch_operation, batch_hidden, rows);
 }
 

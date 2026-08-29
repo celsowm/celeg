@@ -45,13 +45,13 @@ int main(int argc, char** argv) {
     try {
         if (argc != 2) throw std::invalid_argument("usage: metal_inference_test MODEL");
         std::vector<int32_t> tokens{1, 36309};
-        tokens.reserve(32);
-        for (int32_t index = 2; index < 32; ++index) {
+        tokens.reserve(512);
+        for (int32_t index = 2; index < 512; ++index) {
             tokens.push_back((1 + index * 36309) % 65536);
         }
-        celeg::CpuModel cpu(argv[1], 128);
-        celeg::MetalModel metal(argv[1], 128);
-        celeg::MetalModel tokenized(argv[1], 128);
+        celeg::CpuModel cpu(argv[1], 640);
+        celeg::MetalModel metal(argv[1], 640);
+        celeg::MetalModel tokenized(argv[1], 640);
         auto cpu_session = cpu.session();
         auto metal_session = metal.session();
         auto tokenized_session = tokenized.session();
@@ -60,7 +60,7 @@ int main(int argc, char** argv) {
         generation.top_k = 1;
         cpu_session.set_generation_config(generation);
         metal_session.set_generation_config(generation);
-        for (const size_t count : std::vector<size_t>{1, 2, 8, 32}) {
+        for (const size_t count : std::vector<size_t>{1, 2, 8, 32, 512}) {
             const std::vector<int32_t> prefix(tokens.begin(), tokens.begin() + count);
             cpu_session.prefill(prefix);
             metal_session.prefill(prefix);

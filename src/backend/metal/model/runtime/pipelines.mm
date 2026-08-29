@@ -237,6 +237,56 @@ void MetalModel::Impl::encode_matmul(id<MTLComputeCommandEncoder> encoder,
     ++command_dispatches;
 }
 
+bool MetalModel::Impl::encode_matmul_pair(
+    id<MTLComputeCommandEncoder> encoder, const Linear& first,
+    const Linear& second, id<MTLBuffer> input, id<MTLBuffer> output,
+    uint32_t rows, uint32_t width) {
+    if (first.storage != second.storage || first.rows != second.rows ||
+        first.cols != second.cols || first.rows != width) {
+        return false;
+    }
+    set_buffer(encoder, first.buffer, 0);
+    set_buffer(encoder, second.buffer, 1);
+    set_buffer(encoder, input, 2);
+    set_buffer(encoder, output, 3);
+    set_bytes(encoder, &first.rows, sizeof(first.rows), 4);
+    set_bytes(encoder, &first.cols, sizeof(first.cols), 5);
+    const uint32_t stride = width * 2;
+    set_bytes(encoder, &stride, sizeof(stride), 6);
+    auto dispatch_pair = [&](std::string_view name) {
+        id<MTLComputePipelineState> state = pipeline(name);
+        [encoder setComputePipelineState:state];
+        [encoder dispatchThreadgroups:MTLSizeMake((width + 3u) / 4u, rows, 1)
+           threadsPerThreadgroup:MTLSizeMake(256, 1, 1)];
+        ++command_dispatches;
+    };
+    if (first.storage == LinearStorage::Float32) {
+        dispatch_pair("celeg_matmul_pair");
+        return true;
+    }
+    if (first.storage == LinearStorage::Float16) {
+        dispatch_pair("celeg_matmul_pair_f16");
+        return true;
+    }
+    if (first.storage == LinearStorage::BFloat16) {
+        dispatch_pair("celeg_matmul_pair_bf16");
+        return true;
+    }
+    if (first.row_bytes != second.row_bytes) return false;
+    set_bytes(encoder, &first.row_bytes, sizeof(first.row_bytes), 7);
+    std::string_view kernel;
+    switch (first.storage) {
+        case LinearStorage::Q4_0: kernel = "celeg_matmul_pair_q4_0"; break;
+        case LinearStorage::Q4K: kernel = "celeg_matmul_pair_q4k"; break;
+        case LinearStorage::Q5K: kernel = "celeg_matmul_pair_q5k"; break;
+        case LinearStorage::Q6K: kernel = "celeg_matmul_pair_q6k"; break;
+        case LinearStorage::Q8_0: kernel = "celeg_matmul_pair_q8_0"; break;
+        default: return false;
+    }
+    dispatch_pair(kernel);
+    return true;
+}
+
 
 void MetalModel::Impl::encode_embedding(id<MTLComputeCommandEncoder> encoder, uint32_t width,
                           uint32_t token) {

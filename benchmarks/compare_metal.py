@@ -23,6 +23,17 @@ WORKLOADS = {
     },
 }
 
+EXPECTED_MODELS = {
+    "LFM2.5-350M-BF16.gguf",
+    "LFM2.5-350M-F16.gguf",
+    "LFM2.5-350M-Q4_0.gguf",
+    "LFM2.5-350M-Q4_K_M.gguf",
+    "LFM2.5-350M-Q5_K_M.gguf",
+    "LFM2.5-350M-Q6_K.gguf",
+    "LFM2.5-350M-Q8_0.gguf",
+    "LFM2.5-350M-QAD-Q4_0.gguf",
+}
+
 
 def parse_args():
     parser = argparse.ArgumentParser()
@@ -60,7 +71,11 @@ def resolve_models(model_dir):
     models = sorted(model_dir.glob("snapshots/*/*.gguf"))
     if not models:
         raise SystemExit(f"no GGUF files found under {model_dir}")
-    return models
+    names = {model.name for model in models}
+    missing = sorted(EXPECTED_MODELS - names)
+    if missing:
+        raise SystemExit(f"missing expected GGUF files: {', '.join(missing)}")
+    return [model for model in models if model.name in EXPECTED_MODELS]
 
 
 def run_json(command):
@@ -176,19 +191,35 @@ def collect_workload(model, args, workload):
     celeg_prefill = [sample["prefill"]["samples_milliseconds"][0] for sample in celeg_samples]
     celeg_decode = [sample["decode"]["samples_milliseconds"][0] for sample in celeg_samples]
     llama_prompt = [sample["prefill_batched"]["samples_milliseconds"][0] for sample in llama_samples]
+    celeg_distribution = distribution(celeg_combined, prompt_tokens + decode_tokens)
+    llama_distribution = distribution(llama_combined, prompt_tokens + decode_tokens)
     return {
         "configuration": workload,
         "order": order,
         "celeg": {
-            "combined": distribution(celeg_combined, prompt_tokens + decode_tokens),
+            "combined": celeg_distribution,
             "prefill": distribution(celeg_prefill, prompt_tokens),
             "decode": distribution(celeg_decode, decode_tokens),
             "samples": celeg_samples,
         },
         "llama_cpp": {
-            "combined": distribution(llama_combined, prompt_tokens + decode_tokens),
+            "combined": llama_distribution,
             "prefill_batched": distribution(llama_prompt, prompt_tokens),
             "samples": llama_samples,
+        },
+        "promotion": {
+            "median_speedup": (
+                celeg_distribution["median_tokens_per_second"] /
+                llama_distribution["median_tokens_per_second"]
+            ),
+            "median_at_least_1_10x": (
+                celeg_distribution["median_tokens_per_second"] >=
+                1.10 * llama_distribution["median_tokens_per_second"]
+            ),
+            "q1_celeg_at_least_llama": (
+                celeg_distribution["lower_quartile_tokens_per_second"] >=
+                llama_distribution["lower_quartile_tokens_per_second"]
+            ),
         },
     }
 
@@ -223,6 +254,13 @@ def main():
             ["git", "rev-parse", "HEAD"], text=True).strip()
     except subprocess.CalledProcessError:
         celeg_commit = "unknown"
+    try:
+        llama_cpp_commit = subprocess.check_output(
+            ["git", "-C", ".externals/llama.cpp", "rev-parse", "HEAD"],
+            text=True,
+        ).strip()
+    except subprocess.CalledProcessError:
+        llama_cpp_commit = "unknown"
     for workload in workloads:
         if workload["context"] <= 0 or workload["prompt_tokens"] <= 0 or workload["decode_tokens"] < 0:
             raise SystemExit(f"invalid workload dimensions: {workload}")
@@ -235,6 +273,7 @@ def main():
                 "size_bytes": model.stat().st_size,
                 "workload": workload["name"],
                 "celeg_commit": celeg_commit,
+                "llama_cpp_commit": llama_cpp_commit,
             }
             try:
                 entry.update(collect_workload(model, args, workload))
@@ -254,13 +293,14 @@ def main():
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "host": platform.platform(),
         "celeg_commit": celeg_commit,
+        "llama_cpp_commit": llama_cpp_commit,
         "configuration": {
             "workloads": workloads,
             "warmup": args.warmup,
             "repetitions": args.repetitions,
             "storage_mode": args.storage_mode,
             "llama_cpp": (
-                "-p 0 -n 0 -pg <prompt>,<decode> "
+                "-p <prompt> -n 0 -pg <prompt>,<decode> "
                 "-b <prompt> -ub <prompt> "
                 "-ctk bf16 -ctv bf16 -ngl 99"
             ),
