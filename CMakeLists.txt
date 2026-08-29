@@ -217,13 +217,16 @@ if(CELEG_ENABLE_METAL)
     enable_language(OBJCXX)
     set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
         "${CMAKE_CURRENT_SOURCE_DIR}/src/backend/metal/kernels/probe.metal"
-        "${CMAKE_CURRENT_SOURCE_DIR}/src/backend/metal/kernels/inference.metal")
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/backend/metal/kernels/inference.metal"
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/backend/metal/kernels/tensor.metal")
     find_library(CELEG_METAL_FRAMEWORK Metal REQUIRED)
     find_library(CELEG_FOUNDATION_FRAMEWORK Foundation REQUIRED)
     file(READ "${CMAKE_CURRENT_SOURCE_DIR}/src/backend/metal/kernels/probe.metal"
         CELEG_METAL_PROBE_SOURCE)
     file(READ "${CMAKE_CURRENT_SOURCE_DIR}/src/backend/metal/kernels/inference.metal"
         CELEG_METAL_INFERENCE_SOURCE)
+    file(READ "${CMAKE_CURRENT_SOURCE_DIR}/src/backend/metal/kernels/tensor.metal"
+        CELEG_METAL_TENSOR_SOURCE)
     file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/generated")
     configure_file(
         "${CMAKE_CURRENT_SOURCE_DIR}/cmake/metal_probe_source.hpp.in"
@@ -232,6 +235,10 @@ if(CELEG_ENABLE_METAL)
     configure_file(
         "${CMAKE_CURRENT_SOURCE_DIR}/cmake/metal_inference_source.hpp.in"
         "${CMAKE_CURRENT_BINARY_DIR}/generated/metal_inference_source.hpp"
+        @ONLY)
+    configure_file(
+        "${CMAKE_CURRENT_SOURCE_DIR}/cmake/metal_tensor_source.hpp.in"
+        "${CMAKE_CURRENT_BINARY_DIR}/generated/metal_tensor_source.hpp"
         @ONLY)
 
     add_library(celeg_metal_backend ${CELEG_METAL_BACKEND_SOURCES})

@@ -1,0 +1,7 @@
+#pragma once
+
+namespace celeg::metal_detail {
+inline constexpr const char* kTensorShader = R"CELEGTENSOR(
+@CELEG_METAL_TENSOR_SOURCE@
+)CELEGTENSOR";
+}

@@ -1,11 +1,13 @@
 #include "detail.hpp"
 
 #include "metal_inference_source.hpp"
+#include "metal_tensor_source.hpp"
 
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
 
 #include <algorithm>
+#include <cstdlib>
 #include <filesystem>
 #include <stdexcept>
 #include <utility>
@@ -77,6 +79,49 @@ MetalModel::MetalModel(const std::string& path, int context,
         const std::string message = error ? ns_string(error.localizedDescription)
                                           : "unknown Metal shader compilation error";
         throw std::runtime_error("Metal inference shader compilation failed: " + message);
+    }
+    NSString* tensor_source = [NSString stringWithUTF8String:metal_detail::kTensorShader];
+    if (std::getenv("CELEG_METAL_TENSOR_DISABLE")) {
+        (*impl_).tensor_compile_error = "disabled";
+    } else {
+        (*impl_).tensor_library = [(*impl_).device newLibraryWithSource:tensor_source
+                                                                 options:nil error:&error];
+        if (!(*impl_).tensor_library) {
+            (*impl_).tensor_compile_error = error
+                ? ns_string(error.localizedDescription) : "unknown tensor shader error";
+        }
+    }
+    if ((*impl_).tensor_library) {
+        id<MTLFunction> f16_function = [(*impl_).tensor_library
+            newFunctionWithName:@"celeg_matmul_tensor_f16"];
+        id<MTLFunction> bf16_function = [(*impl_).tensor_library
+            newFunctionWithName:@"celeg_matmul_tensor_bf16"];
+        NSError* f16_error = nil;
+        NSError* bf16_error = nil;
+        if (f16_function) {
+            id<MTLComputePipelineState> state =
+                [(*impl_).device newComputePipelineStateWithFunction:f16_function
+                                                                  error:&f16_error];
+            (*impl_).tensor_matmul_f16 = state != nil;
+            if (!state && f16_error) {
+                (*impl_).tensor_compile_error = ns_string(f16_error.localizedDescription);
+            }
+        }
+        if (bf16_function) {
+            id<MTLComputePipelineState> state =
+                [(*impl_).device newComputePipelineStateWithFunction:bf16_function
+                                                                  error:&bf16_error];
+            (*impl_).tensor_matmul_bf16 = state != nil;
+            if (!state && bf16_error) {
+                (*impl_).tensor_compile_error = ns_string(bf16_error.localizedDescription);
+            }
+        }
+        if (!(*impl_).tensor_matmul_f16 && !(*impl_).tensor_matmul_bf16) {
+            (*impl_).tensor_library = nil;
+        }
+        if ((*impl_).tensor_matmul_f16 || (*impl_).tensor_matmul_bf16) {
+            (*impl_).tensor_compile_error.clear();
+        }
     }
 
     const int hidden = (*impl_).program.hidden;

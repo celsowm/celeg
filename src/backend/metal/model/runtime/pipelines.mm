@@ -71,6 +71,25 @@ id<MTLComputePipelineState> MetalModel::Impl::pipeline(std::string_view name) {
         return result;
     }
 
+id<MTLComputePipelineState> MetalModel::Impl::tensor_pipeline(std::string_view name) {
+        const auto found = pipelines.find(std::string("tensor:") + std::string(name));
+        if (found != pipelines.end()) return found->second;
+        if (!tensor_library) throw std::runtime_error("Metal tensor library is unavailable");
+        NSString* function_name = [NSString stringWithUTF8String:std::string(name).c_str()];
+        id<MTLFunction> function = [tensor_library newFunctionWithName:function_name];
+        if (!function) throw std::runtime_error("Metal tensor function is missing: " + std::string(name));
+        NSError* error = nil;
+        id<MTLComputePipelineState> result =
+            [device newComputePipelineStateWithFunction:function error:&error];
+        if (!result) {
+            const std::string message = error ? ns_string(error.localizedDescription)
+                                              : "unknown Metal tensor pipeline error";
+            throw std::runtime_error("Metal tensor pipeline failed: " + message);
+        }
+        pipelines.emplace(std::string("tensor:") + std::string(name), result);
+        return result;
+    }
+
 
 void MetalModel::Impl::dispatch(id<MTLComputeCommandEncoder> encoder, std::string_view name,
                   NSUInteger count) {
@@ -209,6 +228,27 @@ void MetalModel::Impl::encode_matmul(id<MTLComputeCommandEncoder> encoder,
         return;
     }
     if (weight.storage == LinearStorage::Float16 || weight.storage == LinearStorage::BFloat16) {
+        const bool use_tensor = weight.storage == LinearStorage::Float16
+            ? tensor_matmul_f16 : tensor_matmul_bf16;
+        if (use_tensor) {
+            set_buffer(encoder, weight.buffer, 0);
+            set_buffer(encoder, input, 1, input_offset);
+            set_buffer(encoder, output, 2, output_offset);
+            set_bytes(encoder, &rows, sizeof(rows), 3);
+            set_bytes(encoder, &weight.cols, sizeof(weight.cols), 4);
+            set_bytes(encoder, &weight.rows, sizeof(weight.rows), 5);
+            const uint32_t stride = output_stride == 0 ? weight.rows : output_stride;
+            set_bytes(encoder, &stride, sizeof(stride), 6);
+            const std::string_view kernel = weight.storage == LinearStorage::Float16
+                ? "celeg_matmul_tensor_f16" : "celeg_matmul_tensor_bf16";
+            id<MTLComputePipelineState> state = tensor_pipeline(kernel);
+            [encoder setComputePipelineState:state];
+            [encoder dispatchThreadgroups:MTLSizeMake(
+                (weight.rows + 63u) / 64u, (rows + 127u) / 128u, 1)
+               threadsPerThreadgroup:MTLSizeMake(128, 1, 1)];
+            ++command_dispatches;
+            return;
+        }
         const NSUInteger groups = (weight.rows + 7u) / 8u;
         const std::string_view kernel = weight.storage == LinearStorage::Float16
             ? "celeg_matmul_f16" : "celeg_matmul_bf16";

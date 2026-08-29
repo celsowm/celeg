@@ -141,6 +141,10 @@ struct MetalModel::Impl {
     id<MTLDevice> device = nil;
     id<MTLCommandQueue> queue = nil;
     id<MTLLibrary> library = nil;
+    id<MTLLibrary> tensor_library = nil;
+    bool tensor_matmul_f16 = false;
+    bool tensor_matmul_bf16 = false;
+    std::string tensor_compile_error;
     std::unordered_map<std::string, id<MTLComputePipelineState>> pipelines;
     Linear embedding;
     id<MTLBuffer> final_norm = nil;
@@ -198,6 +202,7 @@ struct MetalModel::Impl {
     id<MTLBuffer> load_conv_kernel(int layer, int width, int cache_length) const;
 
     id<MTLComputePipelineState> pipeline(std::string_view name);
+    id<MTLComputePipelineState> tensor_pipeline(std::string_view name);
     void begin_commands(id<MTLCommandBuffer>& command_buffer,
                         id<MTLComputeCommandEncoder>& encoder);
     void finish_commands(id<MTLCommandBuffer>& command_buffer,
