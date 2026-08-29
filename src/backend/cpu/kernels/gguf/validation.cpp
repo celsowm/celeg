@@ -1,5 +1,6 @@
 #include "celeg/backend/cpu/gguf.hpp"
 
+#include <algorithm>
 #include <stdexcept>
 #include <string>
 #include <utility>

@@ -56,7 +56,7 @@ MetalDevice::MetalDevice() : impl_(std::make_unique<Impl>()) {
     (*impl_).capabilities.apple_gpu_family_9 =
         [(*impl_).device supportsFamily:MTLGPUFamilyApple9];
     (*impl_).capabilities.apple_gpu_family_10 =
-        [(*impl_).device supportsFamily:MTLGPUFamilyApple10];
+        [(*impl_).device supportsFamily:static_cast<MTLGPUFamily>(1010)];
 
     NSError* error = nil;
     NSString* source = [NSString stringWithUTF8String:metal_detail::kProbeShader];
