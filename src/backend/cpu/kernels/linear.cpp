@@ -392,8 +392,8 @@ void CpuLinearEngine::gemm_gguf(std::span<const CpuQ8KBlock> activation,
     if (!weight.gguf_native()) {
         throw std::invalid_argument("prequantized GEMM requires native GGUF weights");
     }
-    if ((!output && rows != 0) || rows > 0 &&
-        activation.size() < rows * (weight.cols / 256)) {
+    if ((!output && rows != 0) || (rows > 0 &&
+        activation.size() < rows * (weight.cols / 256))) {
         throw std::invalid_argument("invalid prequantized GGUF activation");
     }
     const size_t blocks_per_row = weight.cols / 256;

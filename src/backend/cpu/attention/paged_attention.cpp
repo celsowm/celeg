@@ -40,38 +40,6 @@ static const bool g_has_avx2_fma = []() {
 }();
 #endif
 
-size_t checked_multiply(size_t a, size_t b, const char* what) {
-    if (a != 0 && b > std::numeric_limits<size_t>::max() / a) {
-        throw std::overflow_error(what);
-    }
-    return a * b;
-}
-
-size_t round_up(size_t value, size_t alignment) {
-    if (value > std::numeric_limits<size_t>::max() - (alignment - 1)) {
-        throw std::overflow_error("CPU KV aligned allocation overflow");
-    }
-    return (value + alignment - 1) / alignment * alignment;
-}
-
-void* aligned_alloc_portable(size_t alignment, size_t size) {
-#if defined(_WIN32)
-    return ::_aligned_malloc(size, alignment);
-#else
-    void* ptr = nullptr;
-    if (::posix_memalign(&ptr, alignment, size) != 0) return nullptr;
-    return ptr;
-#endif
-}
-
-void aligned_free_portable(void* ptr) {
-#if defined(_WIN32)
-    ::_aligned_free(ptr);
-#else
-    ::free(ptr);
-#endif
-}
-
 struct PartialAttention {
     float maximum = -std::numeric_limits<float>::infinity();
     float denominator = 0.0f;
@@ -455,4 +423,3 @@ void cpu_latent_attention_decode_paged(
 
 
 }
-

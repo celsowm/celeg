@@ -272,7 +272,7 @@ float q4_q8_dot_scalar(const uint8_t* packed_row, const uint16_t* weight_scales_
     return result;
 }
 
-Q4Q8DotFunction select_q4_q8_dot_kernel(CpuIsa isa) {
+Q4Q8DotFunction select_q4_q8_dot_kernel([[maybe_unused]] CpuIsa isa) {
 #if (defined(__GNUC__) || defined(__clang__)) && (defined(__x86_64__) || defined(__i386__))
     if (isa == CpuIsa::Avx512Vnni) return q4_q8_dot_avx512_vnni;
     if (isa == CpuIsa::AvxVnni) return q4_q8_dot_avx_vnni;

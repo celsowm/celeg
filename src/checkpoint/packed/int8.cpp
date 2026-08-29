@@ -2,23 +2,10 @@
 
 #include <bit>
 #include <cstring>
-#include <limits>
 #include <stdexcept>
 
 namespace celeg {
 namespace {
-
-size_t element_count(const std::vector<int64_t>& shape, const char* label) {
-    size_t result = 1;
-    for (const int64_t dimension : shape) {
-        if (dimension <= 0 || result > std::numeric_limits<size_t>::max() /
-                                   static_cast<size_t>(dimension)) {
-            throw std::runtime_error(std::string("invalid ") + label + " shape");
-        }
-        result *= static_cast<size_t>(dimension);
-    }
-    return result;
-}
 
 float bf16_to_float(const std::byte* source) {
     uint16_t bits = 0;

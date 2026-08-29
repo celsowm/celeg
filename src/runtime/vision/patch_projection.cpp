@@ -245,7 +245,7 @@ public:
             const float inverse = 1.0f / std::sqrt(static_cast<float>(sum / 6656.0) + 1.0e-5f);
             for (int i = 0; i < 6656; ++i) data[i] *= inverse;
         }
-        return VisualEmbedding{6656, std::move(projected)};
+        return VisualEmbedding{6656, std::move(projected), {}};
     }
 
 private:

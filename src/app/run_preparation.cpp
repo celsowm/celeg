@@ -82,8 +82,10 @@ std::vector<std::int32_t> prepare_prompt(const RunInputs& inputs,
         throw std::logic_error("chat prompt requested without a resolved template");
     }
     std::vector<ChatMessage> messages;
-    if (!inputs.system.empty()) messages.push_back({ChatRole::System, inputs.system});
-    messages.push_back({ChatRole::User, inputs.prompt});
+    if (!inputs.system.empty()) {
+        messages.push_back({ChatRole::System, inputs.system, {}, {}, {}, {}});
+    }
+    messages.push_back({ChatRole::User, inputs.prompt, {}, {}, {}, {}});
     return prepared.tokenizer->encode(render_chat(messages, *prepared.chat_template), false);
 }
 

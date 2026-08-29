@@ -164,7 +164,7 @@ public:
             (1.0f + std::tanh(0.7978845608f * (value + 0.044715f * value * value * value)));
         projected = linear(merger_fc2_, merger_fc2_bias_, projected,
                            merged_rows, 4 * hidden_, merger_out_);
-        VisualEmbedding result{merger_out_, std::move(projected)};
+        VisualEmbedding result{merger_out_, std::move(projected), {}};
         result.rope_positions.reserve(static_cast<size_t>(merged_rows));
         for (int y = 0; y < merged_h; ++y) for (int x = 0; x < merged_w; ++x)
             result.rope_positions.push_back({0, y, x});
@@ -177,7 +177,7 @@ private:
         return Tensor{repository_->tensor(name)};
     }
 
-    void run_block(std::vector<float>& tokens, int layer, int grid_h, int grid_w, int rows) const {
+    void run_block(std::vector<float>& tokens, int layer, int, int grid_w, int rows) const {
         const std::string p = "model.visual.blocks." + std::to_string(layer) + ".";
         const Tensor n1 = tensor(p + "norm1.weight"), b1 = tensor(p + "norm1.bias");
         const Tensor qkv_w = tensor(p + "attn.qkv.weight"), qkv_b = tensor(p + "attn.qkv.bias");

@@ -440,8 +440,8 @@ int main() {
 
     celeg::FactSolver solver;
     const auto proposal = solver.solve<int>({
-        {{8}, {}, celeg::ProposalStrength::ExplicitMetadata, "a"},
-        {{8}, {}, celeg::ProposalStrength::ShapeDerived, "b"}});
+        {8, {}, celeg::ProposalStrength::ExplicitMetadata, "a"},
+        {8, {}, celeg::ProposalStrength::ShapeDerived, "b"}});
     CELEG_TEST_CHECK(proposal.value == 8);
 
     auto scoped = gguf_metadata();

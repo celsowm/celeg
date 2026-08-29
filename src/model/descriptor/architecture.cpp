@@ -420,7 +420,7 @@ public:
                     ? integer_value(metadata, *descriptor_.latent_nope_head_dim) : latent_rank;
                 attention.state = LatentAttentionStateSpec{
                     latent_rank, rope_head_dim, nope_head_dim,
-                    descriptor_.latent_decoupled_rope};
+                    descriptor_.latent_decoupled_rope, {}, {}};
             } else if (descriptor_.attention_state_kind != "ordinary_kv") {
                 throw std::invalid_argument("descriptor has unsupported attention state kind: " +
                                             descriptor_.attention_state_kind);

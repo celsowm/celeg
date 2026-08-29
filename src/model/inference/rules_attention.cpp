@@ -449,7 +449,7 @@ public:
                 q_rank,
                 value_dim,
                 NormSpec{*m.core.norm_epsilon, NormWeightKind::Scale},
-                NormSpec{*m.core.norm_epsilon, NormWeightKind::Scale}}};
+                NormSpec{*m.core.norm_epsilon, NormWeightKind::Scale}}, {}};
         attention.query_scale =
             std::sqrt(static_cast<float>(value_dim) /
                       static_cast<float>(nope + rope));

@@ -129,7 +129,6 @@ endif()
 target_link_libraries(celeg_cpu_backend PUBLIC celeg_runtime Threads::Threads)
 
 add_library(celeg SHARED ${CELEG_API_SOURCES})
-target_link_libraries(celeg PRIVATE celeg_cpu_backend)
 target_include_directories(celeg PUBLIC include)
 target_compile_definitions(celeg PRIVATE CELEG_API_BUILD=1)
 set_target_properties(celeg PROPERTIES
@@ -161,6 +160,27 @@ target_link_libraries(celeg-download PRIVATE celeg_base)
 
 if(CELEG_ENABLE_SERVE)
     include(FetchContent)
+    if(POLICY CMP0218)
+        cmake_policy(PUSH)
+        cmake_policy(SET CMP0218 OLD)
+    endif()
+    set(_celeg_saved_cmake_warn_deprecated "${CMAKE_WARN_DEPRECATED}")
+    set(_celeg_saved_policy_version_minimum "${CMAKE_POLICY_VERSION_MINIMUM}")
+    set(CMAKE_POLICY_VERSION_MINIMUM 3.10)
+    set(CMAKE_WARN_DEPRECATED OFF CACHE BOOL "" FORCE)
+    if(COMMAND cmake_diagnostic)
+        cmake_diagnostic(PUSH)
+        cmake_diagnostic(SET CMD_AUTHOR IGNORE RECURSE)
+        cmake_diagnostic(SET CMD_DEPRECATED IGNORE RECURSE)
+        cmake_diagnostic(SET CMD_POLICY IGNORE RECURSE)
+    else()
+        set(_celeg_saved_warn_deprecated "${CMAKE_WARN_DEPRECATED}")
+        set(_celeg_saved_error_deprecated "${CMAKE_ERROR_DEPRECATED}")
+        set(_celeg_saved_suppress_developer_warnings "${CMAKE_SUPPRESS_DEVELOPER_WARNINGS}")
+        set(CMAKE_WARN_DEPRECATED OFF)
+        set(CMAKE_ERROR_DEPRECATED OFF)
+        set(CMAKE_SUPPRESS_DEVELOPER_WARNINGS TRUE)
+    endif()
     # Keep Celeg's dependency sub-builds isolated from a reused CMake build
     # directory. CMake's --fresh resets the top-level cache but intentionally
     # preserves the default `_deps` tree, whose sub-build cache can belong to
@@ -234,18 +254,16 @@ if(CELEG_ENABLE_METAL)
     target_link_libraries(celeg_serve_metal PUBLIC
         celeg_metal_backend celeg_cpu_backend)
     target_compile_definitions(celeg_serve_metal PUBLIC CELEG_SERVE_METAL=1)
-    set_source_files_properties(src/backend/metal/model/model.mm
-        PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
-    target_link_libraries(celeg PRIVATE celeg_metal_backend celeg_serve_metal)
+    target_link_libraries(celeg PRIVATE celeg_serve_metal)
     if(TARGET celeg-serve)
         target_link_libraries(celeg-serve PRIVATE celeg_serve_metal)
         target_compile_definitions(celeg-serve PRIVATE CELEG_SERVE_METAL=1)
     endif()
 
     add_executable(celeg-metal-run src/app/metal/main.cpp)
-    target_link_libraries(celeg-metal-run PRIVATE celeg_serve_metal celeg_base)
+    target_link_libraries(celeg-metal-run PRIVATE celeg_serve_metal)
     add_executable(celeg-metal-bench ${CELEG_METAL_APP_SOURCES})
-    target_link_libraries(celeg-metal-bench PRIVATE celeg_serve_metal celeg_base)
+    target_link_libraries(celeg-metal-bench PRIVATE celeg_serve_metal)
 endif()
 
 add_library(celeg_serve_core src/serve/generation_dispatcher.cpp)
@@ -262,9 +280,6 @@ if(NOT MSVC)
 endif()
 target_link_libraries(celeg_serve_cpu PUBLIC celeg_cpu_backend)
 target_link_libraries(celeg PRIVATE celeg_serve_cpu)
-if(CELEG_METAL_AVAILABLE)
-    target_link_libraries(celeg_serve_metal PUBLIC celeg_serve_cpu)
-endif()
 
 if(CELEG_ENABLE_SERVE)
     # libuv is uSockets' event loop backend on platforms without epoll/kqueue
@@ -290,7 +305,12 @@ if(CELEG_ENABLE_SERVE)
         usockets
         URL https://github.com/uNetworking/uSockets/archive/86097c490263ab662d62e8e7b541390bdec7d149.tar.gz
         DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
+    cmake_policy(PUSH)
+    if(POLICY CMP0169)
+        cmake_policy(SET CMP0169 OLD)
+    endif()
     FetchContent_Populate(usockets)
+    cmake_policy(POP)
     file(GLOB CELEG_USOCKETS_SOURCES
         "${usockets_SOURCE_DIR}/src/*.c"
         "${usockets_SOURCE_DIR}/src/eventing/*.c"
@@ -306,7 +326,12 @@ if(CELEG_ENABLE_SERVE)
         uwebsockets
         URL https://github.com/uNetworking/uWebSockets/archive/refs/tags/v20.79.0.tar.gz
         DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
+    cmake_policy(PUSH)
+    if(POLICY CMP0169)
+        cmake_policy(SET CMP0169 OLD)
+    endif()
     FetchContent_Populate(uwebsockets)
+    cmake_policy(POP)
     add_library(uwebsockets INTERFACE)
     target_include_directories(uwebsockets INTERFACE "${uwebsockets_SOURCE_DIR}/src")
     target_compile_definitions(uwebsockets INTERFACE UWS_NO_ZLIB)
@@ -320,7 +345,25 @@ if(CELEG_ENABLE_SERVE)
         swaggerui
         URL https://github.com/swagger-api/swagger-ui/archive/refs/tags/v5.17.14.tar.gz
         DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
+    cmake_policy(PUSH)
+    if(POLICY CMP0169)
+        cmake_policy(SET CMP0169 OLD)
+    endif()
     FetchContent_Populate(swaggerui)
+    cmake_policy(POP)
+
+    if(COMMAND cmake_diagnostic)
+        cmake_diagnostic(POP)
+    else()
+        set(CMAKE_WARN_DEPRECATED "${_celeg_saved_warn_deprecated}")
+        set(CMAKE_ERROR_DEPRECATED "${_celeg_saved_error_deprecated}")
+        set(CMAKE_SUPPRESS_DEVELOPER_WARNINGS "${_celeg_saved_suppress_developer_warnings}")
+    endif()
+    set(CMAKE_WARN_DEPRECATED "${_celeg_saved_cmake_warn_deprecated}" CACHE BOOL "" FORCE)
+    set(CMAKE_POLICY_VERSION_MINIMUM "${_celeg_saved_policy_version_minimum}")
+    if(POLICY CMP0218)
+        cmake_policy(POP)
+    endif()
 
     add_executable(celeg-serve
         src/app/serve/main.cpp
@@ -332,7 +375,7 @@ if(CELEG_ENABLE_SERVE)
         src/app/serve/routes/tokenize.cpp
         src/app/serve/routes/chat_completions.cpp)
     target_link_libraries(celeg-serve PRIVATE
-        celeg_cpu_backend celeg_serve_cpu celeg_serve_core celeg_serve_protocol uwebsockets)
+        celeg_serve_cpu celeg_serve_core celeg_serve_protocol uwebsockets)
     if(CELEG_METAL_AVAILABLE)
         target_link_libraries(celeg-serve PRIVATE celeg_serve_metal)
         target_compile_definitions(celeg-serve PRIVATE CELEG_SERVE_METAL=1)
@@ -985,13 +1028,12 @@ target_link_libraries(weight_plan_test PRIVATE celeg_base)
         endif()
         add_executable(metal_inference_test tests/metal_inference_test.mm)
         target_include_directories(metal_inference_test PRIVATE include)
-        target_link_libraries(metal_inference_test PRIVATE
-            celeg_serve_metal celeg_cpu_backend celeg_base)
+        target_link_libraries(metal_inference_test PRIVATE celeg_serve_metal)
         add_executable(metal_quantization_test tests/metal_quantization_test.mm)
         target_include_directories(metal_quantization_test PRIVATE include
             "${CMAKE_CURRENT_BINARY_DIR}/generated")
         target_link_libraries(metal_quantization_test PRIVATE
-            celeg_cpu_backend celeg_base "${CELEG_METAL_FRAMEWORK}"
+            celeg_cpu_backend "${CELEG_METAL_FRAMEWORK}"
             "${CELEG_FOUNDATION_FRAMEWORK}")
         add_executable(metal_recurrent_test tests/metal_recurrent_test.mm)
         target_include_directories(metal_recurrent_test PRIVATE include
@@ -1006,6 +1048,6 @@ target_link_libraries(weight_plan_test PRIVATE celeg_base)
         target_link_libraries(metal_c_api_smoke_test PRIVATE celeg)
         add_executable(metal_service_test tests/metal_service_test.mm)
         target_include_directories(metal_service_test PRIVATE include)
-        target_link_libraries(metal_service_test PRIVATE celeg_serve_metal celeg_base)
+        target_link_libraries(metal_service_test PRIVATE celeg_serve_metal)
     endif()
 endif()

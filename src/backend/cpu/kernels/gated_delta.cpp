@@ -67,7 +67,7 @@ struct GatedDeltaScratch {
 void gated_delta_step(const float* projected_qkv, const float* projected_z,
                       const float* projected_b, const float* projected_a,
                       const float* conv_weight, const float* dt_bias,
-                      const float* a_log, const float* norm_weight,
+                      const float* norm_weight,
                       float* conv_state, float* recurrent_state, float* output,
                       int conv_kernel, int key_head_dim, int value_head_dim,
                       int key_heads, int value_heads, float eps, bool vector_decay,
@@ -162,7 +162,9 @@ void gated_delta_step(const float* projected_qkv, const float* projected_z,
                         (int)a_log_needs_exp, decay_base, projected_a[decay_index],
                         dt_bias[decay_index], decay);
                 }
+#if defined(_MSC_VER)
 #pragma loop(ivdep)
+#endif
                 for (int v_dim = 0; v_dim < value_head_dim; ++v_dim) {
                     state[k_dim * value_head_dim + v_dim] *= decay;
                 }
@@ -177,7 +179,9 @@ void gated_delta_step(const float* projected_qkv, const float* projected_z,
         }
         for (int k_dim = 0; k_dim < key_head_dim; ++k_dim) {
             const float key_value = normalized_key[k_dim];
+#if defined(_MSC_VER)
 #pragma loop(ivdep)
+#endif
             for (int v_dim = 0; v_dim < value_head_dim; ++v_dim) {
                 state[k_dim * value_head_dim + v_dim] += key_value * delta[v_dim];
             }
@@ -224,7 +228,7 @@ void cpu_gated_delta_net_decode(const float* projected_qkv, const float* project
     GatedDeltaScratch scratch(2 * key_width + value_width, key_width,
                               value_head_dim, value_heads, a_log, a_log_needs_exp);
     gated_delta_step(projected_qkv, projected_z, projected_b, projected_a, conv_weight,
-        dt_bias, a_log, norm_weight, conv_state, recurrent_state, output, conv_kernel,
+        dt_bias, norm_weight, conv_state, recurrent_state, output, conv_kernel,
         key_head_dim, value_head_dim, key_heads, value_heads, eps, vector_decay,
         safe_decay, decay_lower_bound, sigmoid_output_gate, a_log_needs_exp, scratch);
 }
@@ -253,7 +257,7 @@ void cpu_gated_delta_net_prefill(const float* projected_qkv, const float* projec
             projected_b + row * static_cast<size_t>(value_heads),
             projected_a + row * static_cast<size_t>(vector_decay
                 ? key_heads * key_head_dim : value_heads), conv_weight, dt_bias,
-            a_log, norm_weight, conv_state, recurrent_state,
+            norm_weight, conv_state, recurrent_state,
             output + row * static_cast<size_t>(z_width), conv_kernel, key_head_dim,
             value_head_dim, key_heads, value_heads, eps, vector_decay, safe_decay,
             decay_lower_bound, sigmoid_output_gate, a_log_needs_exp, scratch);

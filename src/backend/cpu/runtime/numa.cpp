@@ -35,6 +35,7 @@ CpuNumaMode parse_cpu_numa_mode(const std::string& text) {
 }
 
 namespace {
+#if defined(__linux__)
 std::vector<int> parse_cpu_list(const std::string& text) {
     std::vector<int> cpus;
     std::stringstream stream(text);
@@ -51,6 +52,7 @@ std::vector<int> parse_cpu_list(const std::string& text) {
     }
     return cpus;
 }
+#endif
 }
 
 CpuNumaTopology detect_cpu_numa_topology() {

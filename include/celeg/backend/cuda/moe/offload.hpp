@@ -99,10 +99,10 @@ enum class ExpertOffloadMode : uint8_t {
     Host,
 };
 
-inline constexpr std::size_t operator"" _MiB(unsigned long long v) {
+inline constexpr std::size_t operator""_MiB(unsigned long long v) {
     return static_cast<std::size_t>(v) * 1024ull * 1024ull;
 }
-inline constexpr std::size_t operator"" _GiB(unsigned long long v) {
+inline constexpr std::size_t operator""_GiB(unsigned long long v) {
     return static_cast<std::size_t>(v) * 1024ull * 1024ull * 1024ull;
 }
 

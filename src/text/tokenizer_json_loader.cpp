@@ -84,7 +84,7 @@ TokenizerDefinition load_tokenizer_definition_json(const std::string& path) {
     return load_tokenizer_definition_json(path, std::nullopt);
 }
 
-TokenizerDefinition load_tokenizer_definition_json(const std::string& path, std::optional<int> target_vocab_size) {
+TokenizerDefinition load_tokenizer_definition_json(const std::string& path, std::optional<int>) {
     const Json root = Json::parse_file(path);
     const Json& model = root["model"];
     if (model["type"].as_string() != "BPE") {

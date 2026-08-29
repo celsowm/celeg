@@ -293,6 +293,7 @@ HostTensorView SafeTensorFile::tensor(std::string_view name) const {
         entry.shape,
         base + entry.begin,
         entry.end - entry.begin,
+        {},
     };
 }
 

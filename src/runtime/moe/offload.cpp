@@ -56,6 +56,7 @@ const char* policy_name(ExpertCachePolicy policy) {
         case ExpertCachePolicy::Static: return "static";
         case ExpertCachePolicy::Lru: return "lru";
         case ExpertCachePolicy::LayerLocalLfuLru: return "lfu-lru";
+        case ExpertCachePolicy::Score: return "score";
     }
     return "unknown";
 }

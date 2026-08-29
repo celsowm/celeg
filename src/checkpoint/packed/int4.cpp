@@ -3,23 +3,10 @@
 #include "celeg/model/weights/quantization.hpp"
 
 #include <cstring>
-#include <limits>
 #include <stdexcept>
 
 namespace celeg {
 namespace {
-
-size_t elements(const std::vector<int64_t>& shape, const char* label) {
-    size_t result = 1;
-    for (const int64_t dimension : shape) {
-        if (dimension <= 0 || result > std::numeric_limits<size_t>::max() /
-                                   static_cast<size_t>(dimension)) {
-            throw std::runtime_error(std::string("invalid ") + label + " shape");
-        }
-        result *= static_cast<size_t>(dimension);
-    }
-    return result;
-}
 
 int64_t read_i64(const std::byte* source) {
     int64_t value = 0;

@@ -442,7 +442,7 @@ public:
             }
         }
         rmsnorm_unit(pooled, epsilon_, hidden_);
-        return VisualEmbedding{projection_rows(), project(pooled)};
+        return VisualEmbedding{projection_rows(), project(pooled), {}};
     }
 
 private:

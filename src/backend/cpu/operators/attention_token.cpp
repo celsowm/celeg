@@ -41,7 +41,6 @@ void execute_cpu_attention_token(
             } else if (layout.uses_latent_state()) {
                 const auto& latent = *layout.latent_state();
                 const auto* factorized = latent.factorized_projection();
-                const int content_width = layout.latent_query_content_width();
                 const int rope_width = layout.latent_query_rope_width();
                 float* query_content = execution.workspace.qkv.data();
                 if (factorized) {

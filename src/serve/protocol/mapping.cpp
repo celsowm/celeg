@@ -507,7 +507,7 @@ TokenizeResponse to_tokenize_response(const TokenizeRequest& request,
         messages.reserve(request.messages->size());
         for (const ChatMessageDto& message : *request.messages) {
             messages.push_back({role_from_string(message.role),
-                                normalize_content(message.content).text});
+                                normalize_content(message.content).text, {}, {}, {}, {}});
         }
         const std::string prompt_text = celeg::render_chat(
             messages, {}, interaction, /*add_generation_prompt=*/true,
