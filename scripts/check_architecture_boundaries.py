@@ -317,6 +317,29 @@ def main() -> int:
                      path.read_text(encoding="utf-8")):
             errors.append(f"primitive execution body leaked into descriptor/import file: {path}")
 
+    metal_inference = root / "src/backend/metal/kernels/inference"
+    common_shader = metal_inference / "common.metal"
+    if common_shader.is_file():
+        helper_names = (
+            "celeg_bf16_to_float", "celeg_half_to_float", "celeg_q4_0_value",
+            "celeg_q4k_scale_min", "celeg_q4k_value", "celeg_q5k_scale_min",
+            "celeg_q5k_value", "celeg_q6k_value",
+        )
+        common_text = common_shader.read_text(encoding="utf-8")
+        for helper in helper_names:
+            definition = re.compile(
+                rf"^\s*(?:float|uint|int|void)\s+{helper}\s*\(", re.MULTILINE)
+            if len(definition.findall(common_text)) != 1:
+                errors.append(f"Metal common helper is not defined exactly once: {helper}")
+            for shader in files(metal_inference, "*.metal"):
+                if shader == common_shader:
+                    continue
+                if definition.search(shader.read_text(encoding="utf-8")):
+                    errors.append(f"Metal common helper has a second owner: {shader} ({helper})")
+        for shader in files(metal_inference, "*.metal"):
+            if "undefined" in shader.read_text(encoding="utf-8"):
+                errors.append(f"invalid placeholder remains in Metal shader: {shader}")
+
     # Ordinary CUDA decode is orchestration after the attention and mixer
     # extraction. Kernel launch policy must not silently grow back here.
     cuda_decode = root / "src/backend/cuda/model/execution.cu"
