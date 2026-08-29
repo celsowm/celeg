@@ -172,8 +172,15 @@ void MetalModel::Impl::encode_matvec(id<MTLComputeCommandEncoder> encoder,
         }
         set_bytes(encoder, &weight.row_bytes, sizeof(weight.row_bytes), 5);
         if (!std::getenv("CELEG_METAL_TUNED_DISABLE") &&
-            weight.storage == MetalModel::Impl::LinearStorage::Q4_0) {
-            id<MTLComputePipelineState> state = pipeline("celeg_matvec_q4_0_tuned");
+            (weight.storage == MetalModel::Impl::LinearStorage::Q4_0 ||
+             weight.storage == MetalModel::Impl::LinearStorage::Q4K ||
+             weight.storage == MetalModel::Impl::LinearStorage::Q5K ||
+             weight.storage == MetalModel::Impl::LinearStorage::Q6K)) {
+            const char* name = "celeg_matvec_q4_0_tuned";
+            if (weight.storage == MetalModel::Impl::LinearStorage::Q4K) name = "celeg_matvec_q4k_tuned";
+            if (weight.storage == MetalModel::Impl::LinearStorage::Q5K) name = "celeg_matvec_q5k_tuned";
+            if (weight.storage == MetalModel::Impl::LinearStorage::Q6K) name = "celeg_matvec_q6k_tuned";
+            id<MTLComputePipelineState> state = pipeline(name);
             [encoder setComputePipelineState:state];
             [encoder setThreadgroupMemoryLength:8u * sizeof(float) atIndex:0];
             [encoder dispatchThreadgroups:MTLSizeMake((weight.rows + 1u) / 2u, 1, 1)
@@ -451,6 +458,21 @@ void MetalModel::Impl::encode_rmsnorm_save(id<MTLComputeCommandEncoder> encoder,
     set_bytes(encoder, &width, sizeof(width), 4);
     set_bytes(encoder, &epsilon, sizeof(epsilon), 5);
     dispatch_cooperative(encoder, "celeg_rmsnorm_save", 1);
+}
+
+void MetalModel::Impl::encode_residual_rmsnorm(
+    id<MTLComputeCommandEncoder> encoder, id<MTLBuffer> input,
+    id<MTLBuffer> residual, id<MTLBuffer> weight, id<MTLBuffer> output,
+    id<MTLBuffer> normed, uint32_t width, float multiplier, float epsilon) {
+    set_buffer(encoder, input, 0);
+    set_buffer(encoder, residual, 1);
+    set_buffer(encoder, weight, 2);
+    set_buffer(encoder, output, 3);
+    set_buffer(encoder, normed, 4);
+    set_bytes(encoder, &width, sizeof(width), 5);
+    set_bytes(encoder, &multiplier, sizeof(multiplier), 6);
+    set_bytes(encoder, &epsilon, sizeof(epsilon), 7);
+    dispatch_cooperative(encoder, "celeg_residual_rmsnorm", 1);
 }
 
 void MetalModel::Impl::encode_rmsnorm_batch(id<MTLComputeCommandEncoder> encoder,

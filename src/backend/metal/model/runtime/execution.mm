@@ -44,20 +44,20 @@ void MetalModel::Impl::encode_token(id<MTLCommandBuffer>& command_buffer,
 
             const uint32_t count = hidden_width;
             const float mixer_multiplier = 1.0f;
-            set_buffer(encoder, hidden, 0);
-            set_buffer(encoder, residual, 1);
-            set_buffer(encoder, hidden, 2);
-            set_bytes(encoder, &count, sizeof(count), 3);
-            set_bytes(encoder, &mixer_multiplier, sizeof(mixer_multiplier), 4);
-            dispatch(encoder, "celeg_residual", count);
-
             if (std::holds_alternative<std::monostate>(
                     program.layers[layer_index].feed_forward)) {
+                set_buffer(encoder, hidden, 0);
+                set_buffer(encoder, residual, 1);
+                set_buffer(encoder, hidden, 2);
+                set_bytes(encoder, &count, sizeof(count), 3);
+                set_bytes(encoder, &mixer_multiplier, sizeof(mixer_multiplier), 4);
+                dispatch(encoder, "celeg_residual", count);
                 continue;
             }
 
-            encode_rmsnorm(encoder, hidden, layer.ffn_norm, normed, hidden_width,
-                           program.final_norm.epsilon);
+            encode_residual_rmsnorm(encoder, hidden, residual, layer.ffn_norm, hidden,
+                                    normed, hidden_width, mixer_multiplier,
+                                    program.final_norm.epsilon);
             if (layer.moe) {
                 encode_moe(command_buffer, encoder, layer);
             } else {

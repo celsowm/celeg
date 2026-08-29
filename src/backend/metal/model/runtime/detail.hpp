@@ -240,6 +240,11 @@ struct MetalModel::Impl {
     void encode_rmsnorm_save(id<MTLComputeCommandEncoder> encoder, id<MTLBuffer> input,
                              id<MTLBuffer> residual, id<MTLBuffer> weight,
                              id<MTLBuffer> output, uint32_t width, float epsilon);
+    void encode_residual_rmsnorm(id<MTLComputeCommandEncoder> encoder,
+                                 id<MTLBuffer> input, id<MTLBuffer> residual,
+                                 id<MTLBuffer> weight, id<MTLBuffer> output,
+                                 id<MTLBuffer> normed, uint32_t width,
+                                 float multiplier, float epsilon);
     void encode_rmsnorm_batch(id<MTLComputeCommandEncoder> encoder, id<MTLBuffer> input,
                               id<MTLBuffer> weight, id<MTLBuffer> output,
                               uint32_t rows, uint32_t width, float epsilon);

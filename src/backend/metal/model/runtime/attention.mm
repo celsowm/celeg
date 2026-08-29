@@ -16,32 +16,27 @@ void MetalModel::Impl::encode_attention(
     const uint32_t position_value = static_cast<uint32_t>(position);
     const float query_scale = layer.query_scale /
         (1.0f / std::sqrt(static_cast<float>(layer.head_dim)));
+    const uint32_t page_tokens = static_cast<uint32_t>(layer.page_tokens);
     set_buffer(encoder, query_buffer, 0);
     set_buffer(encoder, layer.query_norm, 1);
     set_buffer(encoder, key_buffer, 2);
     set_buffer(encoder, layer.key_norm, 3);
-    set_bytes(encoder, &query_heads, sizeof(query_heads), 4);
-    set_bytes(encoder, &key_heads, sizeof(key_heads), 5);
-    set_bytes(encoder, &head_dim, sizeof(head_dim), 6);
-    set_bytes(encoder, &position_value, sizeof(position_value), 7);
-    set_bytes(encoder, &layer.rope_theta, sizeof(layer.rope_theta), 8);
-    set_bytes(encoder, &query_scale, sizeof(query_scale), 9);
+    set_buffer(encoder, value_buffer, 4);
+    set_buffer(encoder, layer.key_cache, 5);
+    set_buffer(encoder, layer.value_cache, 6);
+    set_bytes(encoder, &query_heads, sizeof(query_heads), 7);
+    set_bytes(encoder, &key_heads, sizeof(key_heads), 8);
+    set_bytes(encoder, &head_dim, sizeof(head_dim), 9);
+    set_bytes(encoder, &position_value, sizeof(position_value), 10);
+    set_bytes(encoder, &layer.rope_theta, sizeof(layer.rope_theta), 11);
+    set_bytes(encoder, &query_scale, sizeof(query_scale), 12);
     set_bytes(encoder, &layer.query_norm_epsilon,
-              sizeof(layer.query_norm_epsilon), 10);
+              sizeof(layer.query_norm_epsilon), 13);
     set_bytes(encoder, &layer.key_norm_epsilon,
-              sizeof(layer.key_norm_epsilon), 11);
-    dispatch(encoder, "celeg_qk_norm_rope",
+              sizeof(layer.key_norm_epsilon), 14);
+    set_bytes(encoder, &page_tokens, sizeof(page_tokens), 15);
+    dispatch(encoder, "celeg_qk_norm_rope_store_kv",
              std::max(query_heads, key_heads));
-    const uint32_t kv_width = key_heads * head_dim;
-    set_buffer(encoder, key_buffer, 0);
-    set_buffer(encoder, value_buffer, 1);
-    set_buffer(encoder, layer.key_cache, 2);
-    set_buffer(encoder, layer.value_cache, 3);
-    set_bytes(encoder, &position_value, sizeof(position_value), 4);
-    set_bytes(encoder, &kv_width, sizeof(kv_width), 5);
-    const uint32_t page_tokens = static_cast<uint32_t>(layer.page_tokens);
-    set_bytes(encoder, &page_tokens, sizeof(page_tokens), 6);
-    dispatch(encoder, "celeg_store_kv", kv_width);
     const float attention_scale = 1.0f /
         std::sqrt(static_cast<float>(layer.head_dim));
     set_buffer(encoder, query_buffer, 0);

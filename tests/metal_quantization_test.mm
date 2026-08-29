@@ -84,7 +84,9 @@ std::vector<float> run_matvec(id<MTLDevice> device,
     NSString* source = [NSString stringWithUTF8String:celeg::metal_detail::kInferenceShader];
     id<MTLLibrary> library = [device newLibraryWithSource:source options:nil error:&error];
     if (!library) throw std::runtime_error("Metal matvec shader compilation failed");
-    const bool tuned = tensor.type == celeg::GgmlType::Q4_0;
+    const bool tuned = tensor.type == celeg::GgmlType::Q4_0 ||
+        tensor.type == celeg::GgmlType::Q4_K || tensor.type == celeg::GgmlType::Q5_K ||
+        tensor.type == celeg::GgmlType::Q6_K;
     const char* kernel = nullptr;
     switch (tensor.type) {
         case celeg::GgmlType::Q4_0:

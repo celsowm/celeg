@@ -50,6 +50,41 @@ kernel void celeg_rmsnorm_save(device const float* input [[buffer(0)]],
     }
 }
 
+kernel void celeg_residual_rmsnorm(
+    device const float* input [[buffer(0)]],
+    device const float* residual [[buffer(1)]],
+    device const float* weight [[buffer(2)]],
+    device float* output [[buffer(3)]],
+    device float* normed [[buffer(4)]],
+    constant uint& width [[buffer(5)]],
+    constant float& multiplier [[buffer(6)]],
+    constant float& epsilon [[buffer(7)]],
+    uint index [[thread_index_in_threadgroup]],
+    uint lane [[thread_index_in_simdgroup]],
+    uint simd [[simdgroup_index_in_threadgroup]]) {
+    float sum = 0.0f;
+    for (uint i = index; i < width; i += 256) {
+        const float value = input[i] * multiplier + residual[i];
+        sum += value * value;
+    }
+    threadgroup float partial[8];
+    threadgroup float inverse;
+    const float reduced = simd_sum(sum);
+    if (lane == 0) partial[simd] = reduced;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    if (index == 0) {
+        float total = 0.0f;
+        for (uint group = 0; group < 8; ++group) total += partial[group];
+        inverse = rsqrt(total / static_cast<float>(width) + epsilon);
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    for (uint i = index; i < width; i += 256) {
+        const float value = input[i] * multiplier + residual[i];
+        output[i] = value;
+        normed[i] = value * inverse * weight[i];
+    }
+}
+
 kernel void celeg_copy(device const float* input [[buffer(0)]],
                        device float* output [[buffer(1)]],
                        constant uint& count [[buffer(2)]],
@@ -112,19 +147,24 @@ kernel void celeg_shortconv(device const float* projected [[buffer(0)]],
     output[channel] = projected[width + channel] * convolution;
 }
 
-kernel void celeg_qk_norm_rope(device float* query [[buffer(0)]],
-                               device const float* query_weight [[buffer(1)]],
-                               device float* key [[buffer(2)]],
-                               device const float* key_weight [[buffer(3)]],
-                               constant uint& query_heads [[buffer(4)]],
-                               constant uint& key_heads [[buffer(5)]],
-                               constant uint& head_dim [[buffer(6)]],
-                               constant uint& position [[buffer(7)]],
-                               constant float& theta [[buffer(8)]],
-                               constant float& query_scale [[buffer(9)]],
-                               constant float& query_epsilon [[buffer(10)]],
-                               constant float& key_epsilon [[buffer(11)]],
-                               uint head [[thread_position_in_grid]]) {
+kernel void celeg_qk_norm_rope_store_kv(
+    device float* query [[buffer(0)]],
+    device const float* query_weight [[buffer(1)]],
+    device float* key [[buffer(2)]],
+    device const float* key_weight [[buffer(3)]],
+    device const float* value [[buffer(4)]],
+    device float* key_cache [[buffer(5)]],
+    device float* value_cache [[buffer(6)]],
+    constant uint& query_heads [[buffer(7)]],
+    constant uint& key_heads [[buffer(8)]],
+    constant uint& head_dim [[buffer(9)]],
+    constant uint& position [[buffer(10)]],
+    constant float& theta [[buffer(11)]],
+    constant float& query_scale [[buffer(12)]],
+    constant float& query_epsilon [[buffer(13)]],
+    constant float& key_epsilon [[buffer(14)]],
+    constant uint& page_tokens [[buffer(15)]],
+    uint head [[thread_position_in_grid]]) {
     if (head < query_heads) {
         const size_t base = static_cast<size_t>(head) * head_dim;
         float sum = 0.0f;
@@ -162,23 +202,13 @@ kernel void celeg_qk_norm_rope(device float* query [[buffer(0)]],
             key[offset] = x * cosine - y * sine;
             key[offset + 1] = x * sine + y * cosine;
         }
+        const size_t cache_base = (static_cast<size_t>(position / page_tokens) * page_tokens +
+            position % page_tokens) * static_cast<size_t>(key_heads) * head_dim + base;
+        for (uint d = 0; d < head_dim; ++d) {
+            key_cache[cache_base + d] = key[base + d];
+            value_cache[cache_base + d] = value[base + d];
+        }
     }
-}
-
-kernel void celeg_store_kv(device const float* key [[buffer(0)]],
-                           device const float* value [[buffer(1)]],
-                           device float* key_cache [[buffer(2)]],
-                           device float* value_cache [[buffer(3)]],
-                           constant uint& position [[buffer(4)]],
-                           constant uint& width [[buffer(5)]],
-                           constant uint& page_tokens [[buffer(6)]],
-                           uint index [[thread_position_in_grid]]) {
-    if (index >= width) return;
-    const size_t page = position / page_tokens;
-    const size_t slot = position % page_tokens;
-    const size_t offset = (page * page_tokens + slot) * width + index;
-    key_cache[offset] = key[index];
-    value_cache[offset] = value[index];
 }
 
 kernel void celeg_attention(device const float* query [[buffer(0)]],
@@ -492,4 +522,3 @@ kernel void celeg_mamba2(
         }
     }
 }
-
