@@ -222,6 +222,8 @@ struct MetalModel::Impl {
     void encode_moe(id<MTLCommandBuffer>& command_buffer,
                     id<MTLComputeCommandEncoder>& encoder, Layer& layer);
 
+    void encode_token(id<MTLCommandBuffer>& command_buffer,
+                      id<MTLComputeCommandEncoder>& encoder, int32_t token);
     void run_token(int32_t token);
     void reset();
     static std::vector<float> copy_buffer(id<MTLBuffer> source, size_t elements);

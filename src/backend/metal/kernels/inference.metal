@@ -193,25 +193,7 @@ kernel void celeg_matvec_q8_0(device const uchar* weights [[buffer(0)]],
 }
 
 float celeg_half_to_float(ushort bits) {
-    const uint sign = static_cast<uint>(bits & 0x8000u) << 16;
-    const uint exponent = (static_cast<uint>(bits) >> 10) & 0x1fu;
-    const uint fraction = static_cast<uint>(bits) & 0x3ffu;
-    if (exponent == 0) {
-        if (fraction == 0) return as_type<float>(sign);
-        uint normalized = fraction;
-        uint shift = 0;
-        while ((normalized & 0x400u) == 0) {
-            normalized <<= 1;
-            ++shift;
-        }
-        normalized &= 0x3ffu;
-        return as_type<float>(sign | ((127u - 14u - shift) << 23) |
-                              (normalized << 13));
-    }
-    if (exponent == 0x1fu) {
-        return as_type<float>(sign | 0x7f800000u | (fraction << 13));
-    }
-    return as_type<float>(sign | ((exponent + 112u) << 23) | (fraction << 13));
+    return static_cast<float>(as_type<half>(bits));
 }
 
 void celeg_q4k_scale_min(device const uchar* scales, uint index,

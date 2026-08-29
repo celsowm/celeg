@@ -20,7 +20,7 @@ the same drift).
 | CPU native dot | `cpu_gguf_dot_scalar` consumes packed blocks directly, so `CpuWeightCodec::matrix` keeps them packed instead of repacking to groupwise Q4. |
 | CUDA dequant | `dequantize_gguf_to_bf16` decodes on the host at load time; the result is then held as BF16 or requantized to int8/int4 per `--weight-mode`. |
 | CUDA native MMQ | `mmq.cu` has a kernel, so `--weight-mode native` can keep the packed blocks resident on the device. |
-| Metal native | `inference.metal` keeps Q4_K/Q6_K blocks resident and decodes them in Metal GEMV and embedding kernels; other quantized types use the explicit host fallback. |
+| Metal native | `inference.metal` keeps Q4_0/Q4_K/Q5_K/Q6_K/Q8_0 blocks resident and decodes them in Metal GEMV and embedding kernels; other quantized types use the explicit host fallback. |
 
 ## Matrix
 
@@ -29,14 +29,14 @@ the same drift).
 | F32 | 0 | 1 | 4 | n/a (dense) | n/a | n/a (dense) | n/a |
 | F16 | 1 | 1 | 2 | n/a (dense) | n/a | n/a (dense) | n/a |
 | BF16 | 30 | 1 | 2 | n/a (dense) | n/a | n/a (dense) | n/a |
-| Q4_0 | 2 | 32 | 18 | complete | complete | complete | not planned* | host fallback |
+| Q4_0 | 2 | 32 | 18 | complete | complete | complete | not planned* | complete |
 | Q4_1 | 3 | 32 | 20 | complete | complete | complete | not planned* | host fallback |
 | Q5_0 | 6 | 32 | 22 | complete | complete | complete | not planned* | host fallback |
-| Q8_0 | 8 | 32 | 34 | complete | complete | complete | not planned* | host fallback |
+| Q8_0 | 8 | 32 | 34 | complete | complete | complete | not planned* | complete |
 | Q2_K | 10 | 256 | 84 | complete | complete | complete | not planned* | host fallback |
 | Q3_K | 11 | 256 | 110 | complete | complete | complete | not planned* | host fallback |
 | Q4_K | 12 | 256 | 144 | complete | complete | complete | complete | complete |
-| Q5_K | 13 | 256 | 176 | complete | complete | complete | not planned* | host fallback |
+| Q5_K | 13 | 256 | 176 | complete | complete | complete | not planned* | complete |
 | Q6_K | 14 | 256 | 210 | complete | complete | complete | complete | complete |
 | IQ3_XXS | 18 | 256 | 98 | complete | reference only | complete | not planned* | host fallback |
 | IQ4_NL | 20 | 32 | 18 | complete | reference only | complete | not planned* | host fallback |

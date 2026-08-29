@@ -28,13 +28,17 @@ void MetalModel::prefill_session(const std::vector<int32_t>& tokens) {
     (*impl_).execution_metrics.command_buffers = 0;
     (*impl_).execution_metrics.dispatches = 0;
     const auto started = std::chrono::steady_clock::now();
+    id<MTLCommandBuffer> command_buffer = nil;
+    id<MTLComputeCommandEncoder> encoder = nil;
+    (*impl_).begin_commands(command_buffer, encoder);
     for (const int32_t token : tokens) {
         if (token < 0 || token >= (*impl_).model.topology.dims.vocab_size) {
             throw std::invalid_argument("Metal token out of range");
         }
         (*impl_).seen[static_cast<size_t>(token)] = 1;
-        (*impl_).run_token(token);
+        (*impl_).encode_token(command_buffer, encoder, token);
     }
+    (*impl_).finish_commands(command_buffer, encoder);
     (*impl_).metrics.last_prefill_ms =
         std::chrono::duration<double, std::milli>(
             std::chrono::steady_clock::now() - started).count();

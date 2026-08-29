@@ -4,12 +4,9 @@
 
 namespace celeg {
 
-void MetalModel::Impl::run_token(int32_t token) {
+void MetalModel::Impl::encode_token(id<MTLCommandBuffer>& command_buffer,
+                                    id<MTLComputeCommandEncoder>& encoder, int32_t token) {
         if (position >= max_context) throw std::runtime_error("Metal context limit reached");
-        id<MTLCommandBuffer> command_buffer = nil;
-        id<MTLComputeCommandEncoder> encoder = nil;
-        begin_commands(command_buffer, encoder);
-
         const uint32_t hidden_width = static_cast<uint32_t>(model.graph.hidden);
         const uint32_t token_value = static_cast<uint32_t>(token);
         encode_embedding(encoder, hidden_width, token_value);
@@ -81,9 +78,15 @@ void MetalModel::Impl::run_token(int32_t token) {
         encode_rmsnorm(encoder, hidden, final_norm, normed, hidden_width,
                        program.final_norm.epsilon);
         encode_matvec(encoder, embedding, normed, logits);
-        finish_commands(command_buffer, encoder);
         ++position;
-    }
-
 }
 
+void MetalModel::Impl::run_token(int32_t token) {
+    id<MTLCommandBuffer> command_buffer = nil;
+    id<MTLComputeCommandEncoder> encoder = nil;
+    begin_commands(command_buffer, encoder);
+    encode_token(command_buffer, encoder, token);
+    finish_commands(command_buffer, encoder);
+}
+
+}

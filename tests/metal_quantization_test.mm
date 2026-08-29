@@ -7,6 +7,7 @@
 #import <Metal/Metal.h>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -31,8 +32,16 @@ std::vector<float> run_embedding(id<MTLDevice> device,
                                  (error ? ns_string(error.localizedDescription) : "unknown error"));
     }
     const celeg::GgmlType type = tensor.type;
-    NSString* function_name = [NSString stringWithUTF8String:
-        type == celeg::GgmlType::Q4_K ? "celeg_embedding_q4k" : "celeg_embedding_q6k"];
+    const char* kernel = nullptr;
+    switch (type) {
+        case celeg::GgmlType::Q4_0: kernel = "celeg_embedding_q4_0"; break;
+        case celeg::GgmlType::Q4_K: kernel = "celeg_embedding_q4k"; break;
+        case celeg::GgmlType::Q5_K: kernel = "celeg_embedding_q5k"; break;
+        case celeg::GgmlType::Q6_K: kernel = "celeg_embedding_q6k"; break;
+        case celeg::GgmlType::Q8_0: kernel = "celeg_embedding_q8_0"; break;
+        default: throw std::runtime_error("unsupported Metal quantization test type");
+    }
+    NSString* function_name = [NSString stringWithUTF8String:kernel];
     id<MTLFunction> function = [library newFunctionWithName:function_name];
     if (!function) throw std::runtime_error("Metal quantization function is missing");
     id<MTLComputePipelineState> pipeline = [device newComputePipelineStateWithFunction:function
@@ -67,12 +76,13 @@ std::vector<float> run_embedding(id<MTLDevice> device,
     return values;
 }
 
-void check_type(const celeg::GgufFile& file, celeg::GgmlType type,
+bool check_type(const celeg::GgufFile& file, celeg::GgmlType type,
                 id<MTLDevice> device) {
     for (const std::string& name : file.tensor_names()) {
         const celeg::GgufTensorInfo& info = file.tensor_info(name);
+        const celeg::GgmlTypeTrait trait = celeg::ggml_type_trait(type);
         if (info.type != type || info.dims.size() != 2 || info.dims[0] == 0 ||
-            info.dims[1] == 0 || info.dims[1] % 256 != 0) {
+            info.dims[1] == 0 || info.dims[1] % trait.block_size != 0) {
             continue;
         }
         const celeg::GgufTensorView tensor = file.tensor(name);
@@ -96,10 +106,9 @@ void check_type(const celeg::GgufFile& file, celeg::GgmlType type,
         if (!(maximum < 1.0e-5f)) {
             throw std::runtime_error("Metal quantized embedding differs from CPU reference");
         }
-        return;
+        return true;
     }
-    throw std::runtime_error(std::string("cached GGUF has no test tensor for ") +
-                             celeg::ggml_type_name(type));
+    return false;
 }
 
 }
@@ -110,8 +119,17 @@ int main(int argc, char** argv) {
         const celeg::GgufFile file(argv[1]);
         id<MTLDevice> device = MTLCreateSystemDefaultDevice();
         if (!device) throw std::runtime_error("no default Metal device is available");
-        check_type(file, celeg::GgmlType::Q4_K, device);
-        check_type(file, celeg::GgmlType::Q6_K, device);
+        constexpr std::array types{
+            celeg::GgmlType::Q4_0,
+            celeg::GgmlType::Q4_K,
+            celeg::GgmlType::Q5_K,
+            celeg::GgmlType::Q6_K,
+            celeg::GgmlType::Q8_0};
+        int checked = 0;
+        for (const celeg::GgmlType type : types) {
+            checked += check_type(file, type, device) ? 1 : 0;
+        }
+        if (checked == 0) throw std::runtime_error("cached GGUF has no native Metal test tensor");
         return 0;
     } catch (const std::exception& error) {
         std::cerr << "error: " << error.what() << '\n';

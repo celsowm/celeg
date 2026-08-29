@@ -3,6 +3,7 @@
 import argparse
 import json
 import platform
+import statistics
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
@@ -33,8 +34,8 @@ def parse_args():
     parser.add_argument("--context", type=int, default=128)
     parser.add_argument("--prompt-tokens", type=int, default=32)
     parser.add_argument("--decode-tokens", type=int, default=8)
-    parser.add_argument("--warmup", type=int, default=1)
-    parser.add_argument("--repetitions", type=int, default=3)
+    parser.add_argument("--warmup", type=int, default=5)
+    parser.add_argument("--repetitions", type=int, default=15)
     return parser.parse_args()
 
 
@@ -62,6 +63,19 @@ def run_json(command):
         raise RuntimeError(f"invalid JSON: {error}") from error
 
 
+def distribution(milliseconds, token_count):
+    rates = [token_count * 1000.0 / value for value in milliseconds]
+    ordered = sorted(rates)
+    return {
+        "samples_milliseconds": milliseconds,
+        "samples_tokens_per_second": rates,
+        "median_milliseconds": statistics.median(milliseconds),
+        "median_tokens_per_second": statistics.median(rates),
+        "lower_quartile_tokens_per_second": ordered[(len(ordered) - 1) // 4],
+        "upper_quartile_tokens_per_second": ordered[(len(ordered) - 1) * 3 // 4],
+    }
+
+
 def llama_rows(rows, prompt_tokens, decode_tokens):
     selected = {}
     for row in rows:
@@ -69,36 +83,30 @@ def llama_rows(rows, prompt_tokens, decode_tokens):
         selected[key] = row
     combined = selected[(prompt_tokens, decode_tokens)]
     prompt = selected[(prompt_tokens, 0)]
+    combined_ms = [value / 1.0e6 for value in combined["samples_ns"]]
+    prompt_ms = [value / 1.0e6 for value in prompt["samples_ns"]]
     return {
-        "combined": {
-            "tokens_per_second": combined["avg_ts"],
-            "milliseconds": (prompt_tokens + decode_tokens) * 1000.0 / combined["avg_ts"],
-            "samples_tokens_per_second": combined["samples_ts"],
-        },
-        "prefill_batched": {
-            "tokens_per_second": prompt["avg_ts"],
-            "milliseconds": prompt_tokens * 1000.0 / prompt["avg_ts"],
-            "samples_tokens_per_second": prompt["samples_ts"],
-        },
+        "combined": distribution(combined_ms, prompt_tokens + decode_tokens),
+        "prefill_batched": distribution(prompt_ms, prompt_tokens),
         "raw": rows,
     }
 
 
 def celeg_result(result):
-    total_ms = result["prefill_ms"] + result["decode_ms"]
     total_tokens = result["prompt_tokens"] + result["decode_tokens"]
+    combined_ms = [left + right for left, right in zip(
+        result["prefill_samples_ms"], result["decode_samples_ms"])]
     return {
-        "combined": {
-            "tokens_per_second": total_tokens * 1000.0 / total_ms,
-            "milliseconds": total_ms,
-        },
-        "prefill_token_by_token": {
-            "tokens_per_second": result["prefill_tokens_per_second"],
-            "milliseconds": result["prefill_ms"],
-        },
-        "decode": {
-            "tokens_per_second": result["decode_tokens_per_second"],
-            "milliseconds": result["decode_ms"],
+        "combined": distribution(combined_ms, total_tokens),
+        "prefill": distribution(result["prefill_samples_ms"], result["prompt_tokens"]),
+        "decode": distribution(result["decode_samples_ms"], result["decode_tokens"]),
+        "execution": {
+            key: result[key]
+            for key in result
+            if key.endswith("_ms") and key not in {"prefill_ms", "decode_ms",
+                                                      "prefill_samples_ms", "decode_samples_ms"}
+            or key.endswith("_buffers") or key.endswith("_dispatches")
+            or key.startswith("resident_")
         },
         "raw": result,
     }
@@ -111,50 +119,35 @@ def main():
     for model in models:
         entry = {"model": str(model), "size_bytes": model.stat().st_size}
         try:
+            celeg_command = [
+                args.celeg,
+                "--model", model,
+                "--context", args.context,
+                "--prompt-tokens", args.prompt_tokens,
+                "--decode-tokens", args.decode_tokens,
+                "--warmup", args.warmup,
+                "--repetitions", args.repetitions,
+            ]
+            llama_command = [
+                args.llama_bench,
+                "-m", model,
+                "-p", args.prompt_tokens,
+                "-n", 0,
+                "-pg", f"{args.prompt_tokens},{args.decode_tokens}",
+                "-r", args.repetitions,
+                "-b", args.prompt_tokens,
+                "-ub", args.prompt_tokens,
+                "-ctk", "bf16",
+                "-ctv", "bf16",
+                "-ngl", 99,
+                "-o", "json",
+            ]
             celeg = run_json(
                 [
-                    args.celeg,
-                    "--model",
-                    model,
-                    "--context",
-                    args.context,
-                    "--prompt-tokens",
-                    args.prompt_tokens,
-                    "--decode-tokens",
-                    args.decode_tokens,
-                    "--warmup",
-                    args.warmup,
-                    "--repetitions",
-                    args.repetitions,
+                    *celeg_command,
                 ]
             )
-            llama = run_json(
-                [
-                    args.llama_bench,
-                    "-m",
-                    model,
-                    "-p",
-                    args.prompt_tokens,
-                    "-n",
-                    0,
-                    "-pg",
-                    f"{args.prompt_tokens},{args.decode_tokens}",
-                    "-r",
-                    args.repetitions,
-                    "-b",
-                    args.prompt_tokens,
-                    "-ub",
-                    args.prompt_tokens,
-                    "-ctk",
-                    "bf16",
-                    "-ctv",
-                    "bf16",
-                    "-ngl",
-                    99,
-                    "-o",
-                    "json",
-                ]
-            )
+            llama = run_json(llama_command)
             entry["status"] = "ok"
             entry["celeg"] = celeg_result(celeg)
             entry["llama_cpp"] = llama_rows(llama, args.prompt_tokens, args.decode_tokens)
@@ -163,8 +156,8 @@ def main():
             entry["error"] = str(error)
         results.append(entry)
         if entry["status"] == "ok":
-            celeg_rate = entry["celeg"]["combined"]["tokens_per_second"]
-            llama_rate = entry["llama_cpp"]["combined"]["tokens_per_second"]
+            celeg_rate = entry["celeg"]["combined"]["median_tokens_per_second"]
+            llama_rate = entry["llama_cpp"]["combined"]["median_tokens_per_second"]
             print(f"{model.name}: Celeg {celeg_rate:.2f} tok/s | llama.cpp {llama_rate:.2f} tok/s")
         else:
             print(f"{model.name}: ERROR {entry['error']}")
@@ -178,8 +171,11 @@ def main():
             "decode_tokens": args.decode_tokens,
             "warmup": args.warmup,
             "repetitions": args.repetitions,
-            "llama_cpp": "-p 32 -n 0 -pg 32,8 -b 32 -ub 32 -ctk bf16 -ctv bf16 -ngl 99",
-            "note": "Celeg prefill is token-by-token; llama.cpp prefill reference is batched.",
+            "llama_cpp": (
+                f"-p {args.prompt_tokens} -n 0 -pg {args.prompt_tokens},{args.decode_tokens} "
+                f"-b {args.prompt_tokens} -ub {args.prompt_tokens} "
+                "-ctk bf16 -ctv bf16 -ngl 99"
+            ),
         },
         "results": results,
     }
