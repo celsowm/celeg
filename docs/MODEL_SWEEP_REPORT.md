@@ -17,6 +17,10 @@ Status: incomplete for the two large checkpoints that could not be acquired.
 | CPU Release | PASS | `python scripts/dev.py build --backend cpu --build-type Release --jobs 12` |
 | CUDA Release | FAIL | `hf_http.cpp` was fixed for an unmatched brace; the build then stopped because `celeg/backend/cuda/model/detail/compiled_model.hpp` and `celeg/backend/cuda/model/detail/linear_weights.hpp` are absent from `HEAD` |
 
+CPU CTest: 79/80 passed. The only failure was `architecture_boundary_test`, which reports the same nine obsolete `celeg/backend/cuda/model/detail/*` paths.
+
+Existing CUDA build CTest: 86/88 passed. The failures were `architecture_boundary_test` for the obsolete header paths and `architecture_resolution_test` with exit code `0xc0000409`.
+
 The CUDA runtime rows below therefore use the pre-existing CUDA executable and do not represent a current-source CUDA build.
 
 ## Runtime results
