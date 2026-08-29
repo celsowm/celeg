@@ -18,7 +18,8 @@ public:
     std::string decode(const std::vector<std::int32_t>&, bool) const override { return {}; }
     std::string decode_token(std::int32_t, bool) const override { return {}; }
     std::optional<std::int32_t> token_id(std::string_view text) const override {
-        if (text == "<|startoftext|>" || text == "<|im_start|>" || text == "<|im_end|>" || text == "assistant") return 1;
+        if (text == "<|startoftext|>" || text == "<|im_start|>" || text == "<|im_end|>" ||
+            text == "assistant" || text == "<think>" || text == "</think>") return 1;
         return std::nullopt;
     }
     std::int32_t bos_id() const override { return 1; }
@@ -44,6 +45,18 @@ int main() {
     CELEG_TEST_CHECK(override.format(messages, false) == "[user]hello");
     std::filesystem::remove(override_file);
 
+    metadata.values["chat_template"] = std::string(
+        "{% for message in messages %}[{{ message.role }}]{{ message.content }}{% endfor %}"
+        "{% if add_generation_prompt %}<|im_start|>assistant\n{% endif %}"
+        "{% if false %}<think></think>{% endif %}");
+    const celeg::ResolvedInteraction fallback = celeg::resolve_interaction(metadata, tokenizer);
+    celeg::ChatTemplateOptions options;
+    options.enable_thinking = false;
+    const std::vector<celeg::ChatToolDefinition> tools;
+    CELEG_TEST_CHECK(fallback.format(messages, tools, true, options) ==
+                     "[user]hello<|im_start|>assistant\n<think></think>");
+
+    metadata.values["chat_template"] = std::string("{% include 'unsafe.jinja' %}");
     bool rejected = false;
     try { (void)celeg::resolve_interaction(metadata, tokenizer); }
     catch (const std::invalid_argument& error) {

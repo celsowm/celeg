@@ -124,6 +124,13 @@ ResolvedInteraction resolve_interaction(
     result.render_program_ =
         std::make_shared<InteractionRenderProgram>(std::move(nodes));
     result.fingerprint_ = fingerprint(source);
+    result.has_thinking_markers_ =
+        source.find("<think>") != std::string::npos &&
+        source.find("</think>") != std::string::npos &&
+        tokenizer.token_id("<think>").has_value() &&
+        tokenizer.token_id("</think>").has_value();
+    result.accepts_thinking_option_ =
+        source.find("enable_thinking") != std::string::npos;
     result.bos_token_ = tokenizer.decode(
         std::vector<std::int32_t>{tokenizer.bos_id()},
         false);
@@ -164,13 +171,20 @@ std::string ResolvedInteraction::format(
             "resolved interaction has no render program");
     }
     validate_conversation(messages);
-    return render_program_->render(
+    std::string rendered = render_program_->render(
         messages,
         tools,
         add_generation_prompt,
         options,
         source_origin_,
         bos_token_);
+    if (options.enable_thinking && !*options.enable_thinking &&
+        has_thinking_markers_ && !accepts_thinking_option_ &&
+        rendered.find("<think>") == std::string::npos &&
+        rendered.find("</think>") == std::string::npos) {
+        rendered += "<think></think>";
+    }
+    return rendered;
 }
 
 ToolParseResult ResolvedInteraction::parse_tool_calls(

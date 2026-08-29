@@ -3,7 +3,7 @@ import type { Conversation, Settings } from './types'
 const KEY = 'celeg-chat-v1'
 const LIMIT = 40
 export type Store = { conversations: Conversation[]; active?: string; settings: Settings }
-export const defaults: Settings = { model: '', systemPrompt: '', theme: 'system' }
+export const defaults: Settings = { model: '', systemPrompt: '', theme: 'system', enable_thinking: false }
 export function load(): Store {
   try {
     const value = JSON.parse(localStorage.getItem(KEY) || '') as Partial<Store>

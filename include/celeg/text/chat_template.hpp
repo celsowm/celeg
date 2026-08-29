@@ -67,6 +67,8 @@ private:
     std::vector<std::string> diagnostics_;
     ChatCapabilities capabilities_;
     std::optional<ToolCallGrammar> tool_call_grammar_;
+    bool has_thinking_markers_ = false;
+    bool accepts_thinking_option_ = false;
 };
 
 ResolvedInteraction resolve_interaction(
