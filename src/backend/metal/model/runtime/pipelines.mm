@@ -94,42 +94,51 @@ void MetalModel::Impl::finish_commands(
     command_buffer = nil;
 }
 
-id<MTLComputePipelineState> MetalModel::Impl::pipeline(std::string_view name) {
-        const auto found = pipelines.find(std::string(name));
-        if (found != pipelines.end()) return found->second;
-        NSString* function_name = [NSString stringWithUTF8String:std::string(name).c_str()];
-        id<MTLFunction> function = [library newFunctionWithName:function_name];
-        if (!function) throw std::runtime_error("Metal inference function is missing: " + std::string(name));
-        NSError* error = nil;
-        id<MTLComputePipelineState> result =
-            [device newComputePipelineStateWithFunction:function error:&error];
-        if (!result) {
-            const std::string message = error ? ns_string(error.localizedDescription)
-                                              : "unknown Metal pipeline error";
-            throw std::runtime_error("Metal inference pipeline failed: " + message);
-        }
-        pipelines.emplace(std::string(name), result);
-        return result;
+id<MTLComputePipelineState> MetalPipelineCache::pipeline(std::string_view name) {
+    const auto found = pipelines.find(std::string(name));
+    if (found != pipelines.end()) return found->second;
+    NSString* function_name = [NSString stringWithUTF8String:std::string(name).c_str()];
+    id<MTLFunction> function = [library newFunctionWithName:function_name];
+    if (!function) throw std::runtime_error("Metal inference function is missing: " + std::string(name));
+    NSError* error = nil;
+    id<MTLComputePipelineState> result =
+        [device newComputePipelineStateWithFunction:function error:&error];
+    if (!result) {
+        const std::string message = error ? ns_string(error.localizedDescription)
+                                          : "unknown Metal pipeline error";
+        throw std::runtime_error("Metal inference pipeline failed: " + message);
     }
+    pipelines.emplace(std::string(name), result);
+    return result;
+}
+
+id<MTLComputePipelineState> MetalPipelineCache::tensor_pipeline(std::string_view name) {
+    const std::string key = "tensor:" + std::string(name);
+    const auto found = pipelines.find(key);
+    if (found != pipelines.end()) return found->second;
+    if (!tensor_library) throw std::runtime_error("Metal tensor library is unavailable");
+    NSString* function_name = [NSString stringWithUTF8String:std::string(name).c_str()];
+    id<MTLFunction> function = [tensor_library newFunctionWithName:function_name];
+    if (!function) throw std::runtime_error("Metal tensor function is missing: " + std::string(name));
+    NSError* error = nil;
+    id<MTLComputePipelineState> result =
+        [device newComputePipelineStateWithFunction:function error:&error];
+    if (!result) {
+        const std::string message = error ? ns_string(error.localizedDescription)
+                                          : "unknown Metal tensor pipeline error";
+        throw std::runtime_error("Metal tensor pipeline failed: " + message);
+    }
+    pipelines.emplace(key, result);
+    return result;
+}
+
+id<MTLComputePipelineState> MetalModel::Impl::pipeline(std::string_view name) {
+    return pipeline_cache.pipeline(name);
+}
 
 id<MTLComputePipelineState> MetalModel::Impl::tensor_pipeline(std::string_view name) {
-        const auto found = pipelines.find(std::string("tensor:") + std::string(name));
-        if (found != pipelines.end()) return found->second;
-        if (!tensor_library) throw std::runtime_error("Metal tensor library is unavailable");
-        NSString* function_name = [NSString stringWithUTF8String:std::string(name).c_str()];
-        id<MTLFunction> function = [tensor_library newFunctionWithName:function_name];
-        if (!function) throw std::runtime_error("Metal tensor function is missing: " + std::string(name));
-        NSError* error = nil;
-        id<MTLComputePipelineState> result =
-            [device newComputePipelineStateWithFunction:function error:&error];
-        if (!result) {
-            const std::string message = error ? ns_string(error.localizedDescription)
-                                              : "unknown Metal tensor pipeline error";
-            throw std::runtime_error("Metal tensor pipeline failed: " + message);
-        }
-        pipelines.emplace(std::string("tensor:") + std::string(name), result);
-        return result;
-    }
+    return pipeline_cache.tensor_pipeline(name);
+}
 
 
 void MetalModel::Impl::dispatch(id<MTLComputeCommandEncoder> encoder, std::string_view name,
@@ -262,8 +271,8 @@ void MetalModel::Impl::encode_matmul(id<MTLComputeCommandEncoder> encoder,
     set_bytes(encoder, &stride, sizeof(stride), 6);
     const bool dense = weight.row_bytes == 0;
     const bool tensor = dense &&
-        ((weight.storage == LinearStorage::Float16 && tensor_matmul_f16) ||
-         (weight.storage == LinearStorage::BFloat16 && tensor_matmul_bf16));
+        ((weight.storage == LinearStorage::Float16 && pipeline_cache.tensor_matmul_f16) ||
+         (weight.storage == LinearStorage::BFloat16 && pipeline_cache.tensor_matmul_bf16));
     if (tensor) {
         const auto kernel = linear_kernel(weight.storage,
                                            LinearOperationKind::MatMulTensor, false);

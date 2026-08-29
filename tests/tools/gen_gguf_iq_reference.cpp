@@ -46,10 +46,10 @@ constexpr IqType kIqTypes[] = {
     {"IQ4_XS", GGML_TYPE_IQ4_XS, 256, 136},
 };
 
-// How many consecutive elements of each type to capture: four 256-wide rows,
-// which is enough to exercise every sub-block scale path and lets the test
-// feed the fixture straight into a 256-column CpuGgufMatrix regardless of
-// whether the type packs 32 or 256 elements per block.
+/// How many consecutive elements of each type to capture: four 256-wide rows,
+/// which is enough to exercise every sub-block scale path and lets the test
+/// feed the fixture straight into a 256-column GgmlMatrixView regardless of
+/// whether the type packs 32 or 256 elements per block.
 constexpr int kElementsPerType = 1024;
 
 constexpr int blocks_for(const IqType& iq) { return kElementsPerType / iq.block_size; }

@@ -113,10 +113,10 @@ int MetalModel::vocab_size() const { return (*impl_).model.topology.dims.vocab_s
 const std::string& MetalModel::model_identity() const { return (*impl_).model.provenance.identity; }
 std::string MetalModel::backend_description() const {
     return std::string("metal-native device=") + (*impl_).device.name.UTF8String +
-        " tensor_f16=" + ((*impl_).tensor_matmul_f16 ? "yes" : "no") +
-        " tensor_bf16=" + ((*impl_).tensor_matmul_bf16 ? "yes" : "no") +
-        ((*impl_).tensor_compile_error.empty()
-            ? std::string{} : " tensor_error=" + (*impl_).tensor_compile_error);
+        " tensor_f16=" + ((*impl_).pipeline_cache.tensor_matmul_f16 ? "yes" : "no") +
+        " tensor_bf16=" + ((*impl_).pipeline_cache.tensor_matmul_bf16 ? "yes" : "no") +
+        ((*impl_).pipeline_cache.tensor_compile_error.empty()
+            ? std::string{} : " tensor_error=" + (*impl_).pipeline_cache.tensor_compile_error);
 }
 RuntimeMetrics MetalModel::metrics() const { return (*impl_).metrics; }
 MetalExecutionMetrics MetalModel::execution_metrics() const { return (*impl_).execution_metrics; }

@@ -36,6 +36,19 @@ std::string request_name(std::span<const TensorRequest> requests,
 
 namespace celeg {
 
+struct MetalPipelineCache {
+    id<MTLDevice> device = nil;
+    id<MTLLibrary> library = nil;
+    id<MTLLibrary> tensor_library = nil;
+    bool tensor_matmul_f16 = false;
+    bool tensor_matmul_bf16 = false;
+    std::string tensor_compile_error;
+    std::unordered_map<std::string, id<MTLComputePipelineState>> pipelines;
+
+    id<MTLComputePipelineState> pipeline(std::string_view name);
+    id<MTLComputePipelineState> tensor_pipeline(std::string_view name);
+};
+
 struct MetalModel::Impl {
     enum class LinearStorage {
         Float32,
@@ -146,12 +159,7 @@ struct MetalModel::Impl {
     std::shared_ptr<IWeightRepository> repository;
     id<MTLDevice> device = nil;
     id<MTLCommandQueue> queue = nil;
-    id<MTLLibrary> library = nil;
-    id<MTLLibrary> tensor_library = nil;
-    bool tensor_matmul_f16 = false;
-    bool tensor_matmul_bf16 = false;
-    std::string tensor_compile_error;
-    std::unordered_map<std::string, id<MTLComputePipelineState>> pipelines;
+    MetalPipelineCache pipeline_cache;
     Linear embedding;
     id<MTLBuffer> final_norm = nil;
     id<MTLBuffer> hidden = nil;

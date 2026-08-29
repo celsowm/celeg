@@ -594,6 +594,7 @@ set(CELEG_PUBLIC_HEADERS
     include/celeg/checkpoint/repositories/safetensors.hpp
     include/celeg/checkpoint/tensor_names.hpp
     include/celeg/model/definition.hpp
+    include/celeg/model/linear_operation.hpp
     include/celeg/model/position.hpp
     include/celeg/model/descriptor.hpp
     include/celeg/model/architecture.hpp
@@ -623,6 +624,8 @@ set(CELEG_PUBLIC_HEADERS
     include/celeg/runtime/concurrency/metrics.hpp
     include/celeg/runtime/concurrency/policy_types.hpp
     include/celeg/runtime/concurrency/policy.hpp
+    include/celeg/quantization/ggml.hpp
+    include/celeg/quantization/gguf_blocks.hpp
     include/celeg/runtime/request_types.hpp
     include/celeg/backend/cuda/concurrency.hpp
     include/celeg/backend/cuda/moe.hpp
