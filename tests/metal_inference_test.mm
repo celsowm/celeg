@@ -51,8 +51,10 @@ int main(int argc, char** argv) {
         }
         celeg::CpuModel cpu(argv[1], 128);
         celeg::MetalModel metal(argv[1], 128);
+        celeg::MetalModel tokenized(argv[1], 128);
         auto cpu_session = cpu.session();
         auto metal_session = metal.session();
+        auto tokenized_session = tokenized.session();
         celeg::GenerationConfig generation;
         generation.temperature = 0.0f;
         generation.top_k = 1;
@@ -64,8 +66,18 @@ int main(int argc, char** argv) {
             metal_session.prefill(prefix);
             const std::vector<float> cpu_logits = cpu.diagnostics().copy_logits();
             const std::vector<float> metal_logits = metal_session.copy_logits();
+            tokenized_session.prefill({prefix.front()});
+            for (size_t index = 1; index < prefix.size(); ++index) {
+                tokenized_session.eval_token(prefix[index]);
+            }
+            const std::vector<float> tokenized_logits = tokenized_session.copy_logits();
             if (cpu_logits.size() != metal_logits.size()) {
                 throw std::runtime_error("CPU and Metal vocabulary sizes differ");
+            }
+            const double batch_similarity = cosine(metal_logits, tokenized_logits);
+            if (!(batch_similarity > 0.999999) ||
+                top_index(metal_logits) != top_index(tokenized_logits)) {
+                throw std::runtime_error("Metal batched prefill differs from tokenized execution");
             }
             const double similarity = cosine(cpu_logits, metal_logits);
             const double error = rmse(cpu_logits, metal_logits);

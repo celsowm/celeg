@@ -59,5 +59,63 @@ void MetalModel::Impl::encode_attention(
     encode_matvec(encoder, layer.attention_out, operation, hidden);
 }
 
+void MetalModel::Impl::encode_attention_batch(
+    id<MTLComputeCommandEncoder> encoder, Layer& layer, uint32_t rows,
+    uint32_t base_position) {
+    encode_matmul(encoder, layer.query, batch_normed, batch_query, rows);
+    encode_matmul(encoder, layer.key, batch_normed, batch_key, rows);
+    encode_matmul(encoder, layer.value, batch_normed, batch_value, rows);
+    const uint32_t query_heads = static_cast<uint32_t>(layer.query_heads);
+    const uint32_t key_heads = static_cast<uint32_t>(layer.key_value_heads);
+    const uint32_t head_dim = static_cast<uint32_t>(layer.head_dim);
+    const uint32_t head_count = std::max(query_heads, key_heads);
+    const float query_scale = layer.query_scale /
+        (1.0f / std::sqrt(static_cast<float>(layer.head_dim)));
+    set_buffer(encoder, batch_query, 0);
+    set_buffer(encoder, layer.query_norm, 1);
+    set_buffer(encoder, batch_key, 2);
+    set_buffer(encoder, layer.key_norm, 3);
+    set_bytes(encoder, &rows, sizeof(rows), 4);
+    set_bytes(encoder, &query_heads, sizeof(query_heads), 5);
+    set_bytes(encoder, &key_heads, sizeof(key_heads), 6);
+    set_bytes(encoder, &head_dim, sizeof(head_dim), 7);
+    set_bytes(encoder, &base_position, sizeof(base_position), 8);
+    set_bytes(encoder, &layer.rope_theta, sizeof(layer.rope_theta), 9);
+    set_bytes(encoder, &query_scale, sizeof(query_scale), 10);
+    set_bytes(encoder, &layer.query_norm_epsilon, sizeof(layer.query_norm_epsilon), 11);
+    set_bytes(encoder, &layer.key_norm_epsilon, sizeof(layer.key_norm_epsilon), 12);
+    dispatch(encoder, "celeg_qk_norm_rope_batch",
+             static_cast<NSUInteger>(rows) * head_count);
+
+    const uint32_t kv_width = key_heads * head_dim;
+    const uint32_t page_tokens = static_cast<uint32_t>(layer.page_tokens);
+    set_buffer(encoder, batch_key, 0);
+    set_buffer(encoder, batch_value, 1);
+    set_buffer(encoder, layer.key_cache, 2);
+    set_buffer(encoder, layer.value_cache, 3);
+    set_bytes(encoder, &rows, sizeof(rows), 4);
+    set_bytes(encoder, &base_position, sizeof(base_position), 5);
+    set_bytes(encoder, &kv_width, sizeof(kv_width), 6);
+    set_bytes(encoder, &page_tokens, sizeof(page_tokens), 7);
+    dispatch(encoder, "celeg_store_kv_batch",
+             static_cast<NSUInteger>(rows) * kv_width);
+
+    const float attention_scale = 1.0f /
+        std::sqrt(static_cast<float>(layer.head_dim));
+    set_buffer(encoder, batch_query, 0);
+    set_buffer(encoder, layer.key_cache, 1);
+    set_buffer(encoder, layer.value_cache, 2);
+    set_buffer(encoder, batch_operation, 3);
+    set_bytes(encoder, &rows, sizeof(rows), 4);
+    set_bytes(encoder, &base_position, sizeof(base_position), 5);
+    set_bytes(encoder, &query_heads, sizeof(query_heads), 6);
+    set_bytes(encoder, &key_heads, sizeof(key_heads), 7);
+    set_bytes(encoder, &head_dim, sizeof(head_dim), 8);
+    set_bytes(encoder, &attention_scale, sizeof(attention_scale), 9);
+    set_bytes(encoder, &page_tokens, sizeof(page_tokens), 10);
+    dispatch(encoder, "celeg_attention_batch",
+             static_cast<NSUInteger>(rows) * query_heads * head_dim);
+    encode_matmul(encoder, layer.attention_out, batch_operation, batch_hidden, rows);
 }
 
+}

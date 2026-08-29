@@ -5,8 +5,23 @@ import json
 import platform
 import statistics
 import subprocess
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
+
+
+WORKLOADS = {
+    "interactive": {
+        "context": 128,
+        "prompt_tokens": 32,
+        "decode_tokens": 8,
+    },
+    "throughput": {
+        "context": 640,
+        "prompt_tokens": 512,
+        "decode_tokens": 128,
+    },
+}
 
 
 def parse_args():
@@ -31,11 +46,13 @@ def parse_args():
         type=Path,
         default=Path("benchmarks/results/metal_llama_cpp_compare.json"),
     )
-    parser.add_argument("--context", type=int, default=128)
-    parser.add_argument("--prompt-tokens", type=int, default=32)
-    parser.add_argument("--decode-tokens", type=int, default=8)
+    parser.add_argument("--workload", choices=["interactive", "throughput", "all"], default="all")
+    parser.add_argument("--context", type=int)
+    parser.add_argument("--prompt-tokens", type=int)
+    parser.add_argument("--decode-tokens", type=int)
     parser.add_argument("--warmup", type=int, default=5)
     parser.add_argument("--repetitions", type=int, default=15)
+    parser.add_argument("--storage-mode", choices=["shared", "private"], default="shared")
     return parser.parse_args()
 
 
@@ -61,6 +78,13 @@ def run_json(command):
         return json.loads(process.stdout)
     except json.JSONDecodeError as error:
         raise RuntimeError(f"invalid JSON: {error}") from error
+
+
+def run_warmups(celeg_command, llama_command, warmup):
+    if warmup <= 0:
+        return
+    run_json([*celeg_command, "--warmup", warmup, "--repetitions", 1])
+    run_json([*llama_command, "-r", warmup, "--no-warmup"])
 
 
 def distribution(milliseconds, token_count):
@@ -92,6 +116,83 @@ def llama_rows(rows, prompt_tokens, decode_tokens):
     }
 
 
+def workload_args(args):
+    if args.context is not None or args.prompt_tokens is not None or args.decode_tokens is not None:
+        if args.context is None or args.prompt_tokens is None or args.decode_tokens is None:
+            raise SystemExit("--context, --prompt-tokens and --decode-tokens must be provided together")
+        return [{
+            "name": "custom",
+            "context": args.context,
+            "prompt_tokens": args.prompt_tokens,
+            "decode_tokens": args.decode_tokens,
+        }]
+    names = list(WORKLOADS) if args.workload == "all" else [args.workload]
+    return [{"name": name, **WORKLOADS[name]} for name in names]
+
+
+def collect_workload(model, args, workload):
+    context = workload["context"]
+    prompt_tokens = workload["prompt_tokens"]
+    decode_tokens = workload["decode_tokens"]
+    celeg_command = [
+        args.celeg,
+        "--model", model,
+        "--context", context,
+        "--prompt-tokens", prompt_tokens,
+        "--decode-tokens", decode_tokens,
+        "--storage-mode", args.storage_mode,
+    ]
+    llama_command = [
+        args.llama_bench,
+        "-m", model,
+        "-p", prompt_tokens,
+        "-n", 0,
+        "-pg", f"{prompt_tokens},{decode_tokens}",
+        "-b", prompt_tokens,
+        "-ub", prompt_tokens,
+        "-ctk", "bf16",
+        "-ctv", "bf16",
+        "-ngl", 99,
+        "-o", "json",
+    ]
+    run_warmups(celeg_command, llama_command, args.warmup)
+    celeg_samples = []
+    llama_samples = []
+    order = []
+    for index in range(args.repetitions):
+        commands = (("celeg", celeg_command), ("llama_cpp", llama_command))
+        if index % 2:
+            commands = commands[::-1]
+        for engine, command in commands:
+            order.append(engine)
+            if engine == "celeg":
+                result = run_json([*command, "--warmup", 0, "--repetitions", 1])
+                celeg_samples.append(celeg_result(result))
+            else:
+                result = run_json([*command, "-r", 1, "--no-warmup"])
+                llama_samples.append(llama_rows(result, prompt_tokens, decode_tokens))
+    celeg_combined = [sample["combined"]["samples_milliseconds"][0] for sample in celeg_samples]
+    llama_combined = [sample["combined"]["samples_milliseconds"][0] for sample in llama_samples]
+    celeg_prefill = [sample["prefill"]["samples_milliseconds"][0] for sample in celeg_samples]
+    celeg_decode = [sample["decode"]["samples_milliseconds"][0] for sample in celeg_samples]
+    llama_prompt = [sample["prefill_batched"]["samples_milliseconds"][0] for sample in llama_samples]
+    return {
+        "configuration": workload,
+        "order": order,
+        "celeg": {
+            "combined": distribution(celeg_combined, prompt_tokens + decode_tokens),
+            "prefill": distribution(celeg_prefill, prompt_tokens),
+            "decode": distribution(celeg_decode, decode_tokens),
+            "samples": celeg_samples,
+        },
+        "llama_cpp": {
+            "combined": distribution(llama_combined, prompt_tokens + decode_tokens),
+            "prefill_batched": distribution(llama_prompt, prompt_tokens),
+            "samples": llama_samples,
+        },
+    }
+
+
 def celeg_result(result):
     total_tokens = result["prompt_tokens"] + result["decode_tokens"]
     combined_ms = [left + right for left, right in zip(
@@ -116,64 +217,51 @@ def main():
     args = parse_args()
     models = resolve_models(args.model_dir)
     results = []
+    workloads = workload_args(args)
+    try:
+        celeg_commit = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], text=True).strip()
+    except subprocess.CalledProcessError:
+        celeg_commit = "unknown"
+    for workload in workloads:
+        if workload["context"] <= 0 or workload["prompt_tokens"] <= 0 or workload["decode_tokens"] < 0:
+            raise SystemExit(f"invalid workload dimensions: {workload}")
+        if workload["prompt_tokens"] + workload["decode_tokens"] > workload["context"]:
+            raise SystemExit(f"workload exceeds context: {workload}")
     for model in models:
-        entry = {"model": str(model), "size_bytes": model.stat().st_size}
-        try:
-            celeg_command = [
-                args.celeg,
-                "--model", model,
-                "--context", args.context,
-                "--prompt-tokens", args.prompt_tokens,
-                "--decode-tokens", args.decode_tokens,
-                "--warmup", args.warmup,
-                "--repetitions", args.repetitions,
-            ]
-            llama_command = [
-                args.llama_bench,
-                "-m", model,
-                "-p", args.prompt_tokens,
-                "-n", 0,
-                "-pg", f"{args.prompt_tokens},{args.decode_tokens}",
-                "-r", args.repetitions,
-                "-b", args.prompt_tokens,
-                "-ub", args.prompt_tokens,
-                "-ctk", "bf16",
-                "-ctv", "bf16",
-                "-ngl", 99,
-                "-o", "json",
-            ]
-            celeg = run_json(
-                [
-                    *celeg_command,
-                ]
-            )
-            llama = run_json(llama_command)
-            entry["status"] = "ok"
-            entry["celeg"] = celeg_result(celeg)
-            entry["llama_cpp"] = llama_rows(llama, args.prompt_tokens, args.decode_tokens)
-        except (RuntimeError, KeyError) as error:
-            entry["status"] = "error"
-            entry["error"] = str(error)
-        results.append(entry)
-        if entry["status"] == "ok":
-            celeg_rate = entry["celeg"]["combined"]["median_tokens_per_second"]
-            llama_rate = entry["llama_cpp"]["combined"]["median_tokens_per_second"]
-            print(f"{model.name}: Celeg {celeg_rate:.2f} tok/s | llama.cpp {llama_rate:.2f} tok/s")
-        else:
-            print(f"{model.name}: ERROR {entry['error']}")
+        for workload in workloads:
+            entry = {
+                "model": str(model),
+                "size_bytes": model.stat().st_size,
+                "workload": workload["name"],
+                "celeg_commit": celeg_commit,
+            }
+            try:
+                entry.update(collect_workload(model, args, workload))
+                entry["status"] = "ok"
+            except (RuntimeError, KeyError, IndexError) as error:
+                entry["status"] = "error"
+                entry["error"] = str(error)
+            results.append(entry)
+            if entry["status"] == "ok":
+                celeg_rate = entry["celeg"]["combined"]["median_tokens_per_second"]
+                llama_rate = entry["llama_cpp"]["combined"]["median_tokens_per_second"]
+                print(f"{model.name} [{workload['name']}]: Celeg {celeg_rate:.2f} tok/s | llama.cpp {llama_rate:.2f}")
+            else:
+                print(f"{model.name} [{workload['name']}]: ERROR {entry['error']}", file=sys.stderr)
 
     document = {
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "host": platform.platform(),
+        "celeg_commit": celeg_commit,
         "configuration": {
-            "context": args.context,
-            "prompt_tokens": args.prompt_tokens,
-            "decode_tokens": args.decode_tokens,
+            "workloads": workloads,
             "warmup": args.warmup,
             "repetitions": args.repetitions,
+            "storage_mode": args.storage_mode,
             "llama_cpp": (
-                f"-p {args.prompt_tokens} -n 0 -pg {args.prompt_tokens},{args.decode_tokens} "
-                f"-b {args.prompt_tokens} -ub {args.prompt_tokens} "
+                "-p 0 -n 0 -pg <prompt>,<decode> "
+                "-b <prompt> -ub <prompt> "
                 "-ctk bf16 -ctv bf16 -ngl 99"
             ),
         },

@@ -10,6 +10,27 @@
 
 namespace celeg {
 
+void MetalModel::Impl::apply_logits_transforms() {
+    float* values = static_cast<float*>(logits.contents);
+    const size_t count = static_cast<size_t>(model.topology.dims.vocab_size);
+    if (model.graph.logits_multiplier != 1.0f) {
+        for (size_t index = 0; index < count; ++index) {
+            values[index] *= model.graph.logits_multiplier;
+        }
+    }
+    if (model.graph.logits_divisor != 1.0f) {
+        for (size_t index = 0; index < count; ++index) {
+            values[index] /= model.graph.logits_divisor;
+        }
+    }
+    if (model.graph.final_logit_softcap > 0.0f) {
+        for (size_t index = 0; index < count; ++index) {
+            values[index] = std::tanh(values[index] / model.graph.final_logit_softcap) *
+                model.graph.final_logit_softcap;
+        }
+    }
+}
+
 MetalModel::~MetalModel() = default;
 MetalModel::MetalModel(MetalModel&&) noexcept = default;
 MetalModel& MetalModel::operator=(MetalModel&&) noexcept = default;
@@ -36,9 +57,16 @@ void MetalModel::prefill_session(const std::vector<int32_t>& tokens) {
             throw std::invalid_argument("Metal token out of range");
         }
         (*impl_).seen[static_cast<size_t>(token)] = 1;
-        (*impl_).encode_token(command_buffer, encoder, token);
+    }
+    if ((*impl_).supports_prefill_batch()) {
+        (*impl_).encode_prefill_batch(encoder, tokens);
+    } else {
+        for (const int32_t token : tokens) {
+            (*impl_).encode_token(command_buffer, encoder, token);
+        }
     }
     (*impl_).finish_commands(command_buffer, encoder);
+    (*impl_).apply_logits_transforms();
     (*impl_).metrics.last_prefill_ms =
         std::chrono::duration<double, std::milli>(
             std::chrono::steady_clock::now() - started).count();

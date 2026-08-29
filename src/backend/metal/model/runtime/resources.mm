@@ -127,10 +127,33 @@ namespace celeg {
 using metal_model_detail::tensor_values;
 using metal_model_detail::request_for;
 
-id<MTLBuffer> MetalModel::Impl::buffer(const std::vector<float>& values) const {
-        id<MTLBuffer> result = [device newBufferWithBytes:values.data()
-                                                    length:values.size() * sizeof(float)
+id<MTLBuffer> MetalModel::Impl::immutable_buffer(const void* data, size_t bytes) const {
+    if (options.storage_mode != 1) {
+        id<MTLBuffer> result = [device newBufferWithBytes:data
+                                                    length:bytes
                                                    options:MTLResourceStorageModeShared];
+        if (!result) throw std::runtime_error("Metal buffer allocation failed");
+        return result;
+    }
+    id<MTLBuffer> staging = [device newBufferWithBytes:data length:bytes
+                                               options:MTLResourceStorageModeShared];
+    id<MTLBuffer> result = [device newBufferWithLength:bytes
+                                               options:MTLResourceStorageModePrivate];
+    if (!staging || !result) throw std::runtime_error("Metal private buffer allocation failed");
+    id<MTLCommandBuffer> command_buffer = [queue commandBuffer];
+    id<MTLBlitCommandEncoder> encoder = [command_buffer blitCommandEncoder];
+    [encoder copyFromBuffer:staging sourceOffset:0 toBuffer:result destinationOffset:0 size:bytes];
+    [encoder endEncoding];
+    [command_buffer commit];
+    [command_buffer waitUntilCompleted];
+    if (command_buffer.status != MTLCommandBufferStatusCompleted) {
+        throw std::runtime_error("Metal private buffer upload failed");
+    }
+    return result;
+}
+
+id<MTLBuffer> MetalModel::Impl::buffer(const std::vector<float>& values) const {
+        id<MTLBuffer> result = immutable_buffer(values.data(), values.size() * sizeof(float));
         if (!result) throw std::runtime_error("Metal buffer allocation failed");
         const_cast<MetalModel::Impl*>(this)->execution_metrics.resident_weight_bytes +=
             values.size() * sizeof(float);
@@ -149,9 +172,7 @@ id<MTLBuffer> MetalModel::Impl::zero_buffer(size_t bytes) const {
 
 
 id<MTLBuffer> MetalModel::Impl::raw_buffer(const std::byte* data, size_t bytes) const {
-        id<MTLBuffer> result = [device newBufferWithBytes:data
-                                                    length:bytes
-                                                   options:MTLResourceStorageModeShared];
+        id<MTLBuffer> result = immutable_buffer(data, bytes);
         if (!result) throw std::runtime_error("Metal raw buffer allocation failed");
         const_cast<MetalModel::Impl*>(this)->execution_metrics.resident_weight_bytes += bytes;
         return result;

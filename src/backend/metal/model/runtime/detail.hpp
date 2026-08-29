@@ -160,6 +160,18 @@ struct MetalModel::Impl {
     id<MTLBuffer> recurrent_a = nil;
     id<MTLBuffer> recurrent_output = nil;
     id<MTLBuffer> logits = nil;
+    id<MTLBuffer> batch_tokens = nil;
+    id<MTLBuffer> batch_hidden = nil;
+    id<MTLBuffer> batch_residual = nil;
+    id<MTLBuffer> batch_normed = nil;
+    id<MTLBuffer> batch_projected = nil;
+    id<MTLBuffer> batch_operation = nil;
+    id<MTLBuffer> batch_query = nil;
+    id<MTLBuffer> batch_key = nil;
+    id<MTLBuffer> batch_value = nil;
+    id<MTLBuffer> batch_gate_up = nil;
+    id<MTLBuffer> batch_activated = nil;
+    int batch_capacity = 0;
     std::vector<Layer> layers;
     std::vector<uint8_t> seen;
     GenerationConfig generation;
@@ -173,6 +185,7 @@ struct MetalModel::Impl {
 
 
     id<MTLBuffer> buffer(const std::vector<float>& values) const;
+    id<MTLBuffer> immutable_buffer(const void* data, size_t bytes) const;
     id<MTLBuffer> zero_buffer(size_t bytes) const;
     id<MTLBuffer> raw_buffer(const std::byte* data, size_t bytes) const;
 
@@ -200,30 +213,64 @@ struct MetalModel::Impl {
     void encode_matvec(id<MTLComputeCommandEncoder> encoder, const Linear& weight,
                        id<MTLBuffer> input, id<MTLBuffer> output,
                        NSUInteger output_offset = 0);
+    bool encode_matvec_pair(id<MTLComputeCommandEncoder> encoder,
+                            const Linear& first, const Linear& second,
+                            id<MTLBuffer> input, id<MTLBuffer> output,
+                            uint32_t width);
+    void encode_matmul(id<MTLComputeCommandEncoder> encoder, const Linear& weight,
+                       id<MTLBuffer> input, id<MTLBuffer> output, uint32_t rows,
+                       NSUInteger input_offset = 0, NSUInteger output_offset = 0,
+                       uint32_t output_stride = 0);
     void encode_embedding(id<MTLComputeCommandEncoder> encoder, uint32_t width,
                           uint32_t token);
+    void encode_embedding_batch(id<MTLComputeCommandEncoder> encoder,
+                                uint32_t rows, const std::vector<int32_t>& tokens);
     void encode_rmsnorm(id<MTLComputeCommandEncoder> encoder, id<MTLBuffer> input,
                         id<MTLBuffer> weight, id<MTLBuffer> output, uint32_t width,
                         float epsilon);
+    void encode_rmsnorm_save(id<MTLComputeCommandEncoder> encoder, id<MTLBuffer> input,
+                             id<MTLBuffer> residual, id<MTLBuffer> weight,
+                             id<MTLBuffer> output, uint32_t width, float epsilon);
+    void encode_rmsnorm_batch(id<MTLComputeCommandEncoder> encoder, id<MTLBuffer> input,
+                              id<MTLBuffer> weight, id<MTLBuffer> output,
+                              uint32_t rows, uint32_t width, float epsilon);
+    void encode_residual_batch(id<MTLComputeCommandEncoder> encoder,
+                               id<MTLBuffer> input, id<MTLBuffer> residual,
+                               id<MTLBuffer> output, uint32_t count, float multiplier);
+    void encode_swiglu_batch(id<MTLComputeCommandEncoder> encoder,
+                             id<MTLBuffer> input, id<MTLBuffer> output,
+                             uint32_t rows, uint32_t width);
     void encode_weighted_add(id<MTLComputeCommandEncoder> encoder,
                              id<MTLBuffer> input, id<MTLBuffer> output,
                              uint32_t count, float weight);
 
     void encode_short_convolution(id<MTLComputeCommandEncoder> encoder,
                                   Layer& layer);
+    void encode_short_convolution_batch(id<MTLComputeCommandEncoder> encoder,
+                                        Layer& layer, uint32_t rows,
+                                        uint32_t base_position);
     void encode_gated_delta(id<MTLComputeCommandEncoder> encoder, Layer& layer);
     void encode_gated_delta_layer(id<MTLComputeCommandEncoder> encoder,
                                   Layer& layer);
     void encode_mamba2(id<MTLComputeCommandEncoder> encoder, Layer& layer);
     void encode_mamba2_layer(id<MTLComputeCommandEncoder> encoder, Layer& layer);
     void encode_attention(id<MTLComputeCommandEncoder> encoder, Layer& layer);
+    void encode_attention_batch(id<MTLComputeCommandEncoder> encoder,
+                                Layer& layer, uint32_t rows,
+                                uint32_t base_position);
     void encode_dense_feed_forward(id<MTLComputeCommandEncoder> encoder,
                                    Layer& layer);
+    void encode_dense_feed_forward_batch(id<MTLComputeCommandEncoder> encoder,
+                                         Layer& layer, uint32_t rows);
     void encode_moe(id<MTLCommandBuffer>& command_buffer,
                     id<MTLComputeCommandEncoder>& encoder, Layer& layer);
+    void encode_prefill_batch(id<MTLComputeCommandEncoder>& encoder,
+                              const std::vector<int32_t>& tokens);
+    bool supports_prefill_batch() const;
 
     void encode_token(id<MTLCommandBuffer>& command_buffer,
                       id<MTLComputeCommandEncoder>& encoder, int32_t token);
+    void apply_logits_transforms();
     void run_token(int32_t token);
     void reset();
     static std::vector<float> copy_buffer(id<MTLBuffer> source, size_t elements);

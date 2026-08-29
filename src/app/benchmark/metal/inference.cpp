@@ -21,6 +21,7 @@ struct Arguments {
     int decode_tokens = 8;
     int warmup = 1;
     int repetitions = 3;
+    int storage_mode = 0;
 };
 
 std::string value(int& index, int argc, char** argv, const std::string& key) {
@@ -38,10 +39,16 @@ Arguments parse(int argc, char** argv) {
         else if (key == "--decode-tokens") result.decode_tokens = std::stoi(value(index, argc, argv, key));
         else if (key == "--warmup") result.warmup = std::stoi(value(index, argc, argv, key));
         else if (key == "--repetitions") result.repetitions = std::stoi(value(index, argc, argv, key));
+        else if (key == "--storage-mode") {
+            const std::string mode = value(index, argc, argv, key);
+            if (mode == "shared") result.storage_mode = 0;
+            else if (mode == "private") result.storage_mode = 1;
+            else throw std::invalid_argument("storage mode must be shared or private");
+        }
         else if (key == "--help") {
             std::cout << "celeg-metal-bench --model PATH [--context N] "
                          "[--prompt-tokens N] [--decode-tokens N] "
-                         "[--warmup N] [--repetitions N]\n";
+                         "[--warmup N] [--repetitions N] [--storage-mode shared|private]\n";
             std::exit(0);
         } else {
             throw std::invalid_argument("unknown argument: " + key);
@@ -143,7 +150,9 @@ int main(int argc, char** argv) {
         generation.top_k = 1;
         generation.top_p = 1.0f;
         generation.repetition_penalty = 1.0f;
-        celeg::MetalModel model(args.model, args.context, {}, generation);
+        celeg::MetalModelOptions model_options;
+        model_options.storage_mode = args.storage_mode;
+        celeg::MetalModel model(args.model, args.context, model_options, generation);
         const int vocab = model.vocab_size();
         std::vector<int32_t> prompt(static_cast<size_t>(args.prompt_tokens));
         std::vector<int32_t> decode(static_cast<size_t>(args.decode_tokens));
@@ -175,6 +184,7 @@ int main(int argc, char** argv) {
                   << "  \"decode_tokens\": " << args.decode_tokens << ",\n"
                   << "  \"warmup\": " << args.warmup << ",\n"
                   << "  \"repetitions\": " << args.repetitions << ",\n"
+                  << "  \"storage_mode\": " << json_string(args.storage_mode == 1 ? "private" : "shared") << ",\n"
                   << "  \"prefill_ms\": " << std::setprecision(10) << prefill_ms << ",\n"
                   << "  \"prefill_samples_ms\": ";
         json_samples(std::cout, samples, &Sample::prefill_ms);

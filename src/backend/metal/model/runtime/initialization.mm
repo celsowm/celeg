@@ -84,7 +84,13 @@ MetalModel::MetalModel(const std::string& path, int context,
     size_t max_projection = static_cast<size_t>(3 * hidden);
     size_t max_recurrent_aux = static_cast<size_t>(hidden);
     size_t max_recurrent_output = static_cast<size_t>(hidden);
+    size_t max_batch_intermediate = static_cast<size_t>(hidden) * 8;
     for (const CompiledLayerProgram& layer : (*impl_).program.layers) {
+        if (const auto* dense = std::get_if<CompiledDenseFeedForwardProgram>(
+                &layer.feed_forward)) {
+            max_batch_intermediate = std::max(max_batch_intermediate,
+                                        static_cast<size_t>(dense->intermediate_size));
+        }
         if (const auto* gated_delta = std::get_if<GatedDeltaNetSpec>(&layer.mixer)) {
             const size_t key_width = static_cast<size_t>(gated_delta->key_heads) *
                 static_cast<size_t>(gated_delta->key_head_dim);
@@ -123,6 +129,29 @@ MetalModel::MetalModel(const std::string& path, int context,
     (*impl_).recurrent_a = (*impl_).zero_buffer(max_recurrent_aux * sizeof(float));
     (*impl_).recurrent_output = (*impl_).zero_buffer(max_recurrent_output * sizeof(float));
     (*impl_).logits = (*impl_).zero_buffer(static_cast<size_t>(vocab) * sizeof(float));
+    (*impl_).batch_capacity = context;
+    (*impl_).batch_tokens = (*impl_).zero_buffer(
+        static_cast<size_t>(context) * sizeof(uint32_t));
+    (*impl_).batch_hidden = (*impl_).zero_buffer(
+        static_cast<size_t>(context) * hidden * sizeof(float));
+    (*impl_).batch_residual = (*impl_).zero_buffer(
+        static_cast<size_t>(context) * hidden * sizeof(float));
+    (*impl_).batch_normed = (*impl_).zero_buffer(
+        static_cast<size_t>(context) * hidden * sizeof(float));
+    (*impl_).batch_projected = (*impl_).zero_buffer(
+        static_cast<size_t>(context) * max_projection * sizeof(float));
+    (*impl_).batch_operation = (*impl_).zero_buffer(
+        static_cast<size_t>(context) * hidden * sizeof(float));
+    (*impl_).batch_query = (*impl_).zero_buffer(
+        static_cast<size_t>(context) * hidden * sizeof(float));
+    (*impl_).batch_key = (*impl_).zero_buffer(
+        static_cast<size_t>(context) * hidden * sizeof(float));
+    (*impl_).batch_value = (*impl_).zero_buffer(
+        static_cast<size_t>(context) * hidden * sizeof(float));
+    (*impl_).batch_gate_up = (*impl_).zero_buffer(
+        static_cast<size_t>(context) * max_batch_intermediate * 2 * sizeof(float));
+    (*impl_).batch_activated = (*impl_).zero_buffer(
+        static_cast<size_t>(context) * max_batch_intermediate * sizeof(float));
 
     (*impl_).layers.reserve((*impl_).model.graph.layers.size());
     for (size_t index = 0; index < (*impl_).program.layers.size(); ++index) {
@@ -372,4 +401,3 @@ MetalModel::MetalModel(const std::string& path, int context,
 
 
 }
-

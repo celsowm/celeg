@@ -86,6 +86,27 @@ void MetalModel::Impl::encode_short_convolution(
     encode_matvec(encoder, layer.mixer_out, operation, hidden);
 }
 
+void MetalModel::Impl::encode_short_convolution_batch(
+    id<MTLComputeCommandEncoder> encoder, Layer& layer, uint32_t rows,
+    uint32_t base_position) {
+    const uint32_t hidden_width = static_cast<uint32_t>(model.graph.hidden);
+    const uint32_t cache_length = static_cast<uint32_t>(layer.cache_length);
+    set_buffer(encoder, batch_projected, 0);
+    set_buffer(encoder, layer.convolution_taps, 1);
+    set_buffer(encoder, layer.key_cache, 2);
+    set_buffer(encoder, batch_operation, 3);
+    set_bytes(encoder, &rows, sizeof(rows), 4);
+    set_bytes(encoder, &hidden_width, sizeof(hidden_width), 5);
+    set_bytes(encoder, &cache_length, sizeof(cache_length), 6);
+    set_bytes(encoder, &base_position, sizeof(base_position), 7);
+    id<MTLComputePipelineState> state = pipeline("celeg_shortconv_batch");
+    [encoder setComputePipelineState:state];
+    [encoder dispatchThreadgroups:MTLSizeMake((hidden_width + 255) / 256, 1, 1)
+       threadsPerThreadgroup:MTLSizeMake(256, 1, 1)];
+    ++command_dispatches;
+    encode_matmul(encoder, layer.mixer_out, batch_operation, batch_hidden, rows);
+}
+
 void MetalModel::Impl::encode_gated_delta_layer(
     id<MTLComputeCommandEncoder> encoder, Layer& layer) {
     const uint32_t key_width = static_cast<uint32_t>(
@@ -116,4 +137,3 @@ void MetalModel::Impl::encode_mamba2_layer(
 }
 
 }
-
