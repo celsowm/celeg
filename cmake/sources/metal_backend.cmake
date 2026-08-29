@@ -6,7 +6,16 @@ set(CELEG_METAL_BACKEND_SOURCES
 )
 
 set(CELEG_METAL_MODEL_SOURCES
-    src/backend/metal/model/model.mm
+    src/backend/metal/model/runtime/attention.mm
+    src/backend/metal/model/runtime/execution.mm
+    src/backend/metal/model/runtime/feed_forward.mm
+    src/backend/metal/model/runtime/initialization.mm
+    src/backend/metal/model/runtime/moe.mm
+    src/backend/metal/model/runtime/pipelines.mm
+    src/backend/metal/model/runtime/recurrent.mm
+    src/backend/metal/model/runtime/resources.mm
+    src/backend/metal/model/runtime/runtime.mm
+    src/backend/metal/model/runtime/state.mm
 )
 
 set(CELEG_METAL_SHADER_SOURCES

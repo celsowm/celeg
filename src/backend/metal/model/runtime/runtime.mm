@@ -1,0 +1,103 @@
+#include "detail.hpp"
+
+#include "celeg/backend/cpu/sampler.hpp"
+
+#include <chrono>
+#include <cstring>
+#include <stdexcept>
+#include <utility>
+#include <vector>
+
+namespace celeg {
+
+MetalModel::~MetalModel() = default;
+MetalModel::MetalModel(MetalModel&&) noexcept = default;
+MetalModel& MetalModel::operator=(MetalModel&&) noexcept = default;
+
+void MetalModel::reset_session() { (*impl_).reset(); }
+
+void MetalModel::prefill_session(const std::vector<int32_t>& tokens) {
+    if (tokens.empty()) throw std::invalid_argument("Metal prefill needs at least one token");
+    if (tokens.size() > static_cast<size_t>((*impl_).max_context)) {
+        throw std::invalid_argument("Metal prefill exceeds context");
+    }
+    (*impl_).reset();
+    const auto started = std::chrono::steady_clock::now();
+    for (const int32_t token : tokens) {
+        if (token < 0 || token >= (*impl_).model.topology.dims.vocab_size) {
+            throw std::invalid_argument("Metal token out of range");
+        }
+        (*impl_).seen[static_cast<size_t>(token)] = 1;
+        (*impl_).run_token(token);
+    }
+    (*impl_).metrics.last_prefill_ms =
+        std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - started).count();
+    (*impl_).metrics.prefill_tokens = tokens.size();
+    (*impl_).ready = true;
+}
+
+int32_t MetalModel::decode_session() {
+    if (!(*impl_).ready) throw std::runtime_error("Metal model is not ready for decode");
+    const auto started = std::chrono::steady_clock::now();
+    std::vector<float> values = session_logits();
+    const int32_t token = CpuSampler::sample(values, vocab_size(), (*impl_).generation,
+                                             (*impl_).seen, (*impl_).rng_state);
+    (*impl_).seen[static_cast<size_t>(token)] = 1;
+    (*impl_).run_token(token);
+    (*impl_).metrics.cumulative_decode_ms += std::chrono::duration<double, std::milli>(
+        std::chrono::steady_clock::now() - started).count();
+    ++(*impl_).metrics.decoded_tokens;
+    return token;
+}
+
+void MetalModel::eval_token_session(int32_t token) {
+    if (!(*impl_).ready) throw std::runtime_error("Metal model is not ready for token evaluation");
+    if (token < 0 || token >= vocab_size()) throw std::invalid_argument("Metal token out of range");
+    (*impl_).seen[static_cast<size_t>(token)] = 1;
+    (*impl_).run_token(token);
+    ++(*impl_).metrics.decoded_tokens;
+}
+
+void MetalModel::set_session_generation(GenerationConfig generation) {
+    generation.validate();
+    (*impl_).generation = std::move(generation);
+    (*impl_).rng_state = (*impl_).generation.seed;
+}
+
+std::vector<float> MetalModel::session_logits() const {
+    std::vector<float> values(static_cast<size_t>(vocab_size()));
+    std::memcpy(values.data(), (*impl_).logits.contents,
+                values.size() * sizeof(float));
+    return values;
+}
+
+int MetalModel::vocab_size() const { return (*impl_).model.topology.dims.vocab_size; }
+const std::string& MetalModel::model_identity() const { return (*impl_).model.provenance.identity; }
+std::string MetalModel::backend_description() const {
+    return std::string("metal-native device=") + (*impl_).device.name.UTF8String;
+}
+RuntimeMetrics MetalModel::metrics() const { return (*impl_).metrics; }
+MetalSessionSnapshot MetalModel::export_session_snapshot() const {
+    return (*impl_).export_snapshot();
+}
+void MetalModel::restore_session_snapshot(MetalSessionSnapshot snapshot) {
+    (*impl_).restore_snapshot(std::move(snapshot));
+}
+
+int MetalModel::session_position() const { return (*impl_).position; }
+bool MetalModel::session_ready_for_decode() const { return (*impl_).ready; }
+
+void MetalInferenceSession::reset() { owner_->reset_session(); }
+void MetalInferenceSession::prefill(const std::vector<int32_t>& tokens) { owner_->prefill_session(tokens); }
+int32_t MetalInferenceSession::decode() { return owner_->decode_session(); }
+void MetalInferenceSession::eval_token(int32_t token) { owner_->eval_token_session(token); }
+void MetalInferenceSession::set_generation_config(GenerationConfig generation) {
+    owner_->set_session_generation(std::move(generation));
+}
+std::vector<float> MetalInferenceSession::copy_logits() const { return owner_->session_logits(); }
+int MetalInferenceSession::position() const { return owner_->session_position(); }
+bool MetalInferenceSession::ready_for_decode() const { return owner_->session_ready_for_decode(); }
+
+}
+
