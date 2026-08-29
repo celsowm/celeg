@@ -84,9 +84,12 @@ std::vector<float> run_matvec(id<MTLDevice> device,
     NSString* source = [NSString stringWithUTF8String:celeg::metal_detail::kInferenceShader];
     id<MTLLibrary> library = [device newLibraryWithSource:source options:nil error:&error];
     if (!library) throw std::runtime_error("Metal matvec shader compilation failed");
+    const bool tuned = tensor.type == celeg::GgmlType::Q4_0;
     const char* kernel = nullptr;
     switch (tensor.type) {
-        case celeg::GgmlType::Q4_0: kernel = "celeg_matvec_q4_0"; break;
+        case celeg::GgmlType::Q4_0:
+            kernel = tuned ? "celeg_matvec_q4_0_tuned" : "celeg_matvec_q4_0";
+            break;
         case celeg::GgmlType::Q4_K: kernel = "celeg_matvec_q4k"; break;
         case celeg::GgmlType::Q5_K: kernel = "celeg_matvec_q5k"; break;
         case celeg::GgmlType::Q6_K: kernel = "celeg_matvec_q6k"; break;
@@ -121,8 +124,14 @@ std::vector<float> run_matvec(id<MTLDevice> device,
     [encoder setBytes:&rows length:sizeof(rows) atIndex:3];
     [encoder setBytes:&cols length:sizeof(cols) atIndex:4];
     [encoder setBytes:&row_bytes length:sizeof(row_bytes) atIndex:5];
-    [encoder dispatchThreadgroups:MTLSizeMake((rows + 7u) / 8u, 1, 1)
-             threadsPerThreadgroup:MTLSizeMake(256, 1, 1)];
+    if (tuned) {
+        [encoder setThreadgroupMemoryLength:8u * sizeof(float) atIndex:0];
+        [encoder dispatchThreadgroups:MTLSizeMake((rows + 1u) / 2u, 1, 1)
+                 threadsPerThreadgroup:MTLSizeMake(128, 1, 1)];
+    } else {
+        [encoder dispatchThreadgroups:MTLSizeMake((rows + 7u) / 8u, 1, 1)
+                 threadsPerThreadgroup:MTLSizeMake(256, 1, 1)];
+    }
     [encoder endEncoding];
     [command_buffer commit];
     [command_buffer waitUntilCompleted];

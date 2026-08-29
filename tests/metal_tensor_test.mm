@@ -1,4 +1,5 @@
 #include "metal_tensor_source.hpp"
+#include "metal_inference_source.hpp"
 
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
@@ -133,6 +134,51 @@ int main() {
         }
         std::cout << "max_error=" << maximum << '\n';
         if (!(maximum < 1.0e-3f)) throw std::runtime_error("tensor result differs from reference");
+
+        NSString* inference_source =
+            [NSString stringWithUTF8String:celeg::metal_detail::kInferenceShader];
+        id<MTLLibrary> inference_library =
+            [device newLibraryWithSource:inference_source options:nil error:&error];
+        if (!inference_library) throw std::runtime_error("inference shader compilation failed");
+        id<MTLFunction> matvec_function =
+            [inference_library newFunctionWithName:@"celeg_matvec_tuned_f16"];
+        if (!matvec_function) throw std::runtime_error("tuned matvec function is missing");
+        id<MTLComputePipelineState> matvec_pipeline =
+            [device newComputePipelineStateWithFunction:matvec_function error:&error];
+        if (!matvec_pipeline) throw std::runtime_error("tuned matvec pipeline creation failed");
+        std::vector<float> matvec_output(rows, 0.0f);
+        id<MTLBuffer> matvec_output_buffer = [device newBufferWithBytes:matvec_output.data()
+                                                                    length:matvec_output.size() * sizeof(float)
+                                                                   options:MTLResourceStorageModeShared];
+        command_buffer = [queue commandBuffer];
+        encoder = [command_buffer computeCommandEncoder];
+        [encoder setComputePipelineState:matvec_pipeline];
+        [encoder setBuffer:weights_buffer offset:0 atIndex:0];
+        [encoder setBuffer:input_buffer offset:0 atIndex:1];
+        [encoder setBuffer:matvec_output_buffer offset:0 atIndex:2];
+        [encoder setBytes:&rows length:sizeof(rows) atIndex:3];
+        [encoder setBytes:&cols length:sizeof(cols) atIndex:4];
+        [encoder setThreadgroupMemoryLength:8u * sizeof(float) atIndex:0];
+        [encoder dispatchThreadgroups:MTLSizeMake((rows + 1u) / 2u, 1, 1)
+                 threadsPerThreadgroup:MTLSizeMake(128, 1, 1)];
+        [encoder endEncoding];
+        [command_buffer commit];
+        [command_buffer waitUntilCompleted];
+        if (command_buffer.status != MTLCommandBufferStatusCompleted) {
+            throw std::runtime_error("tuned matvec dispatch failed");
+        }
+        std::copy_n(static_cast<const float*>(matvec_output_buffer.contents),
+                    matvec_output.size(), matvec_output.data());
+        maximum = 0.0f;
+        for (uint32_t row = 0; row < rows; ++row) {
+            float expected = 0.0f;
+            for (uint32_t col = 0; col < cols; ++col) {
+                expected += half_value(weight_bits(row, col)) * input[col];
+            }
+            maximum = std::max(maximum, std::abs(expected - matvec_output[row]));
+        }
+        std::cout << "matvec_max_error=" << maximum << '\n';
+        if (!(maximum < 1.0e-3f)) throw std::runtime_error("tuned matvec differs from reference");
         return 0;
     } catch (const std::exception& error) {
         std::cerr << "error: " << error.what() << '\n';

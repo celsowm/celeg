@@ -1,6 +1,7 @@
 #include "detail.hpp"
 
 #include <algorithm>
+#include <cstdlib>
 #include <stdexcept>
 #include <string>
 
@@ -144,14 +145,42 @@ void MetalModel::Impl::encode_matvec(id<MTLComputeCommandEncoder> encoder,
             return;
         }
         if (weight.storage == MetalModel::Impl::LinearStorage::Float16) {
-            dispatch_cooperative(encoder, "celeg_matvec_f16", groups);
+            if (std::getenv("CELEG_METAL_TUNED_DISABLE")) {
+                dispatch_cooperative(encoder, "celeg_matvec_f16", groups);
+                return;
+            }
+            id<MTLComputePipelineState> state = pipeline("celeg_matvec_tuned_f16");
+            [encoder setComputePipelineState:state];
+            [encoder setThreadgroupMemoryLength:8u * sizeof(float) atIndex:0];
+            [encoder dispatchThreadgroups:MTLSizeMake((weight.rows + 1u) / 2u, 1, 1)
+               threadsPerThreadgroup:MTLSizeMake(128, 1, 1)];
+            ++command_dispatches;
             return;
         }
         if (weight.storage == MetalModel::Impl::LinearStorage::BFloat16) {
-            dispatch_cooperative(encoder, "celeg_matvec_bf16", groups);
+            if (std::getenv("CELEG_METAL_TUNED_DISABLE")) {
+                dispatch_cooperative(encoder, "celeg_matvec_bf16", groups);
+                return;
+            }
+            id<MTLComputePipelineState> state = pipeline("celeg_matvec_tuned_bf16");
+            [encoder setComputePipelineState:state];
+            [encoder setThreadgroupMemoryLength:8u * sizeof(float) atIndex:0];
+            [encoder dispatchThreadgroups:MTLSizeMake((weight.rows + 1u) / 2u, 1, 1)
+               threadsPerThreadgroup:MTLSizeMake(128, 1, 1)];
+            ++command_dispatches;
             return;
         }
         set_bytes(encoder, &weight.row_bytes, sizeof(weight.row_bytes), 5);
+        if (!std::getenv("CELEG_METAL_TUNED_DISABLE") &&
+            weight.storage == MetalModel::Impl::LinearStorage::Q4_0) {
+            id<MTLComputePipelineState> state = pipeline("celeg_matvec_q4_0_tuned");
+            [encoder setComputePipelineState:state];
+            [encoder setThreadgroupMemoryLength:8u * sizeof(float) atIndex:0];
+            [encoder dispatchThreadgroups:MTLSizeMake((weight.rows + 1u) / 2u, 1, 1)
+               threadsPerThreadgroup:MTLSizeMake(128, 1, 1)];
+            ++command_dispatches;
+            return;
+        }
         std::string_view kernel;
         switch (weight.storage) {
             case MetalModel::Impl::LinearStorage::Q4_0: kernel = "celeg_matvec_q4_0"; break;

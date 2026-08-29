@@ -21,6 +21,11 @@ set(CELEG_METAL_MODEL_SOURCES
 set(CELEG_METAL_SHADER_SOURCES
     src/backend/metal/kernels/probe.metal
     src/backend/metal/kernels/inference.metal
+    src/backend/metal/kernels/inference/vector.metal
+    src/backend/metal/kernels/inference/state.metal
+    src/backend/metal/kernels/inference/projection.metal
+    src/backend/metal/kernels/inference/batch.metal
+    src/backend/metal/kernels/inference/pair.metal
     src/backend/metal/kernels/tensor.metal
 )
 

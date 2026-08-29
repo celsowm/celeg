@@ -215,16 +215,28 @@ if(CELEG_ENABLE_METAL)
         message(FATAL_ERROR "CELEG_ENABLE_METAL requires an Objective-C++ compiler")
     endif()
     enable_language(OBJCXX)
+    set(CELEG_METAL_INFERENCE_SOURCES
+        src/backend/metal/kernels/inference/vector.metal
+        src/backend/metal/kernels/inference/state.metal
+        src/backend/metal/kernels/inference/projection.metal
+        src/backend/metal/kernels/inference/batch.metal
+        src/backend/metal/kernels/inference/pair.metal)
     set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
         "${CMAKE_CURRENT_SOURCE_DIR}/src/backend/metal/kernels/probe.metal"
         "${CMAKE_CURRENT_SOURCE_DIR}/src/backend/metal/kernels/inference.metal"
-        "${CMAKE_CURRENT_SOURCE_DIR}/src/backend/metal/kernels/tensor.metal")
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/backend/metal/kernels/tensor.metal"
+        ${CELEG_METAL_INFERENCE_SOURCES})
     find_library(CELEG_METAL_FRAMEWORK Metal REQUIRED)
     find_library(CELEG_FOUNDATION_FRAMEWORK Foundation REQUIRED)
     file(READ "${CMAKE_CURRENT_SOURCE_DIR}/src/backend/metal/kernels/probe.metal"
         CELEG_METAL_PROBE_SOURCE)
-    file(READ "${CMAKE_CURRENT_SOURCE_DIR}/src/backend/metal/kernels/inference.metal"
-        CELEG_METAL_INFERENCE_SOURCE)
+    set(CELEG_METAL_INFERENCE_SOURCE "")
+    foreach(CELEG_METAL_INFERENCE_SOURCE_FILE IN LISTS CELEG_METAL_INFERENCE_SOURCES)
+        file(READ "${CMAKE_CURRENT_SOURCE_DIR}/${CELEG_METAL_INFERENCE_SOURCE_FILE}"
+            CELEG_METAL_INFERENCE_SOURCE_PART)
+        string(APPEND CELEG_METAL_INFERENCE_SOURCE
+            "${CELEG_METAL_INFERENCE_SOURCE_PART}\n")
+    endforeach()
     file(READ "${CMAKE_CURRENT_SOURCE_DIR}/src/backend/metal/kernels/tensor.metal"
         CELEG_METAL_TENSOR_SOURCE)
     file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/generated")
