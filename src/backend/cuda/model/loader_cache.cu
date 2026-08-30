@@ -27,6 +27,9 @@ std::shared_ptr<SharedModelWeights> CudaWeightCache::acquire(
     if (!weights) {
         weights = std::make_shared<SharedModelWeights>();
         weights->residency_fingerprint = residency_fingerprint;
+        weights->memory_kind = managed_weights
+            ? CudaMemoryKind::Managed
+            : CudaMemoryKind::Device;
         weights->residency_coordinator =
             std::make_shared<CudaExpertResidencyCoordinator>(*weights);
         weights->expert_source = std::make_shared<CudaExpertSource>(*weights);
