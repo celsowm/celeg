@@ -140,13 +140,10 @@ void load_mtp_weights(CudaCompiledModel& model, const IWeightRepository& repo) {
                     resources.program_.hidden * sizeof(__nv_bfloat16);
                 const size_t down_bytes = static_cast<size_t>(resources.program_.hidden) *
                     inter * sizeof(__nv_bfloat16);
-                auto cache = std::make_unique<ExpertLayerCache>(
+                auto controller = std::make_unique<ResidencyController>(
                     E, model.workspace_.expert_offload_plan_.experts_per_layer,
-                    gate_up_bytes, down_bytes);
-                cache->set_policy(resources.options().expert_offload.policy);
-                auto controller = std::make_unique<ResidencyController>();
-                controller->cache = std::move(cache);
-                controller->transfer_stream = std::make_unique<CudaStream>();
+                    gate_up_bytes, down_bytes,
+                    resources.options().expert_offload.policy);
                 if (resources.options().expert_offload.backing == ExpertBackingMode::DiskCached) {
                     std::vector<const __nv_bfloat16*> empty(static_cast<size_t>(E), nullptr);
                     controller->cache->set_host_sources(empty, empty);
