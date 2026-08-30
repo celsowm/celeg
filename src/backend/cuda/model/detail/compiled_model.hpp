@@ -19,6 +19,7 @@
 #include "layer_state.hpp"
 #include "shared_weights.hpp"
 #include "resources.hpp"
+#include "speculative_state.hpp"
 #include "celeg/model/session.hpp"
 
 #include <chrono>
@@ -42,31 +43,8 @@ struct CudaCompiledModel {
     static constexpr int kPrefillAttnChunkTokens = kAttentionPrefillChunkTokens;
     static constexpr int kMaxGemmAttentionRows = kAttentionMaxGemmRows;
 
-    struct SpeculativeLayerSnapshot {
-        DeviceBuffer<__nv_bfloat16> conv_state;
-        DeviceBuffer<__nv_bfloat16> ssm_state;
-        DeviceBuffer<__nv_bfloat16> recurrent_state;
-    };
-
-    struct SpeculativeStateSnapshot {
-        bool valid = false;
-        int position = 0;
-        std::array<int32_t, 3> next_rope_position{0, 0, 0};
-        SessionPhase phase = SessionPhase::Empty;
-        bool active_segmented_attention = false;
-        bool mtp_candidate_ready = false;
-        RuntimeMetrics metrics;
-        DeviceBuffer<uint8_t> seen_tokens;
-        DeviceBuffer<__nv_bfloat16> logits;
-        DeviceBuffer<__nv_bfloat16> mtp_logits;
-        DeviceBuffer<int32_t> mtp_candidate;
-        DeviceBuffer<int32_t> mtp_target_candidate;
-        DeviceBuffer<uint64_t> rng_state;
-        DeviceBuffer<int32_t> position_device;
-        DeviceBuffer<int32_t> mrope_position_device;
-        std::vector<SpeculativeLayerSnapshot> layers;
-        std::vector<SpeculativeLayerSnapshot> mtp_layers;
-    };
+    using SpeculativeLayerSnapshot = CudaSpeculativeLayerState;
+    using SpeculativeStateSnapshot = CudaSpeculativeState;
 
     CudaModelResources resources_;
     CudaWeightCache& weight_cache_;
@@ -126,7 +104,7 @@ struct CudaCompiledModel {
     void restore_prefix_state(const PrefixState& state);
     void snapshot_speculative_state();
     void restore_speculative_state();
-    void discard_speculative_state() { speculative_snapshot_.valid = false; }
+    void discard_speculative_state() { speculative_snapshot_.discard(); }
     bool mtp_enabled() const { return resources_.mtp_.available(); }
     SessionStore::SessionState make_session_state();
     void release_local_kv_cache();
@@ -262,7 +240,7 @@ struct CudaCompiledModel {
     PinnedBuffer<int32_t> mtp_verification_host_{2};
     bool mtp_candidate_ready_ = false;
     bool mtp_candidate_used_ = false;
-    SpeculativeStateSnapshot speculative_snapshot_;
+    CudaSpeculativeState speculative_snapshot_;
 };
 
 }
