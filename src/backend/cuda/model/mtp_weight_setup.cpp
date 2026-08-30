@@ -56,7 +56,7 @@ MoeExpertTensorNames mtp_expert_names(const std::string& experts_prefix,
 void load_mtp_weights(CudaCompiledModel& model, const IWeightRepository& repo) {
     CudaModelResources& resources = model.resources_;
     if (!resources.options().enable_mtp) return;
-    if (resources.dims_.mtp_num_hidden_layers <= 0) {
+    if (resources.dims().mtp_num_hidden_layers <= 0) {
         throw std::invalid_argument("MTP was requested but the checkpoint has no MTP layers");
     }
     if (!repo.contains("mtp.fc.weight")) {
@@ -78,7 +78,7 @@ void load_mtp_weights(CudaCompiledModel& model, const IWeightRepository& repo) {
 
     CudaMtpResources& mtp = resources.mtp_;
     mtp.enabled = true;
-    mtp.layer_count = resources.dims_.mtp_num_hidden_layers;
+    mtp.layer_count = resources.dims().mtp_num_hidden_layers;
     mtp.fc = resources.weight_loader_->load_linear_weight(
         repo, "mtp.fc.weight",
         {resources.program_.hidden, 2 * resources.program_.hidden});
@@ -121,7 +121,7 @@ void load_mtp_weights(CudaCompiledModel& model, const IWeightRepository& repo) {
             MoeFfnWeights moe{};
             moe.router = resources.weight_loader_->load_router_weight_named(
                 repo, prefix + ".mlp.gate.weight", E, resources.program_.hidden);
-            const int resource_layer = resources.shape_.num_hidden_layers + index;
+            const int resource_layer = resources.shape().num_hidden_layers + index;
             DeviceBuffer<float>& router_float =
                 model.workspace_.moe_router_float_[static_cast<size_t>(resource_layer)];
             router_float.reset(static_cast<size_t>(E) * resources.program_.hidden);
