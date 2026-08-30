@@ -207,12 +207,26 @@ ConcurrentEngineOptions cuda_engine_options(const celeg_cuda_engine_options& inp
 
 #ifdef CELEG_API_WITH_METAL
 MetalModelOptions metal_options(const celeg_metal_model_options& input) {
-    if (input.weight_mode < 0 || input.kv_cache_mode < 0 || input.storage_mode < 0 ||
-        input.kv_page_tokens <= 0) {
-        throw std::invalid_argument("Metal model options must be non-negative");
+    if (input.weight_mode != CELEG_METAL_WEIGHT_BF16) {
+        throw std::invalid_argument("invalid Metal weight mode");
     }
-    return {input.weight_mode, input.kv_cache_mode, input.storage_mode,
-            input.kv_page_tokens};
+    if (input.kv_cache_mode != CELEG_METAL_KV_CACHE_BF16) {
+        throw std::invalid_argument("invalid Metal KV cache mode");
+    }
+    if (input.storage_mode != CELEG_METAL_STORAGE_SHARED &&
+        input.storage_mode != CELEG_METAL_STORAGE_PRIVATE) {
+        throw std::invalid_argument("invalid Metal storage mode");
+    }
+    if (input.kv_page_tokens <= 0) {
+        throw std::invalid_argument("Metal KV page size must be positive");
+    }
+    return {
+        MetalWeightMode::Bf16,
+        MetalKvCacheMode::Bf16,
+        input.storage_mode == CELEG_METAL_STORAGE_PRIVATE
+            ? MetalStorageMode::Private : MetalStorageMode::Shared,
+        input.kv_page_tokens,
+    };
 }
 
 MetalEngineOptions metal_engine_options(const celeg_metal_engine_options& input) {
