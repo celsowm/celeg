@@ -29,7 +29,7 @@ void CudaCompiledModel::run_token_layer(Layer& layer, int layer_index,
     const bool mixer_after = semantics.mixer_norm.after.has_value();
     const bool mixer_only =
         std::holds_alternative<std::monostate>(semantics.feed_forward);
-    const bool fuse_mixer_residual = resources_.options_.fused_residuals &&
+    const bool fuse_mixer_residual = resources_.options().fused_residuals &&
         std::holds_alternative<CompiledAttentionProgram>(semantics.mixer) &&
         !mixer_after && !mixer_only;
 
