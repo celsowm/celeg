@@ -41,7 +41,7 @@ void CudaWeightSetup::load(CudaCompiledModel& model,
     model.resources_.embedding_ = model.resources_.weight_loader_->load_linear_weight(
         repo, tensor_name(model.resources_.model_.weight_plan.requests,
                           TensorRole::TokenEmbedding),
-        {model.resources_.dims_.vocab_size, model.resources_.program_.hidden});
+        {model.resources_.dims().vocab_size, model.resources_.program_.hidden});
     const NormSpec& final_norm = model.resources_.program_.final_norm;
     const std::string final_name = final_norm.weightless()
         ? std::string{} : tensor_name(model.resources_.model_.weight_plan.requests,
@@ -66,7 +66,7 @@ void CudaWeightSetup::load(CudaCompiledModel& model,
         per_layer.embedding = model.resources_.weight_loader_->load_linear_weight(
             repo, tensor_name(model.resources_.model_.weight_plan.requests,
                               TensorRole::PerLayerEmbedding),
-            {model.resources_.dims_.vocab_size,
+            {model.resources_.dims().vocab_size,
              static_cast<int>(per_layer.plan.packed_width)});
         per_layer.context_projection = model.resources_.weight_loader_->load_linear_weight(
             repo, tensor_name(model.resources_.model_.weight_plan.requests,
@@ -92,7 +92,7 @@ void CudaWeightSetup::load(CudaCompiledModel& model,
         repo.contains(lm_head_name)) {
         model.resources_.lm_head_ = model.resources_.weight_loader_->load_linear_weight(
             repo, lm_head_name,
-        {model.resources_.dims_.vocab_size, model.resources_.program_.hidden});
+        {model.resources_.dims().vocab_size, model.resources_.program_.hidden});
     }
 
     load_layers(repo);
