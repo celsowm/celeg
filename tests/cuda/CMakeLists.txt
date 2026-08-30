@@ -6,6 +6,11 @@ if(TARGET celeg_cuda_backend)
     target_link_libraries(cuda_attention_capability_test PRIVATE celeg_base)
     add_test(NAME cuda_attention_capability_test COMMAND cuda_attention_capability_test)
 
+    add_executable(cuda_model_options_test tests/cuda/cuda_model_options_test.cpp)
+    target_include_directories(cuda_model_options_test PRIVATE include src tests)
+    target_link_libraries(cuda_model_options_test PRIVATE celeg_base)
+    add_test(NAME cuda_model_options_test COMMAND cuda_model_options_test)
+
     add_executable(cuda_kernels_test
         tests/cuda/cuda_kernels_test.cu
         tests/cuda/sampling_tests.cu
