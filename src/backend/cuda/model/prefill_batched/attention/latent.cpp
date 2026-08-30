@@ -10,7 +10,7 @@ void run_latent_attention(
     const CompiledLayerProgram& semantics,
     int rows) {
     const AttentionSpec& layout = attention.layout;
-    if (model.resources_.options_.kv_cache_mode == KvCacheMode::Int8) {
+    if (model.resources_.options().kv_cache_mode == KvCacheMode::Int8) {
         throw std::invalid_argument(
             "CUDA latent attention requires BF16 state storage");
     }
