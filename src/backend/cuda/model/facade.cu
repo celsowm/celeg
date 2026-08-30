@@ -112,7 +112,7 @@ bool CudaInferenceSession::decode_pending() const { return owner_->state_->decod
 int CudaInferenceSession::position() const { return owner_->state_->position(); }
 
 std::vector<float> CudaModelDiagnostics::copy_logits() const { return owner_->state_->copy_logits(); }
-int CudaModelDiagnostics::vocab_size() const { return owner_->state_->resources_.dims_.vocab_size; }
+int CudaModelDiagnostics::vocab_size() const { return owner_->state_->resources_.dims().vocab_size; }
 DecodeBenchmark CudaModelDiagnostics::benchmark_decode(int warmup_steps, int measured_steps) {
     return owner_->state_->benchmark_decode(warmup_steps, measured_steps);
 }
