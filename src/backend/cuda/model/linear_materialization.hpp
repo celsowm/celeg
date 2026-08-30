@@ -58,7 +58,6 @@ std::optional<LinearSource> classify_linear_source(
 struct MaterializationPlan {
     LinearSource source;
     WeightMode mode = WeightMode::Bf16;
-    LinearKernelKind kernel = LinearKernelKind::Bf16Cublas;
     std::string name;
     int rows = 0;
     int cols = 0;
