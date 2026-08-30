@@ -74,7 +74,7 @@ DeviceWeight materialize_linear(const MaterializationPlan& plan,
                                   dense.size() * sizeof(__nv_bfloat16),
                                   cudaMemcpyHostToDevice));
             const std::byte* data = reinterpret_cast<const std::byte*>(dense.data());
-            if (plan.mode == WeightMode::Int8 || plan.mode == WeightMode::Int4) {
+            if (is_rowwise_quantized_weight_mode(plan.mode)) {
                 cuda_loader_detail::quantize_and_bind(
                     weight, data, plan.rows, plan.cols, plan.mode,
                     weight.bf16_storage.data());
@@ -95,7 +95,7 @@ DeviceWeight materialize_linear(const MaterializationPlan& plan,
                 if (source.tensor.bytes != count * sizeof(__nv_bfloat16)) {
                     throw std::runtime_error("invalid BF16 linear byte count: " + plan.name);
                 }
-                if (plan.mode == WeightMode::Int8 || plan.mode == WeightMode::Int4) {
+                if (is_rowwise_quantized_weight_mode(plan.mode)) {
                     cuda_loader_detail::quantize_and_bind(
                         weight, source.tensor.data, plan.rows, plan.cols, plan.mode);
                 } else {
@@ -111,7 +111,7 @@ DeviceWeight materialize_linear(const MaterializationPlan& plan,
                 for (std::size_t index = 0; index < count; ++index) {
                     dense[index] = __float2bfloat16(decoded[index]);
                 }
-                if (plan.mode == WeightMode::Int8 || plan.mode == WeightMode::Int4) {
+                if (is_rowwise_quantized_weight_mode(plan.mode)) {
                     cuda_loader_detail::quantize_and_bind(
                         weight, reinterpret_cast<const std::byte*>(dense.data()),
                         plan.rows, plan.cols, plan.mode);
@@ -153,7 +153,7 @@ DeviceWeight materialize_linear(const MaterializationPlan& plan,
                 CELEG_CUDA(cudaMemcpy(weight.bf16_storage.data(), host.data(),
                                       host.size() * sizeof(__nv_bfloat16),
                                       cudaMemcpyHostToDevice));
-                if (plan.mode == WeightMode::Int8 || plan.mode == WeightMode::Int4) {
+                if (is_rowwise_quantized_weight_mode(plan.mode)) {
                     cuda_loader_detail::quantize_and_bind(
                         weight, reinterpret_cast<const std::byte*>(host.data()),
                         plan.rows, plan.cols, plan.mode,
@@ -170,7 +170,7 @@ DeviceWeight materialize_linear(const MaterializationPlan& plan,
             launch_gguf_dequant(raw.data(), type, weight.bf16_storage.data(),
                                 plan.rows, plan.cols, nullptr);
             CELEG_CUDA(cudaStreamSynchronize(nullptr));
-            if (plan.mode == WeightMode::Int8 || plan.mode == WeightMode::Int4) {
+            if (is_rowwise_quantized_weight_mode(plan.mode)) {
                 std::vector<__nv_bfloat16> host(weight.bf16_storage.size());
                 CELEG_CUDA(cudaMemcpy(host.data(), weight.bf16_storage.data(),
                                       host.size() * sizeof(__nv_bfloat16),
