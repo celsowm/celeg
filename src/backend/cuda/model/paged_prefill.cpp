@@ -40,7 +40,7 @@ void CudaCompiledModel::prefill_chunk_paged(
             "use packed or tokenwise prefill");
     }
     validate_token_ids(tokens);
-    if (paged_kv.mode() != resources_.options_.kv_cache_mode) {
+    if (paged_kv.mode() != resources_.options().kv_cache_mode) {
         throw std::invalid_argument("model and physical paged KV modes differ");
     }
     if (begin) {
