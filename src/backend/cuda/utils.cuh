@@ -19,28 +19,6 @@ enum class CudaMemoryKind : std::uint8_t {
     Managed,
 };
 
-inline thread_local bool g_cuda_managed_weight_allocations = false;
-
-class CudaManagedWeightAllocationScope {
-public:
-    explicit CudaManagedWeightAllocationScope(bool enabled)
-        : previous_(g_cuda_managed_weight_allocations) {
-        g_cuda_managed_weight_allocations = enabled;
-    }
-    ~CudaManagedWeightAllocationScope() {
-        g_cuda_managed_weight_allocations = previous_;
-    }
-
-private:
-    bool previous_;
-};
-
-inline CudaMemoryKind cuda_current_memory_kind() noexcept {
-    return g_cuda_managed_weight_allocations
-        ? CudaMemoryKind::Managed
-        : CudaMemoryKind::Device;
-}
-
 struct CudaAllocationSnapshot {
     size_t device_allocations = 0;
     size_t device_bytes = 0;
@@ -257,7 +235,7 @@ private:
 template <typename T>
 class DeviceBuffer {
 public:
-    DeviceBuffer() : memory_kind_(cuda_current_memory_kind()) {}
+    DeviceBuffer() : memory_kind_(CudaMemoryKind::Device) {}
     explicit DeviceBuffer(CudaMemoryKind memory_kind) : memory_kind_(memory_kind) {}
     explicit DeviceBuffer(size_t count) : DeviceBuffer() { reset(count); }
     DeviceBuffer(size_t count, CudaMemoryKind memory_kind)
