@@ -35,7 +35,8 @@ public:
     static std::shared_ptr<SharedModelWeights> acquire(
         const std::string& model_path,
         WeightMode weight_mode,
-        const std::string& residency_fingerprint);
+        const std::string& residency_fingerprint,
+        bool managed_weights = false);
 
     WeightLoader(std::shared_ptr<SharedModelWeights> weights,
                  WeightMode weight_mode);
