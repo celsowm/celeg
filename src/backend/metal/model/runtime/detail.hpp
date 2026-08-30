@@ -65,6 +65,13 @@ struct MetalModel::Impl {
     };
 
     struct Layer {
+        enum class MixerKind : uint8_t {
+            Attention,
+            ShortConvolution,
+            GatedDelta,
+            Mamba2,
+        };
+
         struct Expert {
             std::string gate_name;
             std::string up_name;
@@ -80,6 +87,7 @@ struct MetalModel::Impl {
 
         id<MTLBuffer> operator_norm = nil;
         id<MTLBuffer> ffn_norm = nil;
+        MixerKind mixer_kind = MixerKind::Attention;
         bool convolution = false;
         bool gated_delta = false;
         bool mamba2 = false;
@@ -191,7 +199,6 @@ struct MetalModel::Impl {
     std::chrono::steady_clock::time_point command_started;
     uint64_t command_dispatches = 0;
 
-
     id<MTLBuffer> buffer(const std::vector<float>& values);
     id<MTLBuffer> immutable_buffer(const void* data, size_t bytes) const;
     id<MTLBuffer> zero_buffer(size_t bytes);
@@ -299,7 +306,6 @@ struct MetalModel::Impl {
     static std::vector<float> copy_buffer(id<MTLBuffer> source, size_t elements);
     MetalSessionSnapshot export_snapshot() const;
     void restore_snapshot(MetalSessionSnapshot snapshot);
-
 };
 
 }
