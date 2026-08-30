@@ -23,6 +23,8 @@ if(TARGET celeg_metal_backend)
     endforeach()
 
     if(TARGET celeg_serve_metal)
+        target_link_libraries(metal_inference_test PRIVATE celeg_cpu_backend celeg_serve_metal)
+
         add_executable(metal_service_test tests/metal/metal_service_test.mm)
         target_include_directories(metal_service_test PRIVATE include src tests)
         target_link_libraries(metal_service_test PRIVATE celeg_base celeg_metal_backend celeg_serve_metal)
