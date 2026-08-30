@@ -1,6 +1,7 @@
 #pragma once
 
 #include "celeg/backend/metal/model.hpp"
+#include "celeg/checkpoint/tensor_codec.hpp"
 #include "celeg/detail/checkpoint/bootstrap.hpp"
 #include "celeg/model/program.hpp"
 #include "celeg/model/linear_operation.hpp"
@@ -22,9 +23,6 @@
 namespace celeg::metal_model_detail {
 
 std::string ns_string(NSString* value);
-std::vector<float> tensor_values(const HostTensorView& view,
-                                 std::span<const int64_t> expected,
-                                 const std::string& name);
 const TensorRequest& request_for(std::span<const TensorRequest> requests,
                                  TensorRole role, int layer = -1,
                                  int expert = -1);

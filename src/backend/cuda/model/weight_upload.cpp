@@ -3,6 +3,7 @@
 #include "celeg/backend/cuda/moe/expert_residency.hpp"
 #include "celeg/backend/cuda/kernels/gguf.cuh"
 #include "celeg/checkpoint/gguf_blocks.hpp"
+#include "celeg/checkpoint/tensor_codec.hpp"
 #include "celeg/checkpoint/tensor_names.hpp"
 #include "weight_loader_internal.hpp"
 
@@ -31,24 +32,13 @@ const __nv_bfloat16* upload_bf16(SharedModelWeights& weights,
         return cached->second.bf16_storage.data();
     }
     const HostTensorView tensor = repo.tensor(name);
+    const std::vector<int64_t> target_shape = expected.empty() ? tensor.shape : expected;
     if (!expected.empty()) {
-        bool shape_ok = (tensor.shape == expected);
-        if (!shape_ok && tensor.shape.size() == 2 && expected.size() == 3 &&
-            tensor.shape[0] == expected[0] &&
-            tensor.shape[1] == expected[1] * expected[2] &&
-            expected[1] == 1) {
-            shape_ok = true;
-        }
-        if (!shape_ok && expected.size() == 1) {
-            size_t elements = 1;
-            for (const int64_t dimension : tensor.shape) elements *= static_cast<size_t>(dimension);
-            shape_ok = elements == static_cast<size_t>(expected.front());
-        }
-        if (!shape_ok) {
+        if (!tensor_shape_is_compatible(tensor.shape, expected)) {
             throw std::runtime_error("unexpected shape for " + name);
         }
     }
-    const size_t count = cuda_loader_detail::checked_element_count(tensor.shape);
+    const size_t count = tensor_element_count(target_shape, name);
 
     DeviceWeight weight;
     weight.shape = expected.empty() ? tensor.shape : expected;
@@ -60,45 +50,16 @@ const __nv_bfloat16* upload_bf16(SharedModelWeights& weights,
         }
         CELEG_CUDA(cudaMemcpy(weight.bf16_storage.data(), tensor.data, tensor.bytes,
                             cudaMemcpyHostToDevice));
-    } else if (tensor.dtype == TensorDType::F32) {
-        if (tensor.bytes != count * sizeof(float)) {
-            throw std::runtime_error("invalid F32 byte count for " + name);
-        }
-        const float* src = reinterpret_cast<const float*>(tensor.data);
+    } else if (tensor.dtype == TensorDType::F32 ||
+               tensor.dtype == TensorDType::F16 ||
+               tensor.dtype == TensorDType::Quantized) {
+        const std::vector<float> decoded = decode_tensor_f32(
+            tensor, target_shape, name);
         std::vector<__nv_bfloat16> converted(count);
         for (size_t i = 0; i < count; ++i) {
-            converted[i] = __float2bfloat16(src[i]);
+            converted[i] = __float2bfloat16(decoded[i]);
         }
         CELEG_CUDA(cudaMemcpy(weight.bf16_storage.data(), converted.data(),
-                            count * sizeof(__nv_bfloat16),
-                            cudaMemcpyHostToDevice));
-    } else if (tensor.dtype == TensorDType::F16) {
-        if (tensor.bytes != count * sizeof(__half)) {
-            throw std::runtime_error("invalid F16 byte count for " + name);
-        }
-        const __half* src = reinterpret_cast<const __half*>(tensor.data);
-        std::vector<__nv_bfloat16> converted(count);
-        for (size_t i = 0; i < count; ++i) {
-            converted[i] = __float2bfloat16(__half2float(src[i]));
-        }
-        CELEG_CUDA(cudaMemcpy(weight.bf16_storage.data(), converted.data(),
-                            count * sizeof(__nv_bfloat16),
-                            cudaMemcpyHostToDevice));
-    } else if (tensor.dtype == TensorDType::Quantized) {
-        const GgmlType ggml_type = ggml_type_from_block_encoding(tensor.block_encoding);
-        // The dequantizer below handles every type the registry marks, so the
-        // only genuine constraint here is the 2D shape it assumes.
-        if (tensor.shape.size() != 2 || !ggml_row_decoder(ggml_type).has_value()) {
-            throw std::runtime_error(
-                std::string("router BF16 materialization needs a 2D dequantizable GGUF tensor: ") +
-                name + " (" + ggml_type_name(ggml_type) + ")");
-        }
-        std::vector<__nv_bfloat16> dequantized;
-        dequantize_gguf_to_bf16(tensor, dequantized);
-        if (dequantized.size() != count) {
-            throw std::runtime_error("invalid GGUF router element count for " + name);
-        }
-        CELEG_CUDA(cudaMemcpy(weight.bf16_storage.data(), dequantized.data(),
                             count * sizeof(__nv_bfloat16),
                             cudaMemcpyHostToDevice));
     } else {

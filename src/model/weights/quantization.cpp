@@ -36,21 +36,6 @@ float read_finite_bf16(const std::byte* data, size_t index) {
 
 }
 
-float bf16_bits_to_float(uint16_t bits) {
-    const uint32_t word = static_cast<uint32_t>(bits) << 16;
-    float value = 0.0f;
-    std::memcpy(&value, &word, sizeof(value));
-    return value;
-}
-
-uint16_t float_to_bf16_bits(float value) {
-    uint32_t word = 0;
-    std::memcpy(&word, &value, sizeof(word));
-    const uint32_t lsb = (word >> 16) & 1U;
-    word += 0x7FFFU + lsb;
-    return static_cast<uint16_t>(word >> 16);
-}
-
 void quantize_bf16_rows_into(const std::byte* data,
                              size_t rows,
                              size_t cols,

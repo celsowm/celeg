@@ -18,7 +18,6 @@ namespace celeg {
 using metal_model_detail::ns_string;
 using metal_model_detail::request_for;
 using metal_model_detail::request_name;
-using metal_model_detail::tensor_values;
 
 MetalModel::MetalModel(const std::string& path, int context,
                        MetalModelOptions model_options,
@@ -394,7 +393,7 @@ MetalModel::MetalModel(const std::string& path, int context,
             const TensorRequest& router_request = request_for(
                 (*impl_).model.weight_plan.requests, TensorRole::MoeRouter,
                 static_cast<int>(index));
-            moe.router_weight = tensor_values(
+            moe.router_weight = decode_tensor_f32(
                 (*impl_).repository->tensor(router_name),
                 std::span<const int64_t>(router_request.expected_shape.data(),
                                          router_request.expected_shape.size()),
@@ -411,7 +410,7 @@ MetalModel::MetalModel(const std::string& path, int context,
                 if (!bias->source_name) {
                     throw std::runtime_error("Metal MoE router bias was not resolved");
                 }
-                moe.router_bias = tensor_values(
+                moe.router_bias = decode_tensor_f32(
                     (*impl_).repository->tensor(*bias->source_name),
                     std::span<const int64_t>(bias->expected_shape.data(),
                                              bias->expected_shape.size()),

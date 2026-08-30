@@ -4,71 +4,14 @@
 #include "celeg/checkpoint/weight_repository.hpp"
 #include "celeg/checkpoint/packed/int8.hpp"
 #include "celeg/checkpoint/packed/int4.hpp"
+#include "celeg/checkpoint/tensor_codec.hpp"
 #include "celeg/model/weights/quantization.hpp"
 
 #include <algorithm>
-#include <bit>
-#include <cstring>
-#include <limits>
 #include <stdexcept>
 
 namespace celeg {
 namespace {
-
-size_t checked_elements(const std::vector<int64_t>& shape) {
-    size_t result = 1;
-    for (int64_t dim : shape) {
-        if (dim <= 0) throw std::runtime_error("invalid tensor dimension");
-        if (result > std::numeric_limits<size_t>::max() /
-                    static_cast<size_t>(dim)) {
-            throw std::overflow_error("tensor dimensions overflow");
-        }
-        result *= static_cast<size_t>(dim);
-    }
-    return result;
-}
-
-bool shape_matches(const std::vector<int64_t>& actual,
-                   const std::vector<int64_t>& expected) {
-    if (actual == expected) return true;
-    if (expected.size() == 1) {
-        size_t elements = 1;
-        for (const int64_t dim : actual) elements *= static_cast<size_t>(dim);
-        return elements == static_cast<size_t>(expected.front());
-    }
-    return actual.size() == 2 && expected.size() == 3 && expected[1] == 1 &&
-           actual[0] == expected[0] && actual[1] == expected[2];
-}
-
-std::vector<float> read_vector(const HostTensorView& tensor,
-                               const std::vector<int64_t>& expected,
-                               const std::string& name) {
-    if (!shape_matches(tensor.shape, expected)) {
-        throw std::runtime_error("unexpected CPU tensor: " + name);
-    }
-    const size_t count = checked_elements(expected);
-    std::vector<float> result(count);
-    if (tensor.dtype == TensorDType::BF16 || tensor.dtype == TensorDType::F16) {
-        if (tensor.bytes != count * sizeof(uint16_t)) {
-            throw std::runtime_error("invalid 16-bit tensor bytes for " + name);
-        }
-        for (size_t i = 0; i < count; ++i) {
-            uint16_t bits = 0;
-            std::memcpy(&bits, tensor.data + i * sizeof(uint16_t), sizeof(bits));
-            result[i] = tensor.dtype == TensorDType::BF16
-                ? bf16_bits_to_float(bits) : fp16_bits_to_float(bits);
-        }
-        return result;
-    }
-    if (tensor.dtype == TensorDType::F32) {
-        if (tensor.bytes != count * sizeof(float)) {
-            throw std::runtime_error("invalid F32 tensor bytes for " + name);
-        }
-        std::memcpy(result.data(), tensor.data, tensor.bytes);
-        return result;
-    }
-    throw std::runtime_error("CPU vector requires F32, F16 or BF16 source: " + name);
-}
 
 GgmlMatrixView gguf_matrix(const HostTensorView& tensor,
                           const std::string& name) {
@@ -146,11 +89,10 @@ CpuLinearWeight CpuWeightCodec::matrix(
         }
         return CpuLinearWeight::from_ggml(matrix);
     }
-    // F16 and F32 both widen to float first; read_vector already decodes
-    // either. GGUF checkpoints published in plain F16 reach this path just as
-    // often as F32 safetensors do.
+    /// F16 and F32 both widen to float first; the neutral tensor codec decodes
+    /// either representation before quantization.
     if (tensor.dtype == TensorDType::F32 || tensor.dtype == TensorDType::F16) {
-        const std::vector<float> values = read_vector(tensor, expected, name);
+        const std::vector<float> values = decode_tensor_f32(tensor, expected, name);
         Q4GroupMatrix packed = quantize_float_groupwise_q4(
             values.data(), static_cast<size_t>(expected[0]),
             static_cast<size_t>(expected[1]), group_size_);
@@ -277,7 +219,7 @@ CpuLinearWeight CpuWeightCodec::concat(
             tensors[i].dtype != TensorDType::F16) {
             throw std::runtime_error("CPU concat tensor must be BF16, F16 or F32: " + name);
         }
-        const std::vector<float> values = read_vector(tensors[i], expected, name);
+        const std::vector<float> values = decode_tensor_f32(tensors[i], expected, name);
         std::copy(values.begin(), values.end(), joined.begin() +
             static_cast<ptrdiff_t>(row_offset * static_cast<size_t>(cols)));
         row_offset += static_cast<size_t>(expected[0]);
@@ -301,7 +243,7 @@ std::vector<CpuLinearWeight> CpuWeightCodec::packed_matrices(
     const int64_t entries = expected[0];
     const size_t rows = static_cast<size_t>(expected[1]);
     const size_t cols = static_cast<size_t>(expected[2]);
-    const std::vector<float> values = read_vector(tensor, expected, name);
+    const std::vector<float> values = decode_tensor_f32(tensor, expected, name);
     std::vector<CpuLinearWeight> result;
     result.reserve(static_cast<size_t>(entries));
     for (int64_t entry = 0; entry < entries; ++entry) {
@@ -317,7 +259,7 @@ std::vector<float> CpuWeightCodec::vector(
     if (reader_) return reader_->read_bf16_vector(name);
     if (!source_) throw std::logic_error("CPU weight source is missing");
     const HostTensorView tensor = source_->tensor(name);
-    std::vector<float> result = read_vector(tensor, expected, name);
+    std::vector<float> result = decode_tensor_f32(tensor, expected, name);
     if (writer_) {
         if (tensor.dtype == TensorDType::BF16) {
             writer_->add_bf16_vector(name, tensor.data, result.size());
