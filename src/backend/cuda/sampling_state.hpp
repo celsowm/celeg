@@ -10,11 +10,11 @@ namespace celeg {
 class CudaSamplingState final {
 public:
     CudaSamplingState()
-        : sampled_device(1), sampled_host(1), topk_values(static_cast<size_t>(kMaxTopK)),
+        : topk_values(static_cast<size_t>(kMaxTopK)),
           topk_indices(static_cast<size_t>(kMaxTopK)),
           partial_values(static_cast<size_t>(kSamplingPartialBlocks) * kMaxTopK),
           partial_indices(static_cast<size_t>(kSamplingPartialBlocks) * kMaxTopK),
-          rng_state(1) {}
+          rng_state(1), sampled_device(1), sampled_host(1) {}
 
     void reset_vocabulary(size_t vocabulary_size) {
         seen_tokens.reset(vocabulary_size);
