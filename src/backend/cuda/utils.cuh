@@ -6,12 +6,18 @@
 #include <cuda_runtime.h>
 
 #include <cstddef>
+#include <cstdint>
 #include <atomic>
 #include <stdexcept>
 #include <string>
 #include <utility>
 
 namespace celeg {
+
+enum class CudaMemoryKind : std::uint8_t {
+    Device,
+    Managed,
+};
 
 inline thread_local bool g_cuda_managed_weight_allocations = false;
 
@@ -28,6 +34,12 @@ public:
 private:
     bool previous_;
 };
+
+inline CudaMemoryKind cuda_current_memory_kind() noexcept {
+    return g_cuda_managed_weight_allocations
+        ? CudaMemoryKind::Managed
+        : CudaMemoryKind::Device;
+}
 
 struct CudaAllocationSnapshot {
     size_t device_allocations = 0;
@@ -245,8 +257,13 @@ private:
 template <typename T>
 class DeviceBuffer {
 public:
-    DeviceBuffer() = default;
-    explicit DeviceBuffer(size_t count) { reset(count); }
+    DeviceBuffer() : memory_kind_(cuda_current_memory_kind()) {}
+    explicit DeviceBuffer(CudaMemoryKind memory_kind) : memory_kind_(memory_kind) {}
+    explicit DeviceBuffer(size_t count) : DeviceBuffer() { reset(count); }
+    DeviceBuffer(size_t count, CudaMemoryKind memory_kind)
+        : memory_kind_(memory_kind) {
+        reset(count);
+    }
     ~DeviceBuffer() {
         if (ptr_) cudaFree(ptr_);
     }
@@ -254,12 +271,15 @@ public:
     DeviceBuffer(const DeviceBuffer&) = delete;
     DeviceBuffer& operator=(const DeviceBuffer&) = delete;
     DeviceBuffer(DeviceBuffer&& other) noexcept
-        : ptr_(std::exchange(other.ptr_, nullptr)), count_(std::exchange(other.count_, 0)) {}
+        : ptr_(std::exchange(other.ptr_, nullptr)),
+          count_(std::exchange(other.count_, 0)),
+          memory_kind_(other.memory_kind_) {}
     DeviceBuffer& operator=(DeviceBuffer&& other) noexcept {
         if (this != &other) {
             if (ptr_) cudaFree(ptr_);
             ptr_ = std::exchange(other.ptr_, nullptr);
             count_ = std::exchange(other.count_, 0);
+            memory_kind_ = other.memory_kind_;
         }
         return *this;
     }
@@ -270,7 +290,7 @@ public:
         ptr_ = nullptr;
         count_ = count;
         if (count_) {
-            if (g_cuda_managed_weight_allocations) {
+            if (memory_kind_ == CudaMemoryKind::Managed) {
                 CELEG_CUDA(cudaMallocManaged(reinterpret_cast<void**>(&ptr_),
                     count_ * sizeof(T), cudaMemAttachGlobal));
                 cuda_prefer_managed_host(ptr_, count_ * sizeof(T));
@@ -287,7 +307,7 @@ public:
         ptr_ = nullptr;
         count_ = count;
         if (count_) {
-            if (g_cuda_managed_weight_allocations) {
+            if (memory_kind_ == CudaMemoryKind::Managed) {
                 CELEG_CUDA(cudaMallocManaged(reinterpret_cast<void**>(&ptr_),
                     count_ * sizeof(T), cudaMemAttachGlobal));
                 cuda_prefer_managed_host(ptr_, count_ * sizeof(T));
@@ -307,10 +327,12 @@ public:
     size_t size() const { return count_; }
     size_t bytes() const { return count_ * sizeof(T); }
     bool empty() const { return count_ == 0; }
+    CudaMemoryKind memory_kind() const noexcept { return memory_kind_; }
 
 private:
     T* ptr_ = nullptr;
     size_t count_ = 0;
+    CudaMemoryKind memory_kind_ = CudaMemoryKind::Device;
 };
 
 template <typename T>
