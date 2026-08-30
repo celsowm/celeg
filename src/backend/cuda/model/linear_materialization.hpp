@@ -7,7 +7,7 @@
 #include "celeg/checkpoint/tensor.hpp"
 #include "celeg/checkpoint/tensor_codec.hpp"
 #include "celeg/checkpoint/weight_repository.hpp"
-#include "backend/cuda/execution_plan.hpp"
+#include "backend/cuda/runtime_types.hpp"
 #include "detail/device_weights.hpp"
 
 #include <optional>
