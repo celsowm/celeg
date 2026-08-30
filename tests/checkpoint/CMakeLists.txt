@@ -13,3 +13,6 @@ foreach(test_name IN ITEMS
     target_link_libraries(${test_name} PRIVATE celeg_base)
     add_test(NAME ${test_name} COMMAND ${test_name})
 endforeach()
+
+target_include_directories(gguf_repository_test PRIVATE
+    src/checkpoint/repositories/detail)
