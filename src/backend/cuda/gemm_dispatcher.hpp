@@ -3,8 +3,8 @@
 #include "utils.cuh"
 #include "backend/cuda/execution_plan.hpp"
 #include "runtime_types.hpp"
-#include "detail/gemm_plan.hpp"
-#include "detail/linear_weights.hpp"
+#include "model/detail/gemm_plan.hpp"
+#include "model/detail/linear_weights.hpp"
 
 #include <cublasLt.h>
 #include <cublas_v2.h>
