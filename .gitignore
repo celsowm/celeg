@@ -1,6 +1,7 @@
 build/
 build-*/
 out/
+.cuda-parent-build/
 __pycache__/
 *.user
 .vs/
