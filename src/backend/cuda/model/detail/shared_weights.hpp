@@ -33,6 +33,7 @@ class CudaExpertSource;
 struct SharedModelWeights {
     std::mutex mutex;
     std::string residency_fingerprint;
+    CudaMemoryKind memory_kind = CudaMemoryKind::Device;
     WeightMap tensors;
 
     std::shared_ptr<IWeightRepository> repo;
