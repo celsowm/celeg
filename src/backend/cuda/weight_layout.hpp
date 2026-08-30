@@ -1,7 +1,7 @@
 #pragma once
 
 #include "runtime_types.hpp"
-#include "detail/linear_weights.hpp"
+#include "model/detail/linear_weights.hpp"
 
 #include <cuda_bf16.h>
 #include <cuda_runtime.h>
