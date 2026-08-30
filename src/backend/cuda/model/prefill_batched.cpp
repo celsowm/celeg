@@ -169,23 +169,23 @@ void run_logits(CudaCompiledModel& model, int rows) {
         model.stream_.get());
     model.linear(
         workspace.normed_.data(), *model.logits_weight(), workspace.logits_.data(),
-        1, model.resources_.dims_.vocab_size, hidden);
+        1, model.resources_.dims().vocab_size, hidden);
 
     if (model.resources_.program_.logits_divisor != 1.0f ||
         model.resources_.program_.logits_multiplier != 1.0f) {
         launch_scale(
-            workspace.logits_.data(), model.resources_.dims_.vocab_size,
+            workspace.logits_.data(), model.resources_.dims().vocab_size,
             model.resources_.program_.logits_multiplier /
                 model.resources_.program_.logits_divisor,
             model.stream_.get());
         if (model.resources_.program_.final_logit_softcap > 0.0f) {
             launch_tanh_softcap(
-                workspace.logits_.data(), model.resources_.dims_.vocab_size,
+                workspace.logits_.data(), model.resources_.dims().vocab_size,
                 model.resources_.program_.final_logit_softcap,
                 model.stream_.get());
         }
     }
-    launch_mask_logits(workspace.logits_.data(), model.resources_.dims_.vocab_size,
+    launch_mask_logits(workspace.logits_.data(), model.resources_.dims().vocab_size,
                        model.tokenizer_vocab_size_, model.stream_.get());
 }
 
@@ -209,7 +209,7 @@ void CudaCompiledModel::prefill_batched(const std::vector<int32_t>& tokens) {
     prof.begin(stream_.get());
     launch_mark_seen_batch(
         workspace_.prefill_tokens_.data(), rows, sampling_.seen_tokens.data(),
-        resources_.dims_.vocab_size, stream_.get());
+        resources_.dims().vocab_size, stream_.get());
     resources_.weight_layout_->embed_batch(
         workspace_.prefill_tokens_.data(), rows, workspace_.prefill_hidden_.data(),
         resources_.program_.hidden, stream_.get());
