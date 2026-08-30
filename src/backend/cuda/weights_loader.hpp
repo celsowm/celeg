@@ -23,6 +23,21 @@ namespace celeg {
 void dequantize_gguf_to_bf16(const HostTensorView& tensor,
                              std::vector<__nv_bfloat16>& out);
 
+class CudaWeightCache final {
+public:
+    std::shared_ptr<SharedModelWeights> acquire(
+        const std::string& model_path,
+        WeightMode weight_mode,
+        const std::string& residency_fingerprint,
+        bool managed_weights);
+
+private:
+    std::mutex mutex_;
+    std::unordered_map<std::string, std::weak_ptr<SharedModelWeights>> entries_;
+};
+
+CudaWeightCache& default_cuda_weight_cache();
+
 class WeightLoader {
 public:
     // Resolves the storage/quantization mode for a given checkpoint tensor
@@ -31,12 +46,6 @@ public:
     // different tensor names); the common case is a resolver that ignores
     // the name and always returns the same mode.
     using WeightModeResolver = std::function<WeightMode(const std::string&)>;
-
-    static std::shared_ptr<SharedModelWeights> acquire(
-        const std::string& model_path,
-        WeightMode weight_mode,
-        const std::string& residency_fingerprint,
-        bool managed_weights);
 
     WeightLoader(std::shared_ptr<SharedModelWeights> weights,
                  WeightMode weight_mode);
