@@ -46,8 +46,8 @@ void CudaCompiledModel::load_checkpoint_weights(
         [this](const IWeightRepository& repo) {
     configure_cuda_expert_resources(*this);
     const int mtp_layer_count = resources_.options().enable_mtp
-        ? resources_.dims_.mtp_num_hidden_layers : 0;
-    const int resource_layer_count = resources_.shape_.num_hidden_layers +
+        ? resources_.dims().mtp_num_hidden_layers : 0;
+    const int resource_layer_count = resources_.shape().num_hidden_layers +
         mtp_layer_count;
     workspace_.expert_caches_.resize(static_cast<size_t>(resource_layer_count));
     if (resources_.weights_->expert_controllers.size() <
@@ -62,9 +62,9 @@ void CudaCompiledModel::load_checkpoint_weights(
             static_cast<size_t>(resource_layer_count));
     }
 
-    resources_.layers_.reserve(static_cast<size_t>(resources_.shape_.num_hidden_layers));
+    resources_.layers_.reserve(static_cast<size_t>(resources_.shape().num_hidden_layers));
     std::vector<int> shared_owner(2, -1);
-    for (int i = 0; i < resources_.shape_.num_hidden_layers; ++i) {
+    for (int i = 0; i < resources_.shape().num_hidden_layers; ++i) {
         LayerCommon common_layer;
         const CompiledLayerProgram& semantic_layer = resources_.program_.layers.at(
             static_cast<size_t>(i));
@@ -112,9 +112,6 @@ void CudaCompiledModel::load_checkpoint_weights(
             const MoeLayerProgram& moe_semantics = *moe_program;
             const int E = moe_semantics.router.expert_count;
             const int inter = moe_semantics.routed.mlp.intermediate_size;
-            /// Routed-expert tensor names and the packed-vs-individual layout
-            /// decision come from the resolved weight plan; setup never
-            /// re-derives them from checkpoint tensor spellings.
             const MoeExpertTensorNames expert_names = moe_expert_tensor_names(
                 resources_.model_.weight_plan.requests, i, E);
             const float* expert_bias = nullptr;
