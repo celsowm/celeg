@@ -5,6 +5,8 @@ if(CELEG_BUILD_TESTS)
         set(_celeg_manifest "${CMAKE_CURRENT_LIST_DIR}/${relative_path}/CMakeLists.txt")
         if(EXISTS "${_celeg_manifest}")
             include("${_celeg_manifest}")
+        else()
+            message(WARNING "CELEG test manifest is missing: ${_celeg_manifest}")
         endif()
     endfunction()
 
