@@ -73,6 +73,7 @@ MaterializationPlan plan_linear_materialization(
     int rows,
     int cols);
 
-DeviceWeight materialize_linear(const MaterializationPlan& plan);
+DeviceWeight materialize_linear(const MaterializationPlan& plan,
+                                CudaMemoryKind memory_kind);
 
 }
