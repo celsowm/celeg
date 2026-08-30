@@ -13,7 +13,7 @@
 
 namespace celeg {
 
-inline bool g_cuda_managed_weight_allocations = false;
+inline thread_local bool g_cuda_managed_weight_allocations = false;
 
 class CudaManagedWeightAllocationScope {
 public:
