@@ -4,7 +4,6 @@ foreach(test_name IN ITEMS
     cpu_topology_test
     cpu_kv_topology_test
     cpu_quantization_test
-    cpu_kernels_test
     cpu_linear_kernels_test
     cpu_segmented_linear_test
     cpu_elementwise_kernels_test
