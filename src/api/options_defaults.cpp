@@ -54,6 +54,9 @@ void cuda_engine_options(celeg_cuda_engine_options& options) {
 }
 
 void metal_model_options(celeg_metal_model_options& options) {
+    options.weight_mode = CELEG_METAL_WEIGHT_BF16;
+    options.kv_cache_mode = CELEG_METAL_KV_CACHE_BF16;
+    options.storage_mode = CELEG_METAL_STORAGE_SHARED;
     options.kv_page_tokens = 16;
 }
 

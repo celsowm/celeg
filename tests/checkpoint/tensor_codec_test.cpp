@@ -47,8 +47,7 @@ int main() {
 
     bool overflow_rejected = false;
     try {
-        const std::vector<std::int64_t> overflow_shape{
-            std::numeric_limits<std::int64_t>::max(), 2};
+        const std::vector<std::int64_t> overflow_shape(80, 2);
         celeg::tensor_element_count(overflow_shape, "overflow");
     } catch (const std::runtime_error&) {
         overflow_rejected = true;

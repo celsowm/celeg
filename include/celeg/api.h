@@ -90,6 +90,19 @@ typedef enum celeg_cuda_scheduler_policy_value {
     CELEG_CUDA_SCHEDULER_MAX_UTILIZATION = 1
 } celeg_cuda_scheduler_policy_value;
 
+typedef enum celeg_metal_weight_mode_value {
+    CELEG_METAL_WEIGHT_BF16 = 0
+} celeg_metal_weight_mode_value;
+
+typedef enum celeg_metal_kv_cache_value {
+    CELEG_METAL_KV_CACHE_BF16 = 0
+} celeg_metal_kv_cache_value;
+
+typedef enum celeg_metal_storage_mode_value {
+    CELEG_METAL_STORAGE_SHARED = 0,
+    CELEG_METAL_STORAGE_PRIVATE = 1
+} celeg_metal_storage_mode_value;
+
 typedef struct celeg_model celeg_model;
 typedef struct celeg_engine celeg_engine;
 typedef struct celeg_tokenizer celeg_tokenizer;

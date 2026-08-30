@@ -42,11 +42,15 @@ std::size_t tensor_element_count(std::span<const std::int64_t> shape,
     }
     std::size_t count = 1;
     for (const std::int64_t dimension : shape) {
-        if (dimension <= 0 || count > std::numeric_limits<std::size_t>::max() /
-                                  static_cast<std::size_t>(dimension)) {
+        if (dimension <= 0) {
             throw std::runtime_error("invalid tensor shape for " + error_name(context));
         }
-        count *= static_cast<std::size_t>(dimension);
+        const std::size_t value = static_cast<std::size_t>(dimension);
+        if (value > std::numeric_limits<std::size_t>::max() / count) {
+            throw std::runtime_error("tensor element count overflows for " +
+                                     error_name(context));
+        }
+        count *= value;
     }
     return count;
 }

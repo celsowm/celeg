@@ -25,6 +25,8 @@ int main() {
     celeg_metal_backend_options metal{};
     celeg_metal_backend_options_init(&metal);
     if (metal.struct_size != sizeof(metal) || metal.model.kv_page_tokens != 16 ||
+        metal.model.weight_mode != CELEG_METAL_WEIGHT_BF16 ||
+        metal.model.storage_mode != CELEG_METAL_STORAGE_SHARED ||
         metal.engine.max_active_requests != 1) return 4;
 
     celeg_request_options request{};
@@ -34,6 +36,7 @@ int main() {
 
     if (CELEG_CPU_ISA_AUTO != 0 || CELEG_CPU_AFFINITY_SCATTER != 2 ||
         CELEG_WEIGHT_MODE_INT4 != 2 || CELEG_WEIGHT_MODE_NATIVE_GGUF != 3 ||
-        CELEG_CUDA_KV_CACHE_INT8 != 1) return 6;
+        CELEG_CUDA_KV_CACHE_INT8 != 1 ||
+        CELEG_CUDA_SCHEDULER_GUARANTEED_NO_EVICT != 0) return 6;
     return 0;
 }
