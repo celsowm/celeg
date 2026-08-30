@@ -15,7 +15,7 @@ void CudaCompiledModel::enqueue_decode_non_attention_mixer(Layer& layer,
     const float mixer_epsilon = semantics.mixer_norm.before
         ? semantics.mixer_norm.before->epsilon
         : resources_.program_.final_norm.epsilon;
-    const bool fuse_residual = resources_.options_.fused_residuals &&
+    const bool fuse_residual = resources_.options().fused_residuals &&
         !semantics.mixer_norm.after.has_value() &&
         !std::holds_alternative<std::monostate>(semantics.feed_forward);
     visit_layer(layer,
