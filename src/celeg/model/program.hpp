@@ -212,6 +212,35 @@ struct CompiledModelProgram {
     std::string semantic_fingerprint;
 
     bool has_moe() const;
+
+    const CompiledAttentionProgram* last_attention() const noexcept {
+        for (auto it = layers.rbegin(); it != layers.rend(); ++it) {
+            if (const auto* attention = std::get_if<CompiledAttentionProgram>(&it->mixer)) {
+                return attention;
+            }
+        }
+        return nullptr;
+    }
+
+    const MoeLayerProgram* first_moe() const noexcept {
+        for (const CompiledLayerProgram& layer : layers) {
+            if (const auto* moe = std::get_if<MoeLayerProgram>(&layer.feed_forward)) {
+                return moe;
+            }
+        }
+        return nullptr;
+    }
+
+    const CompiledDenseFeedForwardProgram* first_dense_feed_forward() const noexcept {
+        for (const CompiledLayerProgram& layer : layers) {
+            if (const auto* dense =
+                    std::get_if<CompiledDenseFeedForwardProgram>(&layer.feed_forward)) {
+                return dense;
+            }
+        }
+        return nullptr;
+    }
+
     void validate() const;
 };
 
