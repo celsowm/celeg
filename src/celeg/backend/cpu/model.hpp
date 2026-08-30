@@ -143,11 +143,8 @@ public:
     CpuModel& operator=(CpuModel&&) noexcept;
 
     CpuInferenceSession session() { return CpuInferenceSession(*this); }
-    CpuInferenceSession session() const { return CpuInferenceSession(const_cast<CpuModel&>(*this)); }
     CpuDiagnostics diagnostics() { return CpuDiagnostics(*this); }
-    CpuDiagnostics diagnostics() const { return CpuDiagnostics(const_cast<CpuModel&>(*this)); }
     CpuPersistence persistence() { return CpuPersistence(*this); }
-    CpuPersistence persistence() const { return CpuPersistence(const_cast<CpuModel&>(*this)); }
 
     std::unique_ptr<CpuModel> clone_session() const;
     std::unique_ptr<CpuModel> clone_session_on_node(int numa_node) const;
