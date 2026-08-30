@@ -63,7 +63,6 @@ private:
     std::shared_ptr<const RuntimeContext> runtime_;
     std::shared_ptr<CudaWeightCache> weight_cache_;
     RuntimeTopology topology_;
-    ExecutionTopology& shape_;
     CompiledModelProgram program_;
 
     mutable std::mutex mutex_;
