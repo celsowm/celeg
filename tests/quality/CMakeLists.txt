@@ -1,0 +1,3 @@
+add_executable(numerical_compare_test tests/quality/numerical_compare_test.cpp)
+target_include_directories(numerical_compare_test PRIVATE include tests)
+add_test(NAME numerical_compare_test COMMAND numerical_compare_test)
