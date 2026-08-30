@@ -107,11 +107,8 @@ public:
     CudaModel& operator=(CudaModel&&) = delete;
 
     CudaInferenceSession session() { return CudaInferenceSession(*this); }
-    CudaInferenceSession session() const { return CudaInferenceSession(const_cast<CudaModel&>(*this)); }
     CudaModelDiagnostics diagnostics() { return CudaModelDiagnostics(*this); }
-    CudaModelDiagnostics diagnostics() const { return CudaModelDiagnostics(const_cast<CudaModel&>(*this)); }
     SessionPersistence persistence() { return SessionPersistence(*this); }
-    SessionPersistence persistence() const { return SessionPersistence(const_cast<CudaModel&>(*this)); }
 
 private:
     std::unique_ptr<CudaCompiledModel> state_;
