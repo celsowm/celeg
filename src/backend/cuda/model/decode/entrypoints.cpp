@@ -67,7 +67,7 @@ void CudaCompiledModel::forward_token_paged_host(
     if (session_.position_ >= max_context_) {
         throw std::runtime_error("context limit reached");
     }
-    if (paged_kv.mode() != resources_.options_.kv_cache_mode) {
+    if (paged_kv.mode() != resources_.options().kv_cache_mode) {
         throw std::invalid_argument("model and physical paged KV modes differ");
     }
     if (resources_.mtp_.available()) {
