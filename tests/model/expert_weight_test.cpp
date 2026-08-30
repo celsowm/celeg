@@ -60,14 +60,19 @@ int main() {
     CELEG_TEST_CHECK(repo.contains("bias"));
 
     const std::string model_path = (dir / "model.safetensors").string();
-    auto weights = celeg::WeightLoader::acquire(
+    celeg::CudaWeightCache cache;
+    auto weights = cache.acquire(
         model_path, celeg::WeightMode::Bf16, "test", false);
-    auto cached_weights = celeg::WeightLoader::acquire(
+    auto cached_weights = cache.acquire(
         model_path, celeg::WeightMode::Bf16, "test", false);
-    auto managed_weights = celeg::WeightLoader::acquire(
+    auto managed_weights = cache.acquire(
         model_path, celeg::WeightMode::Bf16, "test", true);
+    celeg::CudaWeightCache isolated_cache;
+    auto isolated_weights = isolated_cache.acquire(
+        model_path, celeg::WeightMode::Bf16, "test", false);
     CELEG_TEST_CHECK(cached_weights == weights);
     CELEG_TEST_CHECK(managed_weights != weights);
+    CELEG_TEST_CHECK(isolated_weights != weights);
     celeg::WeightLoader loader(weights, celeg::WeightMode::Bf16);
 
     const celeg::ExpertLinearWeight* ew =
