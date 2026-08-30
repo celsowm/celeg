@@ -35,11 +35,6 @@ std::shared_ptr<SharedModelWeights> CudaWeightCache::acquire(
     return weights;
 }
 
-CudaWeightCache& default_cuda_weight_cache() {
-    static CudaWeightCache cache;
-    return cache;
-}
-
 WeightLoader::WeightLoader(std::shared_ptr<SharedModelWeights> weights,
                            WeightMode weight_mode)
     : weights_(std::move(weights)), weight_mode_(weight_mode),
