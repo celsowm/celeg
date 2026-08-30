@@ -37,7 +37,7 @@ void CudaCompiledModel::configure_model(
     resources_.plan_ = CudaExecutionPlan::compile(
         std::move(effective_options), max_context_, resources_.plan_.device());
     resources_.model_identity_ = resources_.model_.provenance.identity;
-    check_moe_quantization_policy(resources_.options_.weight_mode, resources_.program_.has_moe());
+    check_moe_quantization_policy(resources_.options().weight_mode, resources_.program_.has_moe());
 }
 
 }
