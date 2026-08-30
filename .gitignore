@@ -17,6 +17,8 @@ model/
 # These are source code, not checkpoint directories.
 !src/backend/cuda/model/
 !src/backend/cuda/model/**
+!include/celeg/backend/cuda/model/
+!include/celeg/backend/cuda/model/**
 !src/backend/metal/model/
 !src/backend/metal/model/**
 !src/model/
