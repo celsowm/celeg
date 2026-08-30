@@ -18,15 +18,15 @@ void CudaCompiledModel::run_token_logits() {
                    1, resources_.program_.hidden, resources_.program_.final_norm.epsilon,
                    stream_.get());
     linear(workspace_.normed_.data(), *logits_weight(), workspace_.logits_.data(),
-           1, resources_.dims_.vocab_size, resources_.program_.hidden);
-    launch_scale(workspace_.logits_.data(), resources_.dims_.vocab_size,
+           1, resources_.dims().vocab_size, resources_.program_.hidden);
+    launch_scale(workspace_.logits_.data(), resources_.dims().vocab_size,
                  resources_.program_.logits_multiplier /
                      resources_.program_.logits_divisor, stream_.get());
     if (resources_.program_.final_logit_softcap > 0.0f) {
-        launch_tanh_softcap(workspace_.logits_.data(), resources_.dims_.vocab_size,
+        launch_tanh_softcap(workspace_.logits_.data(), resources_.dims().vocab_size,
                             resources_.program_.final_logit_softcap, stream_.get());
     }
-    launch_mask_logits(workspace_.logits_.data(), resources_.dims_.vocab_size,
+    launch_mask_logits(workspace_.logits_.data(), resources_.dims().vocab_size,
                        tokenizer_vocab_size_, stream_.get());
 }
 
