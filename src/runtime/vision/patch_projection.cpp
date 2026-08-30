@@ -398,13 +398,14 @@ private:
         constexpr int heads = 16;
         constexpr int head_dim = 96;
         constexpr int spatial_dim = head_dim / 2;
+        static_assert(spatial_dim % 4 == 0);
         for (std::size_t row = 0; row < positions.size(); ++row) {
             const float w = static_cast<float>(positions[row].first);
             const float h = static_cast<float>(positions[row].second);
             for (int head = 0; head < heads; ++head) {
                 float cosines[spatial_dim];
                 float sines[spatial_dim];
-                for (int i = 0; i < spatial_dim / 2; ++i) {
+                for (int i = 0; i < spatial_dim / 4; ++i) {
                     const float inverse = 1.0f / std::pow(10000.0f,
                         static_cast<float>(2 * i) / spatial_dim);
                     cosines[i] = std::cos(w * inverse);
