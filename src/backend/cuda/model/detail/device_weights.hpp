@@ -14,6 +14,16 @@
 namespace celeg {
 
 struct DeviceWeight {
+    explicit DeviceWeight(CudaMemoryKind memory_kind = CudaMemoryKind::Device)
+        : bf16_storage(memory_kind),
+          int8_storage(memory_kind),
+          int4_storage(memory_kind),
+          gguf_expert_storage(memory_kind),
+          scales_storage(memory_kind),
+          fp8_storage(memory_kind),
+          nvfp4_packed_storage(memory_kind),
+          nvfp4_block_scale_storage(memory_kind) {}
+
     DeviceBuffer<__nv_bfloat16> bf16_storage;
     DeviceBuffer<int8_t> int8_storage;
     DeviceBuffer<uint8_t> int4_storage;
