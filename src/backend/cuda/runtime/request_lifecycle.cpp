@@ -144,9 +144,9 @@ bool CudaSchedulerDriver::admit_requests_locked() {
                 CudaModelOptions lane_options = model_options_;
                 lane_options.allocate_local_kv_cache =
                     !engine_options_.packed_decode || forced_lane;
-                lane->model = std::make_unique<CudaModel>(
+                lane->model = std::unique_ptr<CudaModel>(new CudaModel(
                     model_path_, max_context_, lane_options,
-                    request.options.generation, runtime_, 0, weight_cache_);
+                    request.options.generation, runtime_, 0, weight_cache_));
             } else {
                 lane->model->session().set_generation_config(request.options.generation);
             }
