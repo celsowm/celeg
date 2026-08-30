@@ -23,7 +23,7 @@ void CudaCompiledModel::run_mlp_decode(const LayerCommon& common_layer, int laye
         const auto& dense_semantics =
             std::get<CompiledDenseFeedForwardProgram>(semantics.feed_forward);
         const int intermediate = dense_semantics.intermediate_size;
-        if (resources_.options_.fused_projections) {
+        if (resources_.options().fused_projections) {
             linear(workspace_.normed_.data(), *as_dense_ffn(common_layer.feed_forward)->w13,
                    workspace_.gate_up_.data(), 1, 2 * intermediate,
                    resources_.program_.hidden);
@@ -46,7 +46,7 @@ void CudaCompiledModel::run_mlp_decode(const LayerCommon& common_layer, int laye
                                 intermediate, stream_.get());
         }
         const bool split_output = semantics.feed_forward_norm.after.has_value();
-        if (resources_.options_.fused_residuals && !split_output) {
+        if (resources_.options().fused_residuals && !split_output) {
             linear(workspace_.activated_.data(), *as_dense_ffn(common_layer.feed_forward)->w2,
                    workspace_.hidden_.data(), 1, resources_.program_.hidden,
                    intermediate, 1.0f);
@@ -93,7 +93,7 @@ void CudaCompiledModel::run_mlp_prefill(const LayerCommon& common_layer, int row
                 static_cast<size_t>(rows) * resources_.program_.hidden * sizeof(__nv_bfloat16),
                 cudaMemcpyDeviceToDevice, stream_.get()));
         }
-        if (resources_.options_.fused_projections) {
+        if (resources_.options().fused_projections) {
             linear(workspace_.prefill_normed_.data(), *as_dense_ffn(common_layer.feed_forward)->w13,
                    workspace_.prefill_gate_up_.data(), rows, 2 * intermediate,
                    resources_.program_.hidden);
@@ -127,7 +127,7 @@ void CudaCompiledModel::run_mlp_prefill(const LayerCommon& common_layer, int row
             }
         }
         const bool split_output = semantics.feed_forward_norm.after.has_value();
-        if (resources_.options_.fused_residuals && !split_output) {
+        if (resources_.options().fused_residuals && !split_output) {
             linear(workspace_.prefill_activated_.data(), *as_dense_ffn(common_layer.feed_forward)->w2,
                    workspace_.prefill_hidden_.data(), rows, resources_.program_.hidden,
                    intermediate, 1.0f);
