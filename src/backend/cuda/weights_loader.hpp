@@ -36,7 +36,7 @@ public:
         const std::string& model_path,
         WeightMode weight_mode,
         const std::string& residency_fingerprint,
-        bool managed_weights = false);
+        bool managed_weights);
 
     WeightLoader(std::shared_ptr<SharedModelWeights> weights,
                  WeightMode weight_mode);
