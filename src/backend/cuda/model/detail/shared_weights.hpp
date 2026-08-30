@@ -17,6 +17,17 @@
 namespace celeg {
 
 struct ResidencyController {
+    ResidencyController() = default;
+
+    ResidencyController(int expert_count, int resident_experts,
+                        std::size_t gate_up_bytes, std::size_t down_bytes,
+                        ExpertCachePolicy policy)
+        : cache(std::make_unique<ExpertLayerCache>(
+              expert_count, resident_experts, gate_up_bytes, down_bytes)),
+          transfer_stream(std::make_unique<CudaStream>()) {
+        cache->set_policy(policy);
+    }
+
     std::mutex mutex;
     std::unique_ptr<ExpertLayerCache> cache;
     std::unique_ptr<CudaStream> transfer_stream;
