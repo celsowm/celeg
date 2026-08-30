@@ -16,30 +16,64 @@ namespace celeg::api {
 
 namespace {
 
-class CpuBackendOptions final : public IBackendOptions {
+template <typename Derived, typename ModelOptions, typename EngineOptions>
+class BackendOptionsStorage : public IBackendOptions {
+public:
+    BackendOptionsStorage(BackendId backend_id,
+                          std::string_view schema_id,
+                          ModelOptions model_value,
+                          EngineOptions engine_value)
+        : backend_id_(backend_id),
+          schema_id_(schema_id),
+          model(std::move(model_value)),
+          engine(std::move(engine_value)) {}
+
+    BackendId backend_id() const noexcept override { return backend_id_; }
+    std::string_view schema_id() const noexcept override { return schema_id_; }
+
+    ModelOptions model;
+    EngineOptions engine;
+
+protected:
+    const void* data() const noexcept override {
+        return static_cast<const Derived*>(this);
+    }
+
+private:
+    BackendId backend_id_;
+    std::string_view schema_id_;
+};
+
+class AbiBackendFactoryIdentity : public IAbiBackendFactory {
+public:
+    explicit AbiBackendFactoryIdentity(BackendId backend_id)
+        : backend_id_(backend_id) {}
+
+    std::string_view id() const override { return backend_id_; }
+    bool supports(BackendId backend) const override {
+        return backend == backend_id_;
+    }
+
+private:
+    BackendId backend_id_;
+};
+
+class CpuBackendOptions final
+    : public BackendOptionsStorage<CpuBackendOptions,
+                                   CpuModelOptions,
+                                   CpuConcurrentEngineOptions> {
 public:
     static constexpr std::string_view kSchemaId = "cpu/1";
 
     CpuBackendOptions(CpuModelOptions model_value,
                       CpuConcurrentEngineOptions engine_value)
-        : model(std::move(model_value)), engine(std::move(engine_value)) {}
-
-    BackendId backend_id() const noexcept override { return "cpu"; }
-
-    std::string_view schema_id() const noexcept override { return kSchemaId; }
-
-    const void* data() const noexcept override { return this; }
-
-    CpuModelOptions model;
-    CpuConcurrentEngineOptions engine;
+        : BackendOptionsStorage("cpu", kSchemaId,
+                                std::move(model_value), std::move(engine_value)) {}
 };
 
-class CpuBackendFactory final : public IAbiBackendFactory {
+class CpuBackendFactory final : public AbiBackendFactoryIdentity {
 public:
-    std::string_view id() const override { return "cpu"; }
-    bool supports(BackendId backend) const override {
-        return backend == "cpu";
-    }
+    CpuBackendFactory() : AbiBackendFactoryIdentity("cpu") {}
 
     std::shared_ptr<const IBackendOptions> decode_options(
         std::span<const std::byte> bytes) const override {
@@ -61,30 +95,22 @@ public:
 };
 
 #ifdef CELEG_API_WITH_CUDA
-class CudaBackendOptions final : public IBackendOptions {
+class CudaBackendOptions final
+    : public BackendOptionsStorage<CudaBackendOptions,
+                                   CudaModelOptions,
+                                   ConcurrentEngineOptions> {
 public:
     static constexpr std::string_view kSchemaId = "cuda/1";
 
     CudaBackendOptions(CudaModelOptions model_value,
                        ConcurrentEngineOptions engine_value)
-        : model(std::move(model_value)), engine(std::move(engine_value)) {}
-
-    BackendId backend_id() const noexcept override { return "cuda"; }
-
-    std::string_view schema_id() const noexcept override { return kSchemaId; }
-
-    const void* data() const noexcept override { return this; }
-
-    CudaModelOptions model;
-    ConcurrentEngineOptions engine;
+        : BackendOptionsStorage("cuda", kSchemaId,
+                                std::move(model_value), std::move(engine_value)) {}
 };
 
-class CudaBackendFactory final : public IAbiBackendFactory {
+class CudaBackendFactory final : public AbiBackendFactoryIdentity {
 public:
-    std::string_view id() const override { return "cuda"; }
-    bool supports(BackendId backend) const override {
-        return backend == "cuda";
-    }
+    CudaBackendFactory() : AbiBackendFactoryIdentity("cuda") {}
 
     std::shared_ptr<const IBackendOptions> decode_options(
         std::span<const std::byte> bytes) const override {
@@ -107,26 +133,22 @@ public:
 #endif
 
 #ifdef CELEG_API_WITH_METAL
-class MetalBackendOptions final : public IBackendOptions {
+class MetalBackendOptions final
+    : public BackendOptionsStorage<MetalBackendOptions,
+                                   MetalModelOptions,
+                                   MetalEngineOptions> {
 public:
     static constexpr std::string_view kSchemaId = "metal/1";
 
     MetalBackendOptions(MetalModelOptions model_value,
                         MetalEngineOptions engine_value)
-        : model(std::move(model_value)), engine(std::move(engine_value)) {}
-
-    BackendId backend_id() const noexcept override { return "metal"; }
-    std::string_view schema_id() const noexcept override { return kSchemaId; }
-    const void* data() const noexcept override { return this; }
-
-    MetalModelOptions model;
-    MetalEngineOptions engine;
+        : BackendOptionsStorage("metal", kSchemaId,
+                                std::move(model_value), std::move(engine_value)) {}
 };
 
-class MetalBackendFactory final : public IAbiBackendFactory {
+class MetalBackendFactory final : public AbiBackendFactoryIdentity {
 public:
-    std::string_view id() const override { return "metal"; }
-    bool supports(BackendId backend) const override { return backend == "metal"; }
+    MetalBackendFactory() : AbiBackendFactoryIdentity("metal") {}
 
     std::shared_ptr<const IBackendOptions> decode_options(
         std::span<const std::byte> bytes) const override {
