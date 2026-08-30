@@ -23,6 +23,4 @@ private:
     std::unordered_map<std::string, std::weak_ptr<SharedModelWeights>> entries_;
 };
 
-CudaWeightCache& default_cuda_weight_cache();
-
 }
