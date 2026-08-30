@@ -32,14 +32,19 @@ void MetalModel::Impl::encode_token(id<MTLCommandBuffer>& command_buffer,
             encode_rmsnorm_save(encoder, hidden, residual, layer.operator_norm, normed,
                            hidden_width, model.graph.final_norm.epsilon);
 
-            if (layer.convolution) {
-                encode_short_convolution(encoder, layer);
-            } else if (layer.gated_delta) {
-                encode_gated_delta_layer(encoder, layer);
-            } else if (layer.mamba2) {
-                encode_mamba2_layer(encoder, layer);
-            } else {
-                encode_attention(encoder, layer);
+            switch (layer.mixer_kind) {
+                case Layer::MixerKind::ShortConvolution:
+                    encode_short_convolution(encoder, layer);
+                    break;
+                case Layer::MixerKind::GatedDelta:
+                    encode_gated_delta_layer(encoder, layer);
+                    break;
+                case Layer::MixerKind::Mamba2:
+                    encode_mamba2_layer(encoder, layer);
+                    break;
+                case Layer::MixerKind::Attention:
+                    encode_attention(encoder, layer);
+                    break;
             }
 
             const uint32_t count = hidden_width;
@@ -142,11 +147,17 @@ void MetalModel::Impl::encode_prefill_batch(
         dispatch(encoder, "celeg_copy_batch", count);
         encode_rmsnorm_batch(encoder, batch_hidden, layer.operator_norm, batch_normed,
                              rows, hidden_width, model.graph.final_norm.epsilon);
-        if (layer.convolution) {
-            encode_matmul(encoder, layer.mixer_in, batch_normed, batch_projected, rows);
-            encode_short_convolution_batch(encoder, layer, rows, base_position);
-        } else {
-            encode_attention_batch(encoder, layer, rows, base_position);
+        switch (layer.mixer_kind) {
+            case Layer::MixerKind::ShortConvolution:
+                encode_matmul(encoder, layer.mixer_in, batch_normed, batch_projected, rows);
+                encode_short_convolution_batch(encoder, layer, rows, base_position);
+                break;
+            case Layer::MixerKind::Attention:
+                encode_attention_batch(encoder, layer, rows, base_position);
+                break;
+            case Layer::MixerKind::GatedDelta:
+            case Layer::MixerKind::Mamba2:
+                throw std::logic_error("recurrent Metal mixer reached batched prefill");
         }
         const float mixer_multiplier = 1.0f;
         encode_residual_batch(encoder, batch_hidden, batch_residual, batch_hidden,
