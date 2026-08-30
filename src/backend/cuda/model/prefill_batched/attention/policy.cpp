@@ -6,14 +6,14 @@ AttentionCapability select_attention_plan(
     const AttentionSpec& owner_layout,
     int rows) {
     AttentionRequest request;
-    request.kv_format = model.resources_.options_.kv_cache_mode;
+    request.kv_format = model.resources_.options().kv_cache_mode;
     request.operation = AttentionOperation::Prefill;
     request.layout = AttentionKvLayout::Contiguous;
     request.position_source = AttentionPositionSource::HostScalar;
     request.bias = attention.alibi_slopes.data()
         ? AttentionPositionBias::Alibi : AttentionPositionBias::None;
-    request.fast_attention = model.resources_.options_.fast_attention;
-    request.flash_attention_requested = model.resources_.options_.flash_attn;
+    request.fast_attention = model.resources_.options().fast_attention;
+    request.flash_attention_requested = model.resources_.options().flash_attn;
     request.head_dim = owner_layout.head_dim;
     request.rows = rows;
     return require_attention_capability(request);
