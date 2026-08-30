@@ -108,8 +108,8 @@ For Metal builds, use an Apple Silicon Mac with the macOS SDK and an
 Objective-C++ compiler. The native Metal path covers the cached LFM2.5-350M
 convolution/attention model, native Q4_K/Q6_K GGUF kernels, one-token
 demand-loaded inference for the cached LFM2.5-8B-A1B MoE checkpoint, and
-text-only inference for cached Gemma-4 E4B-it with the checked-in minimal
-turn template in `docs/fixtures/gemma4-metal.jinja`.
+text-only inference for cached Gemma-4 E4B-it through the generic Jinja
+interpreter.
 
 The repository is developed and tested on Windows and Linux. On Windows,
 executables have an `.exe` suffix.
@@ -199,9 +199,6 @@ interpreter:
 celeg-metal-run --repo google/gemma-4-E4B-it \
   --context 64 --prompt "Hello" --max-new-tokens 4
 ```
-
-For a deterministic minimal text-only turn, the checked-in fixture remains
-available at `docs/fixtures/gemma4-metal.jinja` via `--chat-template-file`.
 
 The Metal benchmark uses the same cached file without downloading it:
 
