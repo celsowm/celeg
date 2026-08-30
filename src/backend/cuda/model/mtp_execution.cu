@@ -44,7 +44,7 @@ void CudaCompiledModel::run_mtp_forward_device(const int32_t* token_device) {
     }
     const cudaStream_t stream = stream_.get();
     const int hidden = resources_.program_.hidden;
-    const int vocab = resources_.dims_.vocab_size;
+    const int vocab = resources_.dims().vocab_size;
     const float eps = resources_.program_.final_norm.epsilon;
     CudaMtpResources& mtp = resources_.mtp_;
 
@@ -223,7 +223,7 @@ void CudaCompiledModel::run_mtp_forward_device(const int32_t* token_device) {
                         hidden, stream);
 
     run_mlp_decode(common_layer,
-                   resources_.shape_.num_hidden_layers );
+                   resources_.shape().num_hidden_layers);
     launch_rmsnorm(workspace_.hidden_.data(), mtp.norm, workspace_.normed_.data(),
                    1, hidden, eps, stream);
     linear(workspace_.normed_.data(), *mtp.logits, workspace_.mtp_logits_.data(),
@@ -245,13 +245,13 @@ void CudaCompiledModel::finalize_mtp_verification() {
     const cudaStream_t stream = stream_.get();
     launch_argmax_bf16(
         workspace_.mtp_logits_.data(), sampling_.seen_tokens.data(),
-        resources_.dims_.vocab_size,
+        resources_.dims().vocab_size,
         session_.generation_.repetition_penalty,
         workspace_.mtp_candidate_.data(),
         sampling_.partial_values.data(), sampling_.partial_indices.data(), stream);
     launch_argmax_bf16(
         workspace_.logits_.data(), sampling_.seen_tokens.data(),
-        resources_.dims_.vocab_size,
+        resources_.dims().vocab_size,
         session_.generation_.repetition_penalty,
         workspace_.mtp_target_candidate_.data(),
         sampling_.partial_values.data(), sampling_.partial_indices.data(), stream);
