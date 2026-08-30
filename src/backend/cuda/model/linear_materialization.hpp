@@ -5,11 +5,15 @@
 #include "celeg/checkpoint/packed/int8.hpp"
 #include "celeg/checkpoint/packed/nvfp4.hpp"
 #include "celeg/checkpoint/tensor.hpp"
+#include "celeg/checkpoint/tensor_codec.hpp"
 #include "celeg/checkpoint/weight_repository.hpp"
+#include "backend/cuda/execution_plan.hpp"
+#include "detail/device_weights.hpp"
 
 #include <optional>
 #include <span>
 #include <string_view>
+#include <string>
 #include <variant>
 
 namespace celeg {
@@ -50,5 +54,25 @@ std::optional<LinearSource> classify_linear_source(
     const IWeightRepository& repository,
     std::string_view name,
     std::span<const std::int64_t> expected);
+
+struct MaterializationPlan {
+    LinearSource source;
+    WeightMode mode = WeightMode::Bf16;
+    LinearKernelKind kernel = LinearKernelKind::Bf16Cublas;
+    std::string name;
+    int rows = 0;
+    int cols = 0;
+    bool native_gguf = false;
+    bool host_dequantization = false;
+};
+
+MaterializationPlan plan_linear_materialization(
+    const LinearSource& source,
+    WeightMode mode,
+    std::string_view name,
+    int rows,
+    int cols);
+
+DeviceWeight materialize_linear(const MaterializationPlan& plan);
 
 }

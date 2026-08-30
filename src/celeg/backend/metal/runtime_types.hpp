@@ -6,6 +6,11 @@
 
 namespace celeg {
 
+enum class MetalStorageMode : std::int32_t {
+    Shared = 0,
+    Private = 1,
+};
+
 struct MetalCapabilities {
     std::string device_name;
     std::string registry_id;

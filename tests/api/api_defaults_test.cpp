@@ -1,6 +1,7 @@
 #include "celeg/api.h"
 
 #include <cstdint>
+#include <cstring>
 
 int main() {
     celeg_cpu_model_options cpu{};
@@ -38,5 +39,16 @@ int main() {
         CELEG_WEIGHT_MODE_INT4 != 2 || CELEG_WEIGHT_MODE_NATIVE_GGUF != 3 ||
         CELEG_CUDA_KV_CACHE_INT8 != 1 ||
         CELEG_CUDA_SCHEDULER_GUARANTEED_NO_EVICT != 0) return 6;
+
+    celeg_engine_options engine{};
+    celeg_engine_options_init(&engine, "cpu", &cpu_backend,
+                              sizeof(cpu_backend) - 1);
+    if (celeg_engine_create("missing-model", &engine) != nullptr) return 7;
+    if (std::strstr(celeg_engine_last_error(nullptr), "truncated") == nullptr) return 8;
+
+    celeg_engine_options_init(&engine, "cpu", &cpu_backend, sizeof(cpu_backend));
+    cpu_backend.struct_size = 0;
+    if (celeg_engine_create("missing-model", &engine) != nullptr) return 9;
+    if (std::strstr(celeg_engine_last_error(nullptr), "invalid struct size") == nullptr) return 10;
     return 0;
 }

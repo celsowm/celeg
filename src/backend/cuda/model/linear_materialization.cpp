@@ -1,6 +1,14 @@
 #include "linear_materialization.hpp"
 
 #include "celeg/checkpoint/tensor_codec.hpp"
+#include "celeg/backend/cuda/kernels/kernels/gguf.cuh"
+#include "celeg/backend/cuda/weights_loader.hpp"
+#include "linear_storage_internal.hpp"
+
+#include <cuda_bf16.h>
+#include <cuda_runtime.h>
+#include <stdexcept>
+#include <type_traits>
 
 namespace celeg {
 
@@ -35,6 +43,172 @@ std::optional<LinearSource> classify_linear_source(
         return DenseSource{tensor};
     }
     return std::nullopt;
+}
+
+MaterializationPlan plan_linear_materialization(
+    const LinearSource& source, WeightMode mode, std::string_view name,
+    int rows, int cols) {
+    MaterializationPlan plan;
+    plan.source = source;
+    plan.mode = mode;
+    plan.name = name;
+    plan.rows = rows;
+    plan.cols = cols;
+    std::visit([&](const auto& value) {
+        using Source = std::decay_t<decltype(value)>;
+        if constexpr (std::is_same_v<Source, PackedInt8Source>) {
+            plan.kernel = LinearKernelKind::W8A16;
+        } else if constexpr (std::is_same_v<Source, PackedInt4Source>) {
+            plan.kernel = LinearKernelKind::W4A16;
+        } else if constexpr (std::is_same_v<Source, PackedFp8Source>) {
+            plan.kernel = LinearKernelKind::Fp8W8A8;
+        } else if constexpr (std::is_same_v<Source, PackedNvfp4Source>) {
+            plan.kernel = LinearKernelKind::Nvfp4W4A4;
+        } else if constexpr (std::is_same_v<Source, GgufSource>) {
+            const GgmlType type = ggml_type_from_block_encoding(value.tensor.block_encoding);
+            plan.native_gguf = mode == WeightMode::NativeGguf;
+            plan.host_dequantization = !cuda_gguf_native_mmq(type);
+        } else {
+            plan.kernel = mode == WeightMode::Int8 ? LinearKernelKind::W8A16
+                : mode == WeightMode::Int4 ? LinearKernelKind::W4A16
+                : LinearKernelKind::Bf16Cublas;
+        }
+    }, source);
+    return plan;
+}
+
+DeviceWeight materialize_linear(const MaterializationPlan& plan) {
+    if (plan.rows <= 0 || plan.cols <= 0) {
+        throw std::invalid_argument("linear materialization dimensions must be positive");
+    }
+    DeviceWeight weight;
+    weight.shape = {plan.rows, plan.cols};
+    std::visit([&](const auto& source) {
+        using Source = std::decay_t<decltype(source)>;
+        if constexpr (std::is_same_v<Source, PackedInt8Source>) {
+            cuda_loader_detail::bind_int8_storage(weight, source.matrix.values,
+                                                   source.matrix.scales);
+        } else if constexpr (std::is_same_v<Source, PackedInt4Source>) {
+            const std::vector<float> values = dequantize_packed_int4(source.matrix);
+            std::vector<__nv_bfloat16> dense(values.size());
+            for (size_t index = 0; index < values.size(); ++index) {
+                dense[index] = __float2bfloat16(values[index]);
+            }
+            weight.bf16_storage.reset(dense.size());
+            CELEG_CUDA(cudaMemcpy(weight.bf16_storage.data(), dense.data(),
+                                  dense.size() * sizeof(__nv_bfloat16),
+                                  cudaMemcpyHostToDevice));
+            const std::byte* data = reinterpret_cast<const std::byte*>(dense.data());
+            if (plan.mode == WeightMode::Int8 || plan.mode == WeightMode::Int4) {
+                cuda_loader_detail::quantize_and_bind(
+                    weight, data, plan.rows, plan.cols, plan.mode,
+                    weight.bf16_storage.data());
+            } else {
+                weight.linear.storage = Bf16LinearStorage{weight.bf16_storage.data()};
+            }
+        } else if constexpr (std::is_same_v<Source, PackedFp8Source>) {
+            cuda_loader_detail::bind_fp8_storage(weight, source.matrix.values,
+                                                  source.matrix.scales);
+        } else if constexpr (std::is_same_v<Source, PackedNvfp4Source>) {
+            cuda_loader_detail::bind_nvfp4_storage(
+                weight, source.matrix.packed, source.matrix.block_scales,
+                source.matrix.global_scale, source.matrix.input_global_scale);
+        } else if constexpr (std::is_same_v<Source, DenseSource>) {
+            const std::size_t count = tensor_element_count(
+                source.tensor.shape, plan.name);
+            if (source.tensor.dtype == TensorDType::BF16) {
+                if (source.tensor.bytes != count * sizeof(__nv_bfloat16)) {
+                    throw std::runtime_error("invalid BF16 linear byte count: " + plan.name);
+                }
+                if (plan.mode == WeightMode::Int8 || plan.mode == WeightMode::Int4) {
+                    cuda_loader_detail::quantize_and_bind(
+                        weight, source.tensor.data, plan.rows, plan.cols, plan.mode);
+                } else {
+                    weight.bf16_storage.reset(count);
+                    CELEG_CUDA(cudaMemcpy(weight.bf16_storage.data(), source.tensor.data,
+                                          source.tensor.bytes, cudaMemcpyHostToDevice));
+                    weight.linear.storage = Bf16LinearStorage{weight.bf16_storage.data()};
+                }
+            } else {
+                const std::vector<float> decoded = decode_tensor_f32(
+                    source.tensor, source.tensor.shape, plan.name);
+                std::vector<__nv_bfloat16> dense(count);
+                for (std::size_t index = 0; index < count; ++index) {
+                    dense[index] = __float2bfloat16(decoded[index]);
+                }
+                if (plan.mode == WeightMode::Int8 || plan.mode == WeightMode::Int4) {
+                    cuda_loader_detail::quantize_and_bind(
+                        weight, reinterpret_cast<const std::byte*>(dense.data()),
+                        plan.rows, plan.cols, plan.mode);
+                } else {
+                    weight.bf16_storage.reset(count);
+                    CELEG_CUDA(cudaMemcpy(weight.bf16_storage.data(), dense.data(),
+                                          count * sizeof(__nv_bfloat16),
+                                          cudaMemcpyHostToDevice));
+                    weight.linear.storage = Bf16LinearStorage{weight.bf16_storage.data()};
+                }
+            }
+        } else if constexpr (std::is_same_v<Source, GgufSource>) {
+            const HostTensorView& tensor = source.tensor;
+            const GgmlType type = ggml_type_from_block_encoding(tensor.block_encoding);
+            const GgmlTypeTrait trait = ggml_type_trait(type);
+            if (!ggml_row_decoder(type).has_value() || plan.cols % trait.block_size != 0) {
+                throw std::runtime_error("invalid GGUF linear source: " + plan.name);
+            }
+            const std::size_t row_bytes = static_cast<std::size_t>(plan.cols) /
+                static_cast<std::size_t>(trait.block_size) * trait.type_size;
+            if (tensor.bytes != static_cast<std::size_t>(plan.rows) * row_bytes) {
+                throw std::runtime_error("invalid GGUF linear byte count: " + plan.name);
+            }
+            if (plan.native_gguf && !plan.host_dequantization) {
+                DeviceBuffer<std::uint8_t> raw(tensor.bytes);
+                CELEG_CUDA(cudaMemcpy(raw.data(), tensor.data, tensor.bytes,
+                                      cudaMemcpyHostToDevice));
+                GgufLinearSegment segment{raw.data(), type, 0, plan.rows,
+                                          plan.cols, row_bytes};
+                weight.gguf_segment_storage.push_back(std::move(raw));
+                weight.linear.storage = GgufLinearStorage{{segment}};
+                return;
+            }
+            if (plan.host_dequantization) {
+                std::vector<__nv_bfloat16> host;
+                dequantize_gguf_to_bf16(tensor, host);
+                weight.bf16_storage.reset(host.size());
+                CELEG_CUDA(cudaMemcpy(weight.bf16_storage.data(), host.data(),
+                                      host.size() * sizeof(__nv_bfloat16),
+                                      cudaMemcpyHostToDevice));
+                if (plan.mode == WeightMode::Int8 || plan.mode == WeightMode::Int4) {
+                    cuda_loader_detail::quantize_and_bind(
+                        weight, reinterpret_cast<const std::byte*>(host.data()),
+                        plan.rows, plan.cols, plan.mode,
+                        weight.bf16_storage.data());
+                } else {
+                    weight.linear.storage = Bf16LinearStorage{weight.bf16_storage.data()};
+                }
+                return;
+            }
+            DeviceBuffer<std::uint8_t> raw(tensor.bytes);
+            CELEG_CUDA(cudaMemcpy(raw.data(), tensor.data, tensor.bytes,
+                                  cudaMemcpyHostToDevice));
+            weight.bf16_storage.reset(static_cast<std::size_t>(plan.rows) * plan.cols);
+            launch_gguf_dequant(raw.data(), type, weight.bf16_storage.data(),
+                                plan.rows, plan.cols, nullptr);
+            CELEG_CUDA(cudaStreamSynchronize(nullptr));
+            if (plan.mode == WeightMode::Int8 || plan.mode == WeightMode::Int4) {
+                std::vector<__nv_bfloat16> host(weight.bf16_storage.size());
+                CELEG_CUDA(cudaMemcpy(host.data(), weight.bf16_storage.data(),
+                                      host.size() * sizeof(__nv_bfloat16),
+                                      cudaMemcpyDeviceToHost));
+                cuda_loader_detail::quantize_and_bind(
+                    weight, reinterpret_cast<const std::byte*>(host.data()),
+                    plan.rows, plan.cols, plan.mode,
+                    weight.bf16_storage.data());
+            } else {
+                weight.linear.storage = Bf16LinearStorage{weight.bf16_storage.data()};
+            }
+        }
+    }, plan.source);
+    return weight;
 }
 
 }
