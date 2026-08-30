@@ -135,7 +135,6 @@ void CudaCompiledModel::restore_speculative_state() {
         copy_device(cudaMemcpyDeviceToDevice,
                     workspace_.mtp_target_candidate_.data(),
                     speculative_snapshot_.mtp_target_candidate.data(),
-                    workspace_.mtp_target_target_candidate.data(),
                     workspace_.mtp_target_candidate_.bytes(), stream);
     }
     copy_device(cudaMemcpyDeviceToDevice, sampling_.rng_state.data(),
