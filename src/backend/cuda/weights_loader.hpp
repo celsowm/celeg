@@ -4,6 +4,7 @@
 #include "celeg/checkpoint/formats/safetensors.hpp"
 #include "celeg/checkpoint/repositories/safetensors.hpp"
 #include "runtime_types.hpp"
+#include "weight_cache.hpp"
 #include "model/detail/expert_weights.hpp"
 #include "model/detail/layer_state.hpp"
 #include "model/detail/shared_weights.hpp"
@@ -12,7 +13,6 @@
 #include <cstddef>
 #include <functional>
 #include <memory>
-#include <mutex>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -22,21 +22,6 @@ namespace celeg {
 
 void dequantize_gguf_to_bf16(const HostTensorView& tensor,
                              std::vector<__nv_bfloat16>& out);
-
-class CudaWeightCache final {
-public:
-    std::shared_ptr<SharedModelWeights> acquire(
-        const std::string& model_path,
-        WeightMode weight_mode,
-        const std::string& residency_fingerprint,
-        bool managed_weights);
-
-private:
-    std::mutex mutex_;
-    std::unordered_map<std::string, std::weak_ptr<SharedModelWeights>> entries_;
-};
-
-CudaWeightCache& default_cuda_weight_cache();
 
 class WeightLoader {
 public:
