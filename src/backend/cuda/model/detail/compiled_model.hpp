@@ -40,7 +40,6 @@ struct ModelBootstrap;
 
 struct CudaCompiledModel {
     static constexpr int kPrefillAttnChunkTokens = kAttentionPrefillChunkTokens;
-
     static constexpr int kMaxGemmAttentionRows = kAttentionMaxGemmRows;
 
     struct SpeculativeLayerSnapshot {
@@ -70,6 +69,7 @@ struct CudaCompiledModel {
     };
 
     CudaModelResources resources_;
+    CudaWeightCache& weight_cache_;
     std::shared_ptr<const RuntimeContext> runtime_;
     SessionState session_;
 
@@ -77,6 +77,7 @@ struct CudaCompiledModel {
          int max_context,
          CudaModelOptions options,
          GenerationConfig generation,
+         CudaWeightCache& weight_cache,
          std::shared_ptr<const RuntimeContext> runtime = nullptr,
          int tokenizer_vocab_size = 0);
     ~CudaCompiledModel();
@@ -95,7 +96,6 @@ struct CudaCompiledModel {
 
     void warmup_decode_gemms();
     void warmup_prefill_attention_gemm();
-
     void configure_model(const detail::ModelBootstrap& bootstrap);
     void allocate_celeg_resources();
     void load_checkpoint_weights(const std::string& model_path,
@@ -103,12 +103,9 @@ struct CudaCompiledModel {
 
     void reset(bool allocate_local_kv = true);
     void prefill(const std::vector<int32_t>& tokens);
-    void prefill(const std::vector<int32_t>& tokens,
-                 const PromptEmbedding& embeddings);
-    void prefill_chunk(const std::vector<int32_t>& tokens,
-                       bool begin, bool finalize);
-    void prefill_chunk_paged(const std::vector<int32_t>& tokens,
-                             bool begin, bool finalize,
+    void prefill(const std::vector<int32_t>& tokens, const PromptEmbedding& embeddings);
+    void prefill_chunk(const std::vector<int32_t>& tokens, bool begin, bool finalize);
+    void prefill_chunk_paged(const std::vector<int32_t>& tokens, bool begin, bool finalize,
                              PhysicalPagedKvCache& paged_kv,
                              const std::vector<uint32_t>& page_table);
     void validate_token_ids(const std::vector<int32_t>& tokens) const;
@@ -165,9 +162,7 @@ struct CudaCompiledModel {
     }
     bool tied_lm_head() const { return resources_.lm_head_ == nullptr; }
     const __nv_bfloat16* final_norm() const { return resources_.final_norm_; }
-    bool cuda_graph_ready() const {
-        return decode_graphs_.ready();
-    }
+    bool cuda_graph_ready() const { return decode_graphs_.ready(); }
 
     void prefill_batched(const std::vector<int32_t>& tokens);
     void allocate_prefill_workspace(int rows);
@@ -181,21 +176,17 @@ struct CudaCompiledModel {
     void initialize_per_layer_input_batch(const int32_t* tokens, int rows);
     void run_mlp_moe_decode(const LayerCommon& common_layer, int layer);
     void run_mlp_moe_prefill(const LayerCommon& common_layer, int rows, int layer);
-    void run_mtp_forward(int32_t token,
-                         const std::array<int32_t, 3>* rope_position = nullptr);
+    void run_mtp_forward(int32_t token, const std::array<int32_t, 3>* rope_position = nullptr);
     void run_mtp_forward_device(const int32_t* token_device);
     void finalize_mtp_verification();
 
     struct TokenKvPolicy {
         AttentionKvLayout kv_layout = AttentionKvLayout::Contiguous;
         AttentionPositionSource position_source = AttentionPositionSource::HostScalar;
-
         PhysicalPagedKvCache* paged_kv = nullptr;
         const uint32_t* device_page_table = nullptr;
         int page_table_stride = 0;
-
         const std::array<int32_t, 3>* rope_position = nullptr;
-
         bool paged() const { return kv_layout == AttentionKvLayout::Paged; }
     };
 
@@ -206,13 +197,11 @@ struct CudaCompiledModel {
                                   PhysicalPagedKvCache& paged_kv,
                                   const uint32_t* device_page_table,
                                   int page_table_stride);
-
     void run_token_layers(const TokenKvPolicy& kv);
     void run_token_layer(Layer& layer, int layer_index, const TokenKvPolicy& kv);
     void run_token_mixer(Layer& layer, LayerCommon& common_layer,
                          const CompiledLayerProgram& semantics, int layer_index,
                          const TokenKvPolicy& kv);
-
     void run_token_attention(AttentionLayer& attention, LayerCommon& common_layer,
                              const CompiledLayerProgram& semantics, int layer_index,
                              const TokenKvPolicy& kv);
@@ -233,22 +222,19 @@ struct CudaCompiledModel {
                                       const AttentionCapability& plan, int slot,
                                       __nv_bfloat16* q, __nv_bfloat16* k,
                                       __nv_bfloat16* v, const TokenKvPolicy& kv);
-
     void run_token_gated_delta(GatedDeltaNetLayer& gated_delta,
                                const CompiledLayerProgram& semantics);
     void run_token_mamba2(Mamba2Layer& mamba, const CompiledLayerProgram& semantics,
                           const TokenKvPolicy& kv);
     void run_token_mlp_only(MlpOnlyLayer& mlp);
     void run_token_convolution(ConvolutionLayer& convolution);
-
     void run_token_logits();
 
     void enqueue_sampling();
     void enqueue_decode_forward();
-    void enqueue_decode_attention(Layer& layer, LayerCommon& common_layer,
-                                   int layer_index);
+    void enqueue_decode_attention(Layer& layer, LayerCommon& common_layer, int layer_index);
     void enqueue_decode_standard_attention(Layer& layer, LayerCommon& common_layer,
-                                            int layer_index);
+                                           int layer_index);
     void enqueue_decode_latent_attention(Layer& layer, LayerCommon& common_layer,
                                          int layer_index);
     void enqueue_decode_factorized_latent_attention(Layer& layer,
@@ -259,7 +245,6 @@ struct CudaCompiledModel {
     void capture_decode_graph(bool segmented);
     bool use_segmented_attention(int host_position) const;
     CudaGraphExec& graph_for_attention(bool segmented);
-
     PackedSessionContext packed_session_context();
 
     CudaStream stream_;
