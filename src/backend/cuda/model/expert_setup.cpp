@@ -167,7 +167,7 @@ void deallocate_pinned_host(void* pointer) {
 void configure_cuda_expert_resources(CudaCompiledModel& model) {
     CudaModelResources& resources = model.resources_;
     CudaWorkspace& workspace = model.workspace_;
-    if (!resources.options_.expert_offload.enabled() ||
+    if (!resources.options().expert_offload.enabled() ||
         !resources.program_.has_moe()) {
         return;
     }
@@ -185,20 +185,20 @@ void configure_cuda_expert_resources(CudaCompiledModel& model) {
     size_t total_bytes = 0;
     CELEG_CUDA(cudaMemGetInfo(&free_bytes, &total_bytes));
     const int moe_layers = moe_layer_count(resources.program_) +
-        (resources.options_.enable_mtp && resources.program_.has_moe()
+        (resources.options().enable_mtp && resources.program_.has_moe()
             ? resources.dims_.mtp_num_hidden_layers : 0);
     const size_t expert_bytes = bytes_per_expert_bf16(resources.program_);
     ExpertOffloadPlanInputs inputs(resources.program_);
-    inputs.options = resources.options_.expert_offload;
+    inputs.options = resources.options().expert_offload;
     inputs.gpu_free_bytes = free_bytes;
     inputs.non_expert_weight_bytes = estimate_non_expert_weights(
         resources.dims_, resources.program_, resources.model_.graph.tied_embeddings) +
-        (resources.options_.enable_mtp
+        (resources.options().enable_mtp
             ? estimate_mtp_non_expert_weights(resources.dims_, resources.program_) : 0) +
         (64ull << 20);
-    inputs.workspace_bytes = resources.options_.lt_workspace_bytes + (256ull << 20);
+    inputs.workspace_bytes = resources.options().lt_workspace_bytes + (256ull << 20);
     inputs.context_tokens = model.max_context_;
-    if (resources.options_.enable_mtp) {
+    if (resources.options().enable_mtp) {
         inputs.extra_moe_layers = resources.program_.has_moe()
             ? resources.dims_.mtp_num_hidden_layers : 0;
         const int full_attention_layer = [&]() {
@@ -225,35 +225,35 @@ void configure_cuda_expert_resources(CudaCompiledModel& model) {
     workspace.expert_transfer_stream_ = std::make_unique<CudaStream>();
     resources.weights_->expert_offload_plan = workspace.expert_offload_plan_;
 
-    if (resources.options_.expert_offload.backing == ExpertBackingMode::DiskCached &&
+    if (resources.options().expert_offload.backing == ExpertBackingMode::DiskCached &&
         !resources.weights_->host_expert_cache) {
         resources.weights_->host_expert_cache = std::make_unique<HostExpertCache>(
-            resources.options_.expert_offload.host_expert_cache_bytes,
+            resources.options().expert_offload.host_expert_cache_bytes,
             expert_bytes, allocate_pinned_host, deallocate_pinned_host);
     }
-    if (resources.options_.expert_offload.backing == ExpertBackingMode::DiskCached &&
+    if (resources.options().expert_offload.backing == ExpertBackingMode::DiskCached &&
         !resources.weights_->expert_io_manager) {
         resources.weights_->expert_io_manager = std::make_unique<ExpertIoManager>(
-            resources.options_.expert_offload.io_workers,
-            resources.options_.expert_offload.io_queue_depth);
+            resources.options().expert_offload.io_workers,
+            resources.options().expert_offload.io_queue_depth);
     }
-    if (!resources.options_.expert_offload.expert_sidecar_path.empty() &&
+    if (!resources.options().expert_offload.expert_sidecar_path.empty() &&
         !resources.weights_->expert_sidecar) {
         auto sidecar = std::make_unique<ExpertSidecar>();
-        if (sidecar->load(resources.options_.expert_offload.expert_sidecar_path,
+        if (sidecar->load(resources.options().expert_offload.expert_sidecar_path,
                           moe_layers, maximum_experts,
                           maximum_moe_intermediate, resources.program_.hidden)) {
             resources.weights_->expert_sidecar = std::move(sidecar);
             std::fprintf(stderr, "Loaded compatible expert sidecar from %s\n",
-                         resources.options_.expert_offload.expert_sidecar_path.c_str());
+                         resources.options().expert_offload.expert_sidecar_path.c_str());
         } else {
             std::fprintf(stderr, "WARNING: Sidecar %s is incompatible or could not be loaded; falling back to safetensors.\n",
-                         resources.options_.expert_offload.expert_sidecar_path.c_str());
+                         resources.options().expert_offload.expert_sidecar_path.c_str());
         }
     }
-    if (!resources.options_.expert_offload.usage_profile_path.empty()) {
+    if (!resources.options().expert_offload.usage_profile_path.empty()) {
         resources.weights_->usage_profile_path =
-            resources.options_.expert_offload.usage_profile_path;
+            resources.options().expert_offload.usage_profile_path;
         if (resources.weights_->usage_stats.layers.empty()) {
             if (!resources.weights_->usage_stats.load(
                     resources.weights_->usage_profile_path, moe_layers,
