@@ -56,7 +56,7 @@ struct CudaModelResources {
           shape_(topology_.exec), dims_(topology_.dims) {}
 
     CudaExecutionPlan plan_;
-    CudaModelOptions options_;
+    const CudaModelOptions& options_;
     ResolvedModel model_;
     CompiledModelProgram program_;
     RuntimeTopology topology_;
