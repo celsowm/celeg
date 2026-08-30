@@ -61,6 +61,8 @@ struct CudaModelResources {
     CudaModelResources& operator=(CudaModelResources&&) = delete;
 
     const CudaModelOptions& options() const noexcept { return plan_.options(); }
+    ExecutionTopology& shape() noexcept { return topology_.exec; }
+    const ExecutionTopology& shape() const noexcept { return topology_.exec; }
 
     CudaExecutionPlan plan_;
     ResolvedModel model_;
