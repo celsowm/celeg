@@ -2,7 +2,8 @@ if(TARGET celeg_cuda_backend)
     add_executable(cuda_attention_capability_test
         tests/cuda/cuda_attention_capability_test.cpp)
     target_include_directories(cuda_attention_capability_test PRIVATE
-        include src tests src/backend/cuda ${CUDAToolkit_INCLUDE_DIRS})
+        include src tests src/backend/cuda src/backend/cuda/kernels
+        ${CUDAToolkit_INCLUDE_DIRS})
     target_link_libraries(cuda_attention_capability_test PRIVATE celeg_base)
     add_test(NAME cuda_attention_capability_test COMMAND cuda_attention_capability_test)
 
