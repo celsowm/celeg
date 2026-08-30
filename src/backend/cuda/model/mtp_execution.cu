@@ -113,13 +113,13 @@ void CudaCompiledModel::run_mtp_forward_device(const int32_t* token_device) {
     launch_scale(q, layout.query_width(),
                  cuda_query_prescale(layout), stream);
     AttentionRequest attention_request;
-    attention_request.kv_format = resources_.options_.kv_cache_mode;
+    attention_request.kv_format = resources_.options().kv_cache_mode;
     attention_request.operation = AttentionOperation::Decode;
     attention_request.layout = AttentionKvLayout::Contiguous;
     attention_request.position_source = AttentionPositionSource::DeviceCounter;
     attention_request.bias = attention->alibi_slopes.data()
         ? AttentionPositionBias::Alibi : AttentionPositionBias::None;
-    attention_request.fast_attention = resources_.options_.fast_attention;
+    attention_request.fast_attention = resources_.options().fast_attention;
     attention_request.head_dim = layout.head_dim;
     const AttentionCapability attention_plan =
         require_attention_capability(attention_request);
