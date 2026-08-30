@@ -88,9 +88,6 @@ struct MetalModel::Impl {
         id<MTLBuffer> operator_norm = nil;
         id<MTLBuffer> ffn_norm = nil;
         MixerKind mixer_kind = MixerKind::Attention;
-        bool convolution = false;
-        bool gated_delta = false;
-        bool mamba2 = false;
         int cache_length = 0;
         int page_tokens = 16;
         Linear mixer_in;
