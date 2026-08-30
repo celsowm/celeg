@@ -77,10 +77,10 @@ CudaSchedulerDriver::CudaSchedulerDriver(std::string model_path,
             *paged_kv_, engine_options_.prefix_cache,
             engine_options_.prefix_cache_entries);
     }
-    lanes_.reserve(static_cast<size_t>(engine_options_.max_active_requests));
-    for (int i = 0; i < engine_options_.max_active_requests; ++i) {
+    lanes_.reserve(active);
+    for (size_t i = 0; i < active; ++i) {
         auto lane = std::make_unique<Lane>();
-        lane->index = i;
+        lane->index = static_cast<int>(i);
         lanes_.push_back(std::move(lane));
     }
     metrics_.logical_pages_total = paged_kv_ ? total_pages : 0;
