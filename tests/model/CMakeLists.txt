@@ -19,13 +19,15 @@ endforeach()
 
 target_include_directories(layer_inference_rule_test PRIVATE src/model)
 
-add_executable(latent_prefill_path_test tests/model/latent_prefill_path_test.cpp)
-target_include_directories(latent_prefill_path_test PRIVATE
-    include src tests src/backend/cuda/model/prefill_batched/attention)
-target_link_libraries(latent_prefill_path_test PRIVATE celeg_base Threads::Threads)
-add_test(NAME latent_prefill_path_test COMMAND latent_prefill_path_test)
-
 if(TARGET celeg_cuda_backend)
+    add_executable(latent_prefill_path_test tests/model/latent_prefill_path_test.cpp)
+    target_include_directories(latent_prefill_path_test PRIVATE
+        include src tests src/backend/cuda/model/prefill_batched/attention)
+    target_link_libraries(latent_prefill_path_test PRIVATE celeg_cuda_backend Threads::Threads)
+    if(CELEG_RUN_CUDA_TESTS)
+        add_test(NAME latent_prefill_path_test COMMAND latent_prefill_path_test)
+    endif()
+
     add_executable(expert_weight_test tests/model/expert_weight_test.cpp)
     target_include_directories(expert_weight_test PRIVATE
         include src tests src/backend/cuda)
