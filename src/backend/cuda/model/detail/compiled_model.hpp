@@ -40,9 +40,6 @@ struct ModelBootstrap;
 }
 
 struct CudaCompiledModel {
-    static constexpr int kPrefillAttnChunkTokens = kAttentionPrefillChunkTokens;
-    static constexpr int kMaxGemmAttentionRows = kAttentionMaxGemmRows;
-
     CudaModelResources resources_;
     CudaWeightCache& weight_cache_;
     std::shared_ptr<const RuntimeContext> runtime_;
