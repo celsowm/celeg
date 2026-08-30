@@ -166,9 +166,6 @@ private:
     };
 
     struct Nvfp4Workspace {
-        // Fallback path (weight dequantized to bf16).
-        DeviceBuffer<__nv_bfloat16> weight_bf16;
-        // Native path.
         DeviceBuffer<uint8_t> act_packed;
         DeviceBuffer<__nv_fp8_e4m3> act_scale_raw;
         DeviceBuffer<__nv_fp8_e4m3> act_scale_swizzled;

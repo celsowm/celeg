@@ -317,6 +317,68 @@ void launch_dequant_nvfp4(const uint8_t* packed, const __nv_fp8_e4m3* block_scal
     CELEG_KERNEL_DEBUG_SYNC(stream);
 }
 
+__device__ float decode_e2m1_fallback(uint8_t nibble) {
+    constexpr float kMagnitude[8] = {0.0f, 0.5f, 1.0f, 1.5f,
+                                     2.0f, 3.0f, 4.0f, 6.0f};
+    const float magnitude = kMagnitude[nibble & 0x7U];
+    return (nibble & 0x8U) != 0U ? -magnitude : magnitude;
+}
+
+__global__ void nvfp4_w4a4_fallback_kernel(
+    const uint8_t* __restrict__ act_packed,
+    const __nv_fp8_e4m3* __restrict__ act_scales,
+    float act_global_scale,
+    const uint8_t* __restrict__ weight_packed,
+    const __nv_fp8_e4m3* __restrict__ weight_scales,
+    float weight_global_scale,
+    __nv_bfloat16* __restrict__ y,
+    int m, int n, int k, int block_size, float beta) {
+    const int col = blockIdx.x * blockDim.x + threadIdx.x;
+    const int row = blockIdx.y;
+    if (col >= n || row >= m) return;
+    const int blocks_per_row = k / block_size;
+    float value = 0.0f;
+    for (int block = 0; block < blocks_per_row; ++block) {
+        const float act_scale =
+            float(act_scales[static_cast<size_t>(row) * blocks_per_row + block]) /
+            act_global_scale;
+        const float weight_scale =
+            float(weight_scales[static_cast<size_t>(col) * blocks_per_row + block]) /
+            weight_global_scale;
+        const int base = block * block_size;
+        for (int offset = 0; offset < block_size; ++offset) {
+            const int index = base + offset;
+            const uint8_t act_byte =
+                act_packed[(static_cast<size_t>(row) * k + index) / 2];
+            const uint8_t weight_byte =
+                weight_packed[(static_cast<size_t>(col) * k + index) / 2];
+            const uint8_t act_nibble = (index & 1) != 0
+                ? static_cast<uint8_t>(act_byte >> 4) : static_cast<uint8_t>(act_byte & 0xFU);
+            const uint8_t weight_nibble = (index & 1) != 0
+                ? static_cast<uint8_t>(weight_byte >> 4) : static_cast<uint8_t>(weight_byte & 0xFU);
+            value += decode_e2m1_fallback(act_nibble) * act_scale *
+                     decode_e2m1_fallback(weight_nibble) * weight_scale;
+        }
+    }
+    const size_t output = static_cast<size_t>(row) * n + col;
+    if (beta != 0.0f) value += beta * bf16_float(y[output]);
+    y[output] = __float2bfloat16(value);
+}
+
+void launch_nvfp4_w4a4_fallback(
+    const uint8_t* act_packed, const __nv_fp8_e4m3* act_scales,
+    float act_global_scale, const uint8_t* weight_packed,
+    const __nv_fp8_e4m3* weight_scales, float weight_global_scale,
+    __nv_bfloat16* y, int m, int n, int k, float beta, cudaStream_t stream) {
+    constexpr int threads = 128;
+    const dim3 grid(static_cast<unsigned>((n + threads - 1) / threads),
+                    static_cast<unsigned>(m));
+    nvfp4_w4a4_fallback_kernel<<<grid, threads, 0, stream>>>(
+        act_packed, act_scales, act_global_scale, weight_packed, weight_scales,
+        weight_global_scale, y, m, n, k, kNvfp4BlockSize, beta);
+    CELEG_KERNEL_DEBUG_SYNC(stream);
+}
+
 // Quantizes bf16 to packed NVFP4 (e2m1, 2/byte) with a per-16-block UE4M3
 // scale (row-major [rows, cols/block_size]), given a per-tensor fp32
 // global_scale calibration factor (dequant = e2m1 * block_scale /

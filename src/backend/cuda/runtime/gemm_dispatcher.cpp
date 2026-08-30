@@ -510,6 +510,12 @@ size_t nvfp4_scale_buffer_bytes(int rows, int k_scale) {
     const int tiles_n = (k_scale + 3) / 4;
     return static_cast<size_t>(tiles_m) * tiles_n * 512;
 }
+
+bool supports_native_nvfp4(int device_ordinal) {
+    int major = 0;
+    return cudaDeviceGetAttribute(&major, cudaDevAttrComputeCapabilityMajor,
+                                  device_ordinal) == cudaSuccess && major >= 10;
+}
 }
 
 void GemmDispatcher::ensure_nvfp4_capacity(int m, int n, int k) {
@@ -525,7 +531,6 @@ void GemmDispatcher::ensure_nvfp4_capacity(int m, int n, int k) {
     const int ck = nvfp4_workspace_.capacity_k;
     const int k_scale = ck / kNvfp4BlockSize;
 
-    nvfp4_workspace_.weight_bf16.reset(static_cast<size_t>(cn) * ck);
     nvfp4_workspace_.act_packed.reset(static_cast<size_t>(cm) * ck / 2);
     nvfp4_workspace_.act_scale_raw.reset(static_cast<size_t>(cm) * k_scale);
     nvfp4_workspace_.act_scale_swizzled.reset(nvfp4_scale_buffer_bytes(cm, k_scale));
@@ -622,21 +627,18 @@ void GemmDispatcher::linear_nvfp4_w4a4(const __nv_bfloat16* x,
     }
     ensure_nvfp4_capacity(m, n, k);
 
-    LtPlan& plan = get_or_create_nvfp4_lt_plan(m, n, k);
-    if (!plan.available) {
-        // No cuBLASLt fp4 algorithm for this shape -- fall back to
-        // dequantizing the weight to bf16 and running the ordinary bf16
-        // GEMM (loses fp4 tensor-core throughput but stays correct).
-        launch_dequant_nvfp4(weight.data, weight.block_scales, weight.global_scale,
-                             nvfp4_workspace_.weight_bf16.data(), n, k,
-                             kNvfp4BlockSize, stream_);
-        if (m == 1) {
-            launch_bf16_gemv(x, nvfp4_workspace_.weight_bf16.data(), y, n, k, beta, stream_);
-        } else if (options_.gemm_backend == GemmBackend::CublasLt) {
-            linear_cublaslt(x, nvfp4_workspace_.weight_bf16.data(), y, m, n, k, beta);
-        } else {
-            linear_cublas(x, nvfp4_workspace_.weight_bf16.data(), y, m, n, k, beta);
-        }
+    const bool native_supported = supports_native_nvfp4(device_ordinal_);
+    LtPlan* plan = native_supported ? &get_or_create_nvfp4_lt_plan(m, n, k) : nullptr;
+    if (!plan || !plan->available) {
+        launch_quantize_e2m1_per_block(
+            x, nvfp4_workspace_.act_packed.data(),
+            nvfp4_workspace_.act_scale_raw.data(), m, k, kNvfp4BlockSize,
+            weight.input_global_scale, stream_);
+        launch_nvfp4_w4a4_fallback(
+            nvfp4_workspace_.act_packed.data(),
+            nvfp4_workspace_.act_scale_raw.data(), weight.input_global_scale,
+            weight.data, weight.block_scales, weight.global_scale,
+            y, m, n, k, beta, stream_);
         return;
     }
 
@@ -655,18 +657,18 @@ void GemmDispatcher::linear_nvfp4_w4a4(const __nv_bfloat16* x,
     __nv_fp8_e4m3* a_scale_ptr = nvfp4_workspace_.weight_scale_swizzled.data();
     __nv_fp8_e4m3* b_scale_ptr = nvfp4_workspace_.act_scale_swizzled.data();
     CELEG_CUBLAS(cublasLtMatmulDescSetAttribute(
-        plan.operation, CUBLASLT_MATMUL_DESC_A_SCALE_POINTER, &a_scale_ptr, sizeof(a_scale_ptr)));
+        plan->operation, CUBLASLT_MATMUL_DESC_A_SCALE_POINTER, &a_scale_ptr, sizeof(a_scale_ptr)));
     CELEG_CUBLAS(cublasLtMatmulDescSetAttribute(
-        plan.operation, CUBLASLT_MATMUL_DESC_B_SCALE_POINTER, &b_scale_ptr, sizeof(b_scale_ptr)));
+        plan->operation, CUBLASLT_MATMUL_DESC_B_SCALE_POINTER, &b_scale_ptr, sizeof(b_scale_ptr)));
 
     const float alpha = 1.0f;
     const float raw_beta = 0.0f;
     CELEG_CUBLAS(cublasLtMatmul(
-        handles_.cublas_lt.get(), plan.operation,
-        &alpha, weight.data, plan.a, nvfp4_workspace_.act_packed.data(), plan.b,
-        &raw_beta, nvfp4_workspace_.raw.data(), plan.c,
-        nvfp4_workspace_.raw.data(), plan.d,
-        &plan.algorithm, lt_workspace_.data(), plan.workspace_size, stream_));
+        handles_.cublas_lt.get(), plan->operation,
+        &alpha, weight.data, plan->a, nvfp4_workspace_.act_packed.data(), plan->b,
+        &raw_beta, nvfp4_workspace_.raw.data(), plan->c,
+        nvfp4_workspace_.raw.data(), plan->d,
+        &plan->algorithm, lt_workspace_.data(), plan->workspace_size, stream_));
 
     const float total_scale = 1.0f / (weight.global_scale * weight.input_global_scale);
     launch_nvfp4_global_scale_apply(nvfp4_workspace_.raw.data(), total_scale, y, m, n, beta, stream_);
