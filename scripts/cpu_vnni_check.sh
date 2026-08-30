@@ -3,11 +3,11 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 BUILD="${BUILD_DIR:-$ROOT/build-cpu}"
 
-if [[ ! -x "$BUILD/cpu_kernels_test" ]]; then
-  echo "missing $BUILD/cpu_kernels_test" >&2
+if [[ ! -x "$BUILD/cpu_linear_kernels_test" ]]; then
+  echo "missing $BUILD/cpu_linear_kernels_test" >&2
   exit 1
 fi
-"$BUILD/cpu_kernels_test"
+"$BUILD/cpu_linear_kernels_test"
 
 OBJECT="$(find "$BUILD/CMakeFiles/celeg_cpu_backend.dir/src/backend/cpu/kernels" \
   -name 'quantized_dot.cpp.o' -o -name 'quantized_dot.cpp.obj' | head -n 1)"
