@@ -25,13 +25,13 @@ void CudaCompiledModel::enqueue_decode_latent_attention(
     const CompiledAttentionExecution& execution = compiled_attention->execution;
     AttentionLayer* attention = as_attention(layer);
     if (!attention) throw std::logic_error("CUDA layer is not attention");
-    if (resources_.options_.kv_cache_mode == KvCacheMode::Int8) {
+    if (resources_.options().kv_cache_mode == KvCacheMode::Int8) {
         throw std::invalid_argument("CUDA latent attention requires BF16 state storage");
     }
     const AttentionSpec& layout = attention->layout;
     const float qk_norm_epsilon = layout.query_norm
         ? layout.query_norm->epsilon : resources_.program_.final_norm.epsilon;
-    const bool fuse_mixer_residual = resources_.options_.fused_residuals &&
+    const bool fuse_mixer_residual = resources_.options().fused_residuals &&
         !semantics.mixer_norm.after.has_value() &&
         !std::holds_alternative<std::monostate>(semantics.feed_forward);
     AttentionLayer* owner = attention;
