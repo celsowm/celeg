@@ -27,7 +27,7 @@ SessionStore::SessionState CudaCompiledModel::make_session_state() {
         .shape = resources_.shape_, .program = resources_.program_,
         .dims = resources_.dims_,
         .max_context = max_context_, .position = session_.position_,
-        .kv_cache_mode = resources_.options_.kv_cache_mode, .model_identity = resources_.model_identity_,
+        .kv_cache_mode = resources_.options().kv_cache_mode, .model_identity = resources_.model_identity_,
         .stream = stream_.get(), .seen_tokens = &sampling_.seen_tokens,
         .logits = &workspace_.logits_, .rng_state = &sampling_.rng_state};
     state.layer_buffers.reserve(resources_.layers_.size());
