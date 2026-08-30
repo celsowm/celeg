@@ -71,7 +71,7 @@ void CudaCompiledModel::snapshot_speculative_state() {
                 mrope_position_device_.data(), mrope_position_device_.bytes(), stream);
 
     for (size_t index = 0; index < resources_.layers_.size(); ++index) {
-        SpeculativeLayerSnapshot& saved = speculative_snapshot_.layers[index];
+        CudaSpeculativeLayerState& saved = speculative_snapshot_.layers[index];
         Layer& layer = resources_.layers_[index];
         const auto clear_saved = [&saved]() {
             saved.conv_state.reset(0);
@@ -135,6 +135,7 @@ void CudaCompiledModel::restore_speculative_state() {
         copy_device(cudaMemcpyDeviceToDevice,
                     workspace_.mtp_target_candidate_.data(),
                     speculative_snapshot_.mtp_target_candidate.data(),
+                    workspace_.mtp_target_target_candidate.data(),
                     workspace_.mtp_target_candidate_.bytes(), stream);
     }
     copy_device(cudaMemcpyDeviceToDevice, sampling_.rng_state.data(),
@@ -146,7 +147,7 @@ void CudaCompiledModel::restore_speculative_state() {
                 mrope_position_device_.bytes(), stream);
 
     for (size_t index = 0; index < resources_.layers_.size(); ++index) {
-        const SpeculativeLayerSnapshot& saved = speculative_snapshot_.layers[index];
+        const CudaSpeculativeLayerState& saved = speculative_snapshot_.layers[index];
         Layer& layer = resources_.layers_[index];
         visit_layer(layer,
           [](AttentionLayer*) {},
