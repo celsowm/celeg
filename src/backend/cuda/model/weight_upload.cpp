@@ -39,7 +39,7 @@ const __nv_bfloat16* upload_bf16(SharedModelWeights& weights,
     }
     const size_t count = tensor_element_count(target_shape, name);
 
-    DeviceWeight weight;
+    DeviceWeight weight(weights.memory_kind);
     weight.shape = expected.empty() ? tensor.shape : expected;
     weight.bf16_storage.reset(count);
 
@@ -103,7 +103,7 @@ const __nv_bfloat16* WeightLoader::load_rms_norm_weight(
             }
         }
     }
-    DeviceWeight adjusted;
+    DeviceWeight adjusted(weights_->memory_kind);
     adjusted.shape = expected;
     adjusted.bf16_storage.reset(count);
     CELEG_CUDA(cudaMemcpy(adjusted.bf16_storage.data(), host.data(),
@@ -135,7 +135,7 @@ const float* WeightLoader::load_f32_weight(
     if (tensor.bytes != count * sizeof(float)) {
         throw std::runtime_error("invalid f32 byte count for " + name);
     }
-    DeviceWeight weight;
+    DeviceWeight weight(weights_->memory_kind);
     weight.shape = tensor.shape;
     weight.scales_storage.reset(count);
     CELEG_CUDA(cudaMemcpy(weight.scales_storage.data(), tensor.data, tensor.bytes,
@@ -160,7 +160,7 @@ const LinearWeight* WeightLoader::load_router_weight_named(
     const __nv_bfloat16* bf16 = load_weight(repo, name,
                                             {num_experts, hidden});
 
-    DeviceWeight& slot = weights_->tensors[name];
+    DeviceWeight& slot = weights_->tensors.at(name);
     LinearWeight view;
     view.storage = Bf16LinearStorage{bf16};
     view.rows = num_experts;
