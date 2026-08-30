@@ -57,7 +57,8 @@ const LinearWeight* WeightLoader::load_linear_weight(
     const int cols = static_cast<int>(expected[1]);
     const MaterializationPlan plan = plan_linear_materialization(
         *source, weight_mode, name, rows, cols);
-    return commit_linear(name, materialize_linear(plan), rows, cols);
+    return commit_linear(
+        name, materialize_linear(plan, weights_->memory_kind), rows, cols);
 }
 
 const LinearWeight* WeightLoader::load_concat_linear_weight(
@@ -84,7 +85,7 @@ const LinearWeight* WeightLoader::load_concat_linear_weight(
             scales.insert(scales.end(), packed.scales.begin(), packed.scales.end());
             rows += packed.rows;
         }
-        DeviceWeight weight;
+        DeviceWeight weight(weights_->memory_kind);
         weight.shape = {rows, cols};
         cuda_loader_detail::bind_int8_storage(weight, values, scales);
         return commit_linear(synthetic_name, std::move(weight),
@@ -104,7 +105,7 @@ const LinearWeight* WeightLoader::load_concat_linear_weight(
             scales.insert(scales.end(), packed.scales.begin(), packed.scales.end());
             rows += packed.rows;
         }
-        DeviceWeight weight;
+        DeviceWeight weight(weights_->memory_kind);
         weight.shape = {rows, cols};
         cuda_loader_detail::bind_fp8_storage(weight, values, scales);
         return commit_linear(synthetic_name, std::move(weight),
@@ -134,7 +135,7 @@ const LinearWeight* WeightLoader::load_concat_linear_weight(
                                 packed.block_scales.end());
             rows += packed.rows;
         }
-        DeviceWeight weight;
+        DeviceWeight weight(weights_->memory_kind);
         weight.shape = {rows, cols};
         cuda_loader_detail::bind_nvfp4_storage(weight, packed_values, block_scales,
                                                *global_scale, *input_global_scale);
@@ -221,7 +222,7 @@ const LinearWeight* WeightLoader::load_concat_linear_weight(
                     row_offset * static_cast<size_t>(common_width));
                 row_offset += static_cast<size_t>(v.shape[0]);
             }
-            DeviceWeight weight;
+            DeviceWeight weight(weights_->memory_kind);
             weight.shape = {total_rows, common_width};
             weight.bf16_storage.reset(host_bf16.size());
             CELEG_CUDA(cudaMemcpy(weight.bf16_storage.data(), host_bf16.data(),
@@ -241,7 +242,7 @@ const LinearWeight* WeightLoader::load_concat_linear_weight(
         }
 
         if (weight_mode == WeightMode::NativeGguf) {
-            DeviceWeight weight;
+            DeviceWeight weight(weights_->memory_kind);
             weight.shape = {total_rows, common_width};
             weight.linear.storage = GgufLinearStorage{};
             std::vector<GgufLinearSegment>& segments =
@@ -255,7 +256,7 @@ const LinearWeight* WeightLoader::load_concat_linear_weight(
                 }
                 const size_t row_bytes = static_cast<size_t>(common_width / trait.block_size) * trait.type_size;
                 const size_t bytes = static_cast<size_t>(v.shape[0]) * row_bytes;
-                DeviceBuffer<uint8_t> raw_blocks(bytes);
+                DeviceBuffer<uint8_t> raw_blocks(bytes, weights_->memory_kind);
                 CELEG_CUDA(cudaMemcpy(raw_blocks.data(), v.data,
                                     bytes, cudaMemcpyHostToDevice));
                 GgufLinearSegment segment;
@@ -274,7 +275,7 @@ const LinearWeight* WeightLoader::load_concat_linear_weight(
                                  static_cast<int>(common_width));
         }
 
-        DeviceWeight weight;
+        DeviceWeight weight(weights_->memory_kind);
         weight.shape = {total_rows, common_width};
         weight.bf16_storage.reset(static_cast<size_t>(total_rows) * common_width);
         int row_offset = 0;
@@ -286,7 +287,7 @@ const LinearWeight* WeightLoader::load_concat_linear_weight(
             }
             const size_t row_bytes = static_cast<size_t>(common_width / trait.block_size) * trait.type_size;
             const size_t bytes = static_cast<size_t>(v.shape[0]) * row_bytes;
-            DeviceBuffer<uint8_t> raw_blocks(bytes);
+            DeviceBuffer<uint8_t> raw_blocks(bytes, CudaMemoryKind::Device);
             CELEG_CUDA(cudaMemcpy(raw_blocks.data(), v.data,
                                 bytes, cudaMemcpyHostToDevice));
             launch_gguf_dequant(
@@ -322,7 +323,7 @@ const LinearWeight* WeightLoader::load_concat_linear_weight(
                              static_cast<int>(common_width));
     }
 
-    DeviceWeight weight;
+    DeviceWeight weight(weights_->memory_kind);
     weight.shape = {total_rows, common_width};
     if (weight_mode == WeightMode::Int8) {
         std::vector<int8_t> quantized(total_count);
