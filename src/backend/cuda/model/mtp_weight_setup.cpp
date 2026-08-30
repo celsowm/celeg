@@ -12,23 +12,12 @@
 #include "backend/cuda/moe/expert_source.hpp"
 
 #include <memory>
-#include <algorithm>
 #include <stdexcept>
 #include <string>
 #include <vector>
 
 namespace celeg {
 namespace {
-
-int last_full_attention_layer(const CompiledModelProgram& program) {
-    for (int layer = static_cast<int>(program.layers.size()) - 1; layer >= 0; --layer) {
-        if (std::holds_alternative<CompiledAttentionProgram>(
-                program.layers.at(static_cast<size_t>(layer)).mixer)) {
-            return layer;
-        }
-    }
-    return -1;
-}
 
 /// MTP layers are not part of the canonical weight plan yet (extensibility
 /// plan, Sprint C residual gap), so their routed-expert spellings are
@@ -65,16 +54,12 @@ void load_mtp_weights(CudaCompiledModel& model, const IWeightRepository& repo) {
     if (!resources.options().allocate_local_kv_cache) {
         throw std::invalid_argument("MTP requires a local KV cache; disable packed/paged execution");
     }
-    const int full_layer = last_full_attention_layer(resources.program_);
-    if (full_layer < 0) {
+    const CompiledAttentionProgram* full_attention = resources.program_.last_attention();
+    if (!full_attention) {
         throw std::runtime_error("MTP requires a full-attention target layer");
     }
-    const AttentionSpec mtp_layout = [&]() {
-        AttentionSpec layout = std::get<CompiledAttentionProgram>(
-            resources.program_.layers.at(static_cast<size_t>(full_layer)).mixer).semantics;
-        layout.kv_sharing = {};
-        return layout;
-    }();
+    AttentionSpec mtp_layout = full_attention->semantics;
+    mtp_layout.kv_sharing = {};
 
     CudaMtpResources& mtp = resources.mtp_;
     mtp.enabled = true;
@@ -93,15 +78,9 @@ void load_mtp_weights(CudaCompiledModel& model, const IWeightRepository& repo) {
         NormWeightKind::Scale);
     mtp.logits = resources.lm_head_ ? resources.lm_head_ : resources.embedding_;
     mtp.layers.reserve(static_cast<size_t>(mtp.layer_count));
-    const auto moe_program = std::find_if(resources.program_.layers.begin(),
-        resources.program_.layers.end(), [](const CompiledLayerProgram& layer) {
-            return std::holds_alternative<MoeLayerProgram>(layer.feed_forward);
-        });
-    const auto dense_program = std::find_if(resources.program_.layers.begin(),
-        resources.program_.layers.end(), [](const CompiledLayerProgram& layer) {
-            return std::holds_alternative<CompiledDenseFeedForwardProgram>(
-                layer.feed_forward);
-        });
+    const MoeLayerProgram* moe_program = resources.program_.first_moe();
+    const CompiledDenseFeedForwardProgram* dense_program =
+        resources.program_.first_dense_feed_forward();
 
     for (int index = 0; index < mtp.layer_count; ++index) {
         const std::string prefix = "mtp.layers." + std::to_string(index);
@@ -113,9 +92,8 @@ void load_mtp_weights(CudaCompiledModel& model, const IWeightRepository& repo) {
             repo, prefix + ".post_attention_layernorm.weight", {resources.program_.hidden},
             NormWeightKind::Scale);
 
-        if (moe_program != resources.program_.layers.end()) {
-            const auto& moe_semantics =
-                std::get<MoeLayerProgram>(moe_program->feed_forward);
+        if (moe_program) {
+            const MoeLayerProgram& moe_semantics = *moe_program;
             const int E = moe_semantics.router.expert_count;
             const int inter = moe_semantics.routed.mlp.intermediate_size;
             MoeFfnWeights moe{};
@@ -127,7 +105,7 @@ void load_mtp_weights(CudaCompiledModel& model, const IWeightRepository& repo) {
             router_float.reset(static_cast<size_t>(E) * resources.program_.hidden);
             launch_cast_bf16_to_float(
                 std::get<Bf16LinearStorage>(moe.router->storage).data, router_float.data(),
-                                      E * resources.program_.hidden, model.stream_.get());
+                E * resources.program_.hidden, model.stream_.get());
             moe.router_float = router_float.data();
 
             if (moe_semantics.shared) {
@@ -228,11 +206,10 @@ void load_mtp_weights(CudaCompiledModel& model, const IWeightRepository& repo) {
             }
             common_layer.feed_forward = moe;
         } else {
-            if (dense_program == resources.program_.layers.end()) {
+            if (!dense_program) {
                 throw std::runtime_error("MTP requires a compiled dense FFN width");
             }
-            const int inter = std::get<CompiledDenseFeedForwardProgram>(
-                dense_program->feed_forward).intermediate_size;
+            const int inter = dense_program->intermediate_size;
             if (inter <= 0) {
                 throw std::runtime_error("MTP requires a compiled dense FFN width");
             }
