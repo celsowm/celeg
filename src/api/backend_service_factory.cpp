@@ -16,12 +16,12 @@ namespace celeg::api {
 
 namespace {
 
-template <typename Derived, typename ModelOptions, typename EngineOptions>
+template <typename Derived, typename ModelSettings, typename EngineOptions>
 class BackendOptionsStorage : public IBackendOptions {
 public:
     BackendOptionsStorage(BackendId backend_id,
                           std::string_view schema_id,
-                          ModelOptions model_value,
+                          ModelSettings model_value,
                           EngineOptions engine_value)
         : backend_id_(backend_id),
           schema_id_(schema_id),
@@ -31,7 +31,7 @@ public:
     BackendId backend_id() const noexcept override { return backend_id_; }
     std::string_view schema_id() const noexcept override { return schema_id_; }
 
-    ModelOptions model;
+    ModelSettings model;
     EngineOptions engine;
 
 protected:
