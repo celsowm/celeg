@@ -69,7 +69,7 @@ PackedSessionContext CudaCompiledModel::packed_session_context() {
 
     context.immutable.max_context_value = max_context_;
     context.immutable.options_state = &resources_.options();
-    context.immutable.shape_state = &resources_.shape_;
+    context.immutable.shape_state = &resources_.shape();
     context.immutable.program_state = &resources_.program_;
     context.immutable.weights_state = resources_.weights_;
     context.immutable.weight_layout_state = resources_.weight_layout_.get();
