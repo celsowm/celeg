@@ -1,4 +1,5 @@
 #include "detail/compiled_model.hpp"
+#include "backend/cuda/weight_cache.hpp"
 
 #include <functional>
 
@@ -10,9 +11,25 @@ CudaModel::CudaModel(const std::string& model_path,
                    GenerationConfig generation,
                    std::shared_ptr<const RuntimeContext> runtime,
                    int tokenizer_vocab_size)
-    : state_(std::make_unique<CudaCompiledModel>(
+    : CudaModel(model_path, max_context, std::move(options), std::move(generation),
+                std::move(runtime), tokenizer_vocab_size,
+                std::make_shared<CudaWeightCache>()) {}
+
+CudaModel::CudaModel(const std::string& model_path,
+                   int max_context,
+                   CudaModelOptions options,
+                   GenerationConfig generation,
+                   std::shared_ptr<const RuntimeContext> runtime,
+                   int tokenizer_vocab_size,
+                   std::shared_ptr<CudaWeightCache> weight_cache)
+    : weight_cache_(std::move(weight_cache)),
+      state_(std::make_unique<CudaCompiledModel>(
           model_path, max_context, cuda_model_options_from_environment(std::move(options)),
-          std::move(generation), std::move(runtime), tokenizer_vocab_size)) {}
+          std::move(generation), *weight_cache_, std::move(runtime), tokenizer_vocab_size)) {
+    if (!weight_cache_) {
+        throw std::invalid_argument("CudaModel requires a weight cache");
+    }
+}
 
 CudaModel::~CudaModel() = default;
 
