@@ -142,7 +142,7 @@ struct CudaCompiledModel {
     void set_active_segmented_attention(bool value) { session_.active_segmented_attention_ = value; }
     const CudaModelOptions& options() const { return resources_.options(); }
     const GenerationConfig& generation() const { return session_.generation_; }
-    const ExecutionTopology& shape() const { return resources_.shape_; }
+    const ExecutionTopology& shape() const { return resources_.shape(); }
     const std::shared_ptr<SharedModelWeights>& weights() const { return resources_.weights_; }
     DeviceBuffer<__nv_bfloat16>& logits() { return workspace_.logits_; }
     DeviceBuffer<uint8_t>& seen_tokens() { return sampling_.seen_tokens; }
