@@ -26,16 +26,16 @@ void CudaWeightSetup::load(CudaCompiledModel& model,
                            const detail::ModelBootstrap& bootstrap,
                            LayerLoader load_layers) {
     CudaManagedWeightAllocationScope managed_scope(
-        model.resources_.options_.managed_weights);
+        model.resources_.options().managed_weights);
     model.resources_.weights_ = default_cuda_weight_cache().acquire(
-        model_path, model.resources_.options_.weight_mode,
-        model.resources_.options_.expert_offload.fingerprint() +
-        "|mtp=" + (model.resources_.options_.enable_mtp ? "1" : "0") +
+        model_path, model.resources_.options().weight_mode,
+        model.resources_.options().expert_offload.fingerprint() +
+        "|mtp=" + (model.resources_.options().enable_mtp ? "1" : "0") +
         "|mtp_steps=" +
-            std::to_string(model.resources_.options_.mtp_speculative_tokens),
-        model.resources_.options_.managed_weights);
+            std::to_string(model.resources_.options().mtp_speculative_tokens),
+        model.resources_.options().managed_weights);
     model.resources_.weight_loader_ = std::make_unique<WeightLoader>(
-        model.resources_.weights_, model.resources_.options_.weight_mode);
+        model.resources_.weights_, model.resources_.options().weight_mode);
 
     std::unique_lock<std::mutex> shared_weights_lock(model.resources_.weights_->mutex);
     model.resources_.weights_->repo = bootstrap.checkpoint.repository;
@@ -79,14 +79,14 @@ void CudaWeightSetup::load(CudaCompiledModel& model,
                               TensorRole::PerLayerProjectionNorm),
             {input_size});
         per_layer.embedding_layout = make_cuda_embedding_layout(
-            model.resources_.options_.weight_mode, *per_layer.embedding,
+            model.resources_.options().weight_mode, *per_layer.embedding,
             "per-layer embedding");
         per_layer.validate();
         model.resources_.per_layer_input_ = std::move(per_layer);
     }
 
     model.resources_.weight_layout_ = make_cuda_embedding_layout(
-        model.resources_.options_.weight_mode, *model.resources_.embedding_, "embedding");
+        model.resources_.options().weight_mode, *model.resources_.embedding_, "embedding");
     const std::string lm_head_name = tensor_name(
         model.resources_.model_.weight_plan.requests,
         TensorRole::LanguageModelHead);
