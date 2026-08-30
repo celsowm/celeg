@@ -24,8 +24,8 @@ uint64_t fnv1a_hash(std::string_view text) {
 
 SessionStore::SessionState CudaCompiledModel::make_session_state() {
     SessionStore::SessionState state{
-        .shape = resources_.shape_, .program = resources_.program_,
-        .dims = resources_.dims_,
+        .shape = resources_.shape(), .program = resources_.program_,
+        .dims = resources_.dims(),
         .max_context = max_context_, .position = session_.position_,
         .kv_cache_mode = resources_.options().kv_cache_mode, .model_identity = resources_.model_identity_,
         .stream = stream_.get(), .seen_tokens = &sampling_.seen_tokens,
