@@ -66,7 +66,7 @@ void CudaCompiledModel::warmup_decode_gemms() {
             linear(workspace_.latent_decompressed_.data(), *attention_layer->out,
                    workspace_.hidden_.data(), 1, resources_.program_.hidden,
                    layout.latent_output_width(),
-                   resources_.options_.fused_residuals ? 1.0f : 0.0f);
+                   resources_.options().fused_residuals ? 1.0f : 0.0f);
         } else {
             linear(workspace_.normed_.data(), *attention_layer->latent_query,
                    workspace_.latent_query_content_.data(), 1,
@@ -79,7 +79,7 @@ void CudaCompiledModel::warmup_decode_gemms() {
             linear(workspace_.op_output_.data(), *attention_layer->out,
                    workspace_.hidden_.data(), 1, resources_.program_.hidden,
                    layout.latent_query_content_width(),
-                   resources_.options_.fused_residuals ? 1.0f : 0.0f);
+                   resources_.options().fused_residuals ? 1.0f : 0.0f);
         }
     } else {
     const int query_projection_width = attention_layer->query->rows;
@@ -101,7 +101,7 @@ void CudaCompiledModel::warmup_decode_gemms() {
 
     linear(workspace_.op_output_.data(), *attention_layer->out, workspace_.hidden_.data(),
            1, resources_.program_.hidden, layout.query_width(),
-           resources_.options_.fused_residuals ? 1.0f : 0.0f);
+           resources_.options().fused_residuals ? 1.0f : 0.0f);
     }
     if (convolution_layer) {
         linear(workspace_.normed_.data(), *convolution_layer->conv_in, workspace_.conv_projected_.data(),
@@ -110,7 +110,7 @@ void CudaCompiledModel::warmup_decode_gemms() {
     if (const DenseFfnWeights* dense = as_dense_ffn(first_common.feed_forward)) {
         linear(workspace_.activated_.data(), *dense->w2, workspace_.hidden_.data(),
                1, resources_.program_.hidden, dense->w2->cols,
-               resources_.options_.fused_residuals ? 1.0f : 0.0f);
+               resources_.options().fused_residuals ? 1.0f : 0.0f);
     }
     linear(workspace_.normed_.data(), *logits_weight(), workspace_.logits_.data(),
            1, resources_.dims_.vocab_size, resources_.program_.hidden);
