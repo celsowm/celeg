@@ -52,7 +52,7 @@ struct CudaMtpResources {
 
 struct CudaModelResources {
     explicit CudaModelResources(CudaExecutionPlan execution_plan)
-        : plan_(std::move(execution_plan)), dims_(topology_.dims) {}
+        : plan_(std::move(execution_plan)) {}
 
     CudaModelResources(const CudaModelResources&) = delete;
     CudaModelResources& operator=(const CudaModelResources&) = delete;
@@ -69,7 +69,6 @@ struct CudaModelResources {
     ResolvedModel model_;
     CompiledModelProgram program_;
     RuntimeTopology topology_;
-    CheckpointDimensions& dims_;
     std::string model_identity_;
     std::shared_ptr<SharedModelWeights> weights_;
     std::unique_ptr<WeightLoader> weight_loader_;
