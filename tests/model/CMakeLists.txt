@@ -33,7 +33,7 @@ if(TARGET celeg_cuda_backend)
 
     add_executable(expert_weight_test tests/model/expert_weight_test.cpp)
     target_include_directories(expert_weight_test PRIVATE
-        include src tests src/backend/cuda)
+        include src tests src/backend/cuda src/backend/cuda/model)
     target_link_libraries(expert_weight_test PRIVATE celeg_cuda_backend)
     if(CELEG_RUN_CUDA_TESTS)
         add_test(NAME expert_weight_test COMMAND expert_weight_test)
