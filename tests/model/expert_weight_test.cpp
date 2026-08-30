@@ -19,20 +19,6 @@ uint16_t f32_to_bf16(float value) {
     return static_cast<uint16_t>(bits >> 16);
 }
 
-void write_safetensors(const std::filesystem::path& path,
-                       const std::string& header,
-                       const void* data, size_t data_size) {
-    std::ofstream out(path, std::ios::binary);
-    const uint64_t header_size = header.size();
-    celeg::binary::write_le(out, header_size);
-    out.write(header.data(), static_cast<std::streamsize>(header.size()));
-    if (data_size) {
-        out.write(static_cast<const char*>(data),
-                  static_cast<std::streamsize>(data_size));
-    }
-    out.close();
-}
-
 }
 
 int main() {
