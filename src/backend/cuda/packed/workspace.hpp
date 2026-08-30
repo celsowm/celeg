@@ -1,8 +1,8 @@
 #pragma once
 
-#include "celeg/backend/cuda/packed/executor.hpp"
-#include "celeg/backend/cuda/packed/handles.hpp"
-#include "celeg/backend/cuda/utils.cuh"
+#include "packed/executor.hpp"
+#include "packed/handles.hpp"
+#include "utils.cuh"
 #include "celeg/model/runtime_types.hpp"
 #include "celeg/model/program.hpp"
 

@@ -1,6 +1,6 @@
 #pragma once
 
-#include "celeg/detail/checkpoint/bootstrap.hpp"
+#include "checkpoint/detail/bootstrap.hpp"
 #include "celeg/runtime/context.hpp"
 #include "celeg/runtime/request_types.hpp"
 #include "celeg/text/chat_template.hpp"

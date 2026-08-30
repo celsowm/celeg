@@ -1,7 +1,7 @@
 #pragma once
 
-#include "celeg/backend/cuda/packed/executor.hpp"
-#include "celeg/backend/cuda/packed/session.hpp"
+#include "packed/executor.hpp"
+#include "packed/session.hpp"
 
 #include <cstdint>
 #include <span>

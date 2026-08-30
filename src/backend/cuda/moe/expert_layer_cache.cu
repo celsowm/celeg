@@ -1,4 +1,4 @@
-#include "celeg/backend/cuda/moe/expert_residency.hpp"
+#include "backend/cuda/moe/expert_residency.hpp"
 
 #include <cuda_runtime.h>
 

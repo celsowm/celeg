@@ -1,5 +1,5 @@
 #include "celeg/backend/cpu/compiler.hpp"
-#include "celeg/backend/cuda/compiler.hpp"
+#include "backend/cuda/compiler.hpp"
 #include "celeg/backend/moe_capabilities.hpp"
 #include "celeg/model/position.hpp"
 #include "support/assertions.hpp"

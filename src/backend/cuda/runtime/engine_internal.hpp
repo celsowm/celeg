@@ -1,15 +1,15 @@
 #pragma once
 
-#include "celeg/backend/cuda/concurrency.hpp"
-#include "celeg/backend/cuda/model.hpp"
+#include "backend/cuda/concurrency.hpp"
+#include "backend/cuda/model.hpp"
 #include "celeg/model/resolved.hpp"
 #include "celeg/model/program.hpp"
-#include "celeg/backend/cuda/packed/executor.hpp"
-#include "celeg/backend/cuda/paged_kv.hpp"
+#include "packed/executor.hpp"
+#include "backend/cuda/paged_kv.hpp"
 #include "celeg/runtime/cache/prefix_cache.hpp"
-#include "celeg/detail/runtime/concurrency/request_registry.hpp"
-#include "celeg/detail/runtime/concurrency/batch_planner.hpp"
-#include "celeg/detail/runtime/concurrency/worker.hpp"
+#include "runtime/concurrency/detail/request_registry.hpp"
+#include "runtime/concurrency/detail/batch_planner.hpp"
+#include "runtime/concurrency/detail/worker.hpp"
 
 #include <memory>
 #include <mutex>

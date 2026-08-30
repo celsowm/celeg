@@ -26,19 +26,28 @@ option(CELEG_RUN_METAL_TESTS "Register Metal runtime tests with CTest" ${APPLE})
 
 find_package(Threads REQUIRED)
 
-include(cmake/sources/base_runtime.cmake)
-include(cmake/sources/cpu_backend.cmake)
-include(cmake/sources/cuda_backend.cmake)
-include(cmake/sources/metal_backend.cmake)
-include(cmake/sources/api.cmake)
-include(cmake/sources/apps.cmake)
-include(cmake/sources/tests.cmake)
+include(src/checkpoint/CMakeLists.txt)
+include(src/model/CMakeLists.txt)
+include(src/text/CMakeLists.txt)
+include(src/quantization/CMakeLists.txt)
+include(src/composition/CMakeLists.txt)
+include(src/runtime/CMakeLists.txt)
+include(src/backend/cpu/CMakeLists.txt)
+include(src/backend/cuda/CMakeLists.txt)
+include(src/backend/metal/CMakeLists.txt)
+include(src/api/CMakeLists.txt)
+include(apps/CMakeLists.txt)
+include(tools/CMakeLists.txt)
+include(tests/CMakeLists.txt)
 
 # Fail during a clean configure when a source manifest drifts from the
 # checkout. This is intentionally performed before any target is created so
 # the diagnostic names the broken manifest entry directly.
 foreach(_celeg_variable IN ITEMS
         CELEG_BASE_RUNTIME_SOURCES CELEG_CPU_BACKEND_SOURCES
+        CELEG_CHECKPOINT_SOURCES CELEG_MODEL_SOURCES CELEG_TEXT_SOURCES
+        CELEG_QUANTIZATION_SOURCES CELEG_COMPOSITION_SOURCES
+        CELEG_RUNTIME_SOURCES
         CELEG_CUDA_BACKEND_SOURCES CELEG_METAL_BACKEND_SOURCES
         CELEG_METAL_MODEL_SOURCES CELEG_METAL_SHADER_SOURCES
         CELEG_METAL_APP_SOURCES CELEG_API_SOURCES)
@@ -94,6 +103,8 @@ endif()
 
 add_library(celeg_base ${CELEG_BASE_RUNTIME_SOURCES})
 target_include_directories(celeg_base PUBLIC include)
+target_include_directories(celeg_base PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_compile_definitions(celeg_base PUBLIC
     CELEG_DESCRIPTOR_DIRECTORY="${CMAKE_CURRENT_SOURCE_DIR}/descriptors"
     CELEG_DESCRIPTOR_INSTALL_DIRECTORY="${CMAKE_INSTALL_FULL_DATADIR}/celeg/descriptors")
@@ -116,6 +127,8 @@ target_include_directories(celeg_runtime INTERFACE include)
 
 add_library(celeg_cpu_backend ${CELEG_CPU_BACKEND_SOURCES})
 target_include_directories(celeg_cpu_backend PUBLIC include)
+target_include_directories(celeg_cpu_backend PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src)
 if(NOT MSVC)
     target_compile_options(celeg_cpu_backend PRIVATE -Wall -Wextra -Wpedantic)
 else()
@@ -130,32 +143,39 @@ target_link_libraries(celeg_cpu_backend PUBLIC celeg_runtime Threads::Threads)
 
 add_library(celeg SHARED ${CELEG_API_SOURCES})
 target_include_directories(celeg PUBLIC include)
+target_include_directories(celeg PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/backend/cuda
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/backend/cuda/model)
 target_compile_definitions(celeg PRIVATE CELEG_API_BUILD=1)
 set_target_properties(celeg PROPERTIES
     VERSION ${PROJECT_VERSION}
     SOVERSION 0
     OUTPUT_NAME celeg)
 
-add_executable(celeg-cpu-run src/app/cpu/main.cpp)
+add_executable(celeg-cpu-run apps/cpu/main.cpp)
+target_include_directories(celeg-cpu-run PRIVATE src)
 target_link_libraries(celeg-cpu-run PRIVATE celeg_cpu_backend)
-add_executable(celeg-cpu-pack src/tools/cpu_pack.cpp)
+add_executable(celeg-cpu-pack tools/cpu_pack.cpp)
 target_link_libraries(celeg-cpu-pack PRIVATE celeg_cpu_backend)
-add_executable(celeg-cpu-kernel-benchmark src/app/benchmark/cpu/kernels.cpp)
+add_executable(celeg-cpu-kernel-benchmark apps/benchmark/cpu/kernels.cpp)
 target_link_libraries(celeg-cpu-kernel-benchmark PRIVATE celeg_cpu_backend)
 add_executable(celeg-c-api-example examples/api_example.c)
 target_link_libraries(celeg-c-api-example PRIVATE celeg)
-add_executable(celeg-cpu-concurrent-benchmark src/app/benchmark/cpu/concurrent.cpp)
+add_executable(celeg-cpu-concurrent-benchmark apps/benchmark/cpu/concurrent.cpp)
+target_include_directories(celeg-cpu-concurrent-benchmark PRIVATE src)
 target_link_libraries(celeg-cpu-concurrent-benchmark PRIVATE celeg_cpu_backend)
-add_executable(celeg-cpu-prefill-benchmark src/app/benchmark/cpu/prefill.cpp)
+add_executable(celeg-cpu-prefill-benchmark apps/benchmark/cpu/prefill.cpp)
 target_link_libraries(celeg-cpu-prefill-benchmark PRIVATE celeg_cpu_backend)
-add_executable(celeg-cpu-prefix-cache-benchmark src/app/benchmark/cpu/prefix_cache.cpp)
+add_executable(celeg-cpu-prefix-cache-benchmark apps/benchmark/cpu/prefix_cache.cpp)
+target_include_directories(celeg-cpu-prefix-cache-benchmark PRIVATE src)
 target_link_libraries(celeg-cpu-prefix-cache-benchmark PRIVATE celeg_cpu_backend)
-add_executable(celeg-cpu-compare-reference src/tools/cpu_compare_reference.cpp)
+add_executable(celeg-cpu-compare-reference tools/cpu_compare_reference.cpp)
 target_link_libraries(celeg-cpu-compare-reference PRIVATE celeg_cpu_backend)
-add_executable(celeg-bench src/app/benchmark/cpu/celeg_bench.cpp)
+add_executable(celeg-bench apps/benchmark/cpu/celeg_bench.cpp)
 target_link_libraries(celeg-bench PRIVATE celeg_cpu_backend)
 
-add_executable(celeg-download src/app/download/main.cpp)
+add_executable(celeg-download apps/download/main.cpp)
 target_link_libraries(celeg-download PRIVATE celeg_base)
 
 if(CELEG_ENABLE_SERVE)
@@ -195,6 +215,8 @@ if(CELEG_ENABLE_SERVE)
     add_library(celeg_serve_protocol src/serve/protocol/mapping.cpp src/serve/protocol/openapi.cpp
         src/serve/chat_generation.cpp)
     target_include_directories(celeg_serve_protocol PUBLIC include)
+    target_include_directories(celeg_serve_protocol PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src)
     target_compile_definitions(celeg_serve_protocol PRIVATE
         CELEG_OPENAPI_SPEC_PATH="${CMAKE_CURRENT_SOURCE_DIR}/src/serve/protocol/openapi.json")
     if(NOT MSVC)
@@ -257,6 +279,7 @@ if(CELEG_ENABLE_METAL)
     add_library(celeg_metal_backend ${CELEG_METAL_BACKEND_SOURCES})
     target_include_directories(celeg_metal_backend PUBLIC include)
     target_include_directories(celeg_metal_backend PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
         "${CMAKE_CURRENT_BINARY_DIR}/generated")
     target_compile_definitions(celeg_metal_backend PUBLIC CELEG_API_WITH_METAL=1)
     target_link_libraries(celeg_metal_backend PUBLIC
@@ -270,6 +293,7 @@ if(CELEG_ENABLE_METAL)
     target_sources(celeg_serve_metal PRIVATE ${CELEG_METAL_MODEL_SOURCES})
     target_include_directories(celeg_serve_metal PUBLIC include)
     target_include_directories(celeg_serve_metal PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
         "${CMAKE_CURRENT_BINARY_DIR}/generated")
     target_link_libraries(celeg_serve_metal PUBLIC
         celeg_metal_backend)
@@ -280,7 +304,7 @@ if(CELEG_ENABLE_METAL)
         target_compile_definitions(celeg-serve PRIVATE CELEG_SERVE_METAL=1)
     endif()
 
-    add_executable(celeg-metal-run src/app/metal/main.cpp)
+    add_executable(celeg-metal-run apps/metal/main.cpp)
     target_link_libraries(celeg-metal-run PRIVATE celeg_serve_metal)
     add_executable(celeg-metal-bench ${CELEG_METAL_APP_SOURCES})
     target_link_libraries(celeg-metal-bench PRIVATE celeg_serve_metal)
@@ -288,6 +312,8 @@ endif()
 
 add_library(celeg_serve_core src/serve/generation_dispatcher.cpp)
 target_include_directories(celeg_serve_core PUBLIC include)
+target_include_directories(celeg_serve_core PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src)
 if(NOT MSVC)
     target_compile_options(celeg_serve_core PRIVATE -Wall -Wextra -Wpedantic)
 endif()
@@ -295,6 +321,8 @@ target_link_libraries(celeg_serve_core PUBLIC Threads::Threads)
 
 add_library(celeg_serve_cpu src/serve/cpu_inference_service.cpp)
 target_include_directories(celeg_serve_cpu PUBLIC include)
+target_include_directories(celeg_serve_cpu PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src)
 if(NOT MSVC)
     target_compile_options(celeg_serve_cpu PRIVATE -Wall -Wextra -Wpedantic)
 endif()
@@ -386,14 +414,15 @@ if(CELEG_ENABLE_SERVE)
     endif()
 
     add_executable(celeg-serve
-        src/app/serve/main.cpp
-        src/app/serve/static_assets.cpp
-        src/app/serve/routes/health.cpp
-        src/app/serve/routes/models.cpp
-        src/app/serve/routes/chat_ui.cpp
-        src/app/serve/routes/docs.cpp
-        src/app/serve/routes/tokenize.cpp
-        src/app/serve/routes/chat_completions.cpp)
+        apps/serve/main.cpp
+        apps/serve/static_assets.cpp
+        apps/serve/routes/health.cpp
+        apps/serve/routes/models.cpp
+        apps/serve/routes/chat_ui.cpp
+        apps/serve/routes/docs.cpp
+        apps/serve/routes/tokenize.cpp
+        apps/serve/routes/chat_completions.cpp)
+    target_include_directories(celeg-serve PRIVATE src)
     target_link_libraries(celeg-serve PRIVATE
         celeg_serve_cpu celeg_serve_core celeg_serve_protocol uwebsockets)
     if(CELEG_METAL_AVAILABLE)
@@ -409,7 +438,7 @@ if(CELEG_ENABLE_SERVE)
             "${CMAKE_CURRENT_SOURCE_DIR}/web/chat/dist"
             "$<TARGET_FILE_DIR:celeg-serve>/celeg-serve-assets/chat"
         COMMAND ${CMAKE_COMMAND} -E copy
-            "${CMAKE_CURRENT_SOURCE_DIR}/src/app/serve/static/docs.html"
+            "${CMAKE_CURRENT_SOURCE_DIR}/apps/serve/static/docs.html"
             "$<TARGET_FILE_DIR:celeg-serve>/celeg-serve-assets/docs/index.html"
         COMMAND ${CMAKE_COMMAND} -E copy
             "${swaggerui_SOURCE_DIR}/dist/swagger-ui-bundle.js"
@@ -477,9 +506,13 @@ if(CELEG_ENABLE_CUDA)
 endif()
 
 if(CELEG_CUDA_AVAILABLE)
-    add_library(celeg_cuda_backend ${CELEG_CUDA_BACKEND_SOURCES})
-    target_include_directories(celeg_cuda_backend PUBLIC include)
-    target_link_libraries(celeg_cuda_backend PUBLIC celeg_runtime CUDA::cudart CUDA::cublas CUDA::cublasLt Threads::Threads)
+add_library(celeg_cuda_backend ${CELEG_CUDA_BACKEND_SOURCES})
+target_include_directories(celeg_cuda_backend PUBLIC include)
+target_include_directories(celeg_cuda_backend PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/backend/cuda
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/backend/cuda/model)
+target_link_libraries(celeg_cuda_backend PUBLIC celeg_runtime CUDA::cudart CUDA::cublas CUDA::cublasLt Threads::Threads)
     target_compile_options(celeg_cuda_backend PRIVATE
         $<$<COMPILE_LANG_AND_ID:CXX,GNU,Clang>:-Wall;-Wextra;-Wpedantic>
         $<$<COMPILE_LANGUAGE:CUDA>:--expt-relaxed-constexpr>
@@ -492,7 +525,8 @@ if(CELEG_CUDA_AVAILABLE)
         target_compile_definitions(celeg_cuda_backend PUBLIC CELEG_DEBUG_SYNC=1)
     endif()
 
-    add_executable(celeg-run src/app/cuda/main.cpp)
+    add_executable(celeg-run apps/cuda/main.cpp)
+    target_include_directories(celeg-run PRIVATE src)
     target_link_libraries(celeg-run PRIVATE celeg_cuda_backend)
     if(TARGET celeg_cuda_runtime)
         add_dependencies(celeg-run celeg_cuda_runtime)
@@ -504,15 +538,19 @@ if(CELEG_CUDA_AVAILABLE)
         add_dependencies(celeg celeg_cuda_runtime)
     endif()
 
-    add_executable(celeg-concurrent-benchmark src/app/benchmark/cuda/concurrent.cpp)
+    add_executable(celeg-concurrent-benchmark apps/benchmark/cuda/concurrent.cpp)
     target_link_libraries(celeg-concurrent-benchmark PRIVATE celeg_cuda_backend)
-    add_executable(celeg-prefix-cache-benchmark src/app/benchmark/cuda/prefix_cache.cpp)
+    add_executable(celeg-prefix-cache-benchmark apps/benchmark/cuda/prefix_cache.cpp)
     target_link_libraries(celeg-prefix-cache-benchmark PRIVATE celeg_cuda_backend)
-    add_executable(celeg-decode-gemv-benchmark src/app/benchmark/cuda/decode_gemv.cu)
+    add_executable(celeg-decode-gemv-benchmark apps/benchmark/cuda/decode_gemv.cu)
+    target_include_directories(celeg-decode-gemv-benchmark PRIVATE src/backend/cuda)
     target_link_libraries(celeg-decode-gemv-benchmark PRIVATE celeg_cuda_backend)
 
     add_library(celeg_serve_cuda src/serve/cuda_inference_service.cpp)
-    target_include_directories(celeg_serve_cuda PUBLIC include)
+target_include_directories(celeg_serve_cuda PUBLIC include)
+target_include_directories(celeg_serve_cuda PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/backend/cuda/model)
     target_link_libraries(celeg_serve_cuda PUBLIC celeg_cuda_backend)
     target_link_libraries(celeg PRIVATE celeg_serve_cuda)
     if(TARGET celeg-serve)
@@ -521,11 +559,24 @@ if(CELEG_CUDA_AVAILABLE)
     endif()
 endif()
 
-add_executable(celeg-compare-logits src/tools/compare_logits.cpp)
+add_executable(celeg-compare-logits tools/compare_logits.cpp)
 
-add_executable(celeg-pack-experts src/tools/pack_experts.cpp)
+add_executable(celeg-pack-experts tools/pack_experts.cpp)
 target_link_libraries(celeg-pack-experts PRIVATE celeg_base)
-target_include_directories(celeg-pack-experts PRIVATE include)
+target_include_directories(celeg-pack-experts PRIVATE include src)
+
+foreach(_celeg_internal_consumer IN ITEMS
+    celeg-cpu-run celeg-cpu-pack celeg-cpu-kernel-benchmark
+    celeg-cpu-concurrent-benchmark celeg-cpu-prefill-benchmark
+    celeg-cpu-prefix-cache-benchmark celeg-cpu-compare-reference celeg-bench
+    celeg-download celeg-compare-logits celeg-pack-experts celeg-run
+    celeg-concurrent-benchmark celeg-prefix-cache-benchmark
+    celeg-decode-gemv-benchmark celeg-serve celeg-metal-run celeg-metal-bench)
+    if(TARGET ${_celeg_internal_consumer})
+        target_include_directories(${_celeg_internal_consumer} PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    endif()
+endforeach()
 
 set(CELEG_INSTALL_TARGETS celeg_base celeg_runtime celeg_cpu_backend celeg celeg-cpu-run celeg-cpu-pack celeg-cpu-kernel-benchmark celeg-c-api-example
     celeg-cpu-concurrent-benchmark
@@ -552,7 +603,7 @@ install(TARGETS ${CELEG_INSTALL_TARGETS}
 if(CELEG_ENABLE_SERVE)
     install(DIRECTORY web/chat/dist/
         DESTINATION ${CMAKE_INSTALL_BINDIR}/celeg-serve-assets/chat)
-    install(FILES src/app/serve/static/docs.html
+    install(FILES apps/serve/static/docs.html
         DESTINATION ${CMAKE_INSTALL_BINDIR}/celeg-serve-assets/docs
         RENAME index.html)
     install(FILES
@@ -567,89 +618,7 @@ endif()
 # contracts.  Installing the directory wholesale made internal layout part of
 # the package ABI and also forced CPU-only consumers to discover CUDA headers.
 set(CELEG_PUBLIC_HEADERS
-    include/celeg/api.h
-    include/celeg/app/run_preparation.hpp
-    include/celeg/backend/cpu/concurrent.hpp
-    include/celeg/backend/cpu/gguf.hpp
-    include/celeg/backend/cpu/isa.hpp
-    include/celeg/backend/cpu/kernels.hpp
-    include/celeg/backend/cpu/model.hpp
-    include/celeg/backend/cpu/numa.hpp
-    include/celeg/backend/cpu/paged_kv.hpp
-    include/celeg/backend/cpu/prefix_cache.hpp
-    include/celeg/backend/cpu/quantization.hpp
-    include/celeg/runtime/sampler.hpp
-    include/celeg/backend/cpu/runtime_types.hpp
-    include/celeg/backend/cpu/thread_pool.hpp
-    include/celeg/backend/cpu/weight_codec.hpp
-    include/celeg/backend/cpu/topology.hpp
-    include/celeg/checkpoint/downloader.hpp
-    include/celeg/checkpoint/formats/gguf.hpp
-    include/celeg/checkpoint/formats/json.hpp
-    include/celeg/checkpoint/formats/safetensors.hpp
-    include/celeg/checkpoint/metadata.hpp
-    include/celeg/checkpoint/gguf_blocks.hpp
-    include/celeg/checkpoint/tokenizer.hpp
-    include/celeg/checkpoint/repositories/gguf.hpp
-    include/celeg/checkpoint/repositories/safetensors.hpp
-    include/celeg/checkpoint/tensor_names.hpp
-    include/celeg/model/definition.hpp
-    include/celeg/model/linear_operation.hpp
-    include/celeg/model/position.hpp
-    include/celeg/model/descriptor.hpp
-    include/celeg/model/architecture.hpp
-    include/celeg/model/graph.hpp
-    include/celeg/model/profiles.hpp
-    include/celeg/model/resolved.hpp
-    include/celeg/backend/cuda/execution_plan.hpp
-    include/celeg/backend/cuda/runtime_types.hpp
-    include/celeg/backend/cuda/weight_layout.hpp
-    include/celeg/backend/cuda/weight_setup_support.hpp
-    include/celeg/backend/cuda/weight_policy.hpp
-    include/celeg/backend/cuda/weights_loader.hpp
-    include/celeg/model/runtime_types.hpp
-    include/celeg/model/visual_embeddings.hpp
-    include/celeg/runtime/vision/providers.hpp
-    include/celeg/model/session.hpp
-    include/celeg/model/weights/roles.hpp
-    include/celeg/backend/cuda/model.hpp
-    include/celeg/model/reference.hpp
-    include/celeg/runtime/cache/kv_page_allocator.hpp
-    include/celeg/runtime/cache/page_layout.hpp
-    include/celeg/runtime/cache/page_lease.hpp
-    include/celeg/runtime/cache/host_expert_cache.hpp
-    include/celeg/runtime/cache/prefix_cache_index.hpp
-    include/celeg/runtime/cache/prefix_cache.hpp
-    include/celeg/runtime/cache/prefix_radix.hpp
-    include/celeg/runtime/concurrency/metrics.hpp
-    include/celeg/runtime/concurrency/policy_types.hpp
-    include/celeg/runtime/concurrency/policy.hpp
-    include/celeg/quantization/ggml.hpp
-    include/celeg/quantization/gguf_blocks.hpp
-    include/celeg/runtime/request_types.hpp
-    include/celeg/backend/cuda/concurrency.hpp
-    include/celeg/backend/cuda/moe.hpp
-    include/celeg/backend/cuda/moe/offload.hpp
-    include/celeg/backend/cuda/moe/expert_residency.hpp
-    include/celeg/serve/cpu_inference_service.hpp
-    include/celeg/backend/cuda/cuda_inference_service.hpp
-    include/celeg/backend/metal/device.hpp
-    include/celeg/backend/metal/model.hpp
-    include/celeg/backend/metal/runtime_types.hpp
-    include/celeg/serve/metal_inference_service.hpp
-    include/celeg/serve/generation_dispatcher.hpp
-    include/celeg/serve/chat_generation.hpp
-    include/celeg/serve/inference_service.hpp
-    include/celeg/serve/protocol/chat.hpp
-    include/celeg/serve/protocol/json.hpp
-    include/celeg/serve/protocol/mapping.hpp
-    include/celeg/serve/protocol/openapi.hpp
-    include/celeg/serve/types.hpp
-    include/celeg/text/chat_template.hpp
-    include/celeg/text/chat_contract.hpp
-    include/celeg/text/tool_call.hpp
-    include/celeg/text/conversation.hpp
-    include/celeg/text/tokenizer.hpp)
+    include/celeg/api.h)
 foreach(_celeg_public_header IN LISTS CELEG_PUBLIC_HEADERS)
     if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/${_celeg_public_header}")
         message(FATAL_ERROR "Public header manifest entry is missing: ${_celeg_public_header}")
@@ -668,425 +637,4 @@ foreach(_celeg_public_header IN LISTS CELEG_PUBLIC_HEADERS)
         DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/${_celeg_header_directory}")
 endforeach()
 
-if(CELEG_BUILD_TESTS)
-    enable_testing()
-
-    add_executable(layer_dispatch_exhaustiveness_test
-        tests/layer_dispatch_exhaustiveness_test.cpp)
-    target_include_directories(layer_dispatch_exhaustiveness_test PRIVATE include tests)
-    add_test(NAME layer_dispatch_exhaustiveness_test
-             COMMAND layer_dispatch_exhaustiveness_test)
-    add_executable(json_test tests/json_test.cpp src/checkpoint/formats/json.cpp)
-    target_include_directories(json_test PRIVATE include)
-    add_test(NAME json_test COMMAND json_test)
-    add_executable(packed_int8_test tests/packed/int8_test.cpp
-        src/checkpoint/packed/int8.cpp)
-    target_include_directories(packed_int8_test PRIVATE include tests)
-    add_test(NAME packed_int8_test COMMAND packed_int8_test)
-    add_executable(packed_int4_test tests/packed/int4_test.cpp
-        src/checkpoint/packed/int4.cpp src/model/weights/quantization.cpp)
-    target_include_directories(packed_int4_test PRIVATE include tests)
-    add_test(NAME packed_int4_test COMMAND packed_int4_test)
-    add_executable(packed_fp8_test tests/packed/fp8_test.cpp
-        src/checkpoint/packed/fp8.cpp)
-    target_include_directories(packed_fp8_test PRIVATE include tests)
-    add_test(NAME packed_fp8_test COMMAND packed_fp8_test)
-    add_executable(packed_nvfp4_test tests/packed/nvfp4_test.cpp
-        src/checkpoint/packed/nvfp4.cpp)
-    target_include_directories(packed_nvfp4_test PRIVATE include tests)
-    add_test(NAME packed_nvfp4_test COMMAND packed_nvfp4_test)
-    add_executable(architecture_resolution_test tests/architecture_resolution_test.cpp)
-    target_include_directories(architecture_resolution_test PRIVATE include)
-    target_link_libraries(architecture_resolution_test PRIVATE celeg_base)
-    add_test(NAME architecture_resolution_test COMMAND architecture_resolution_test)
-    add_executable(semantic_identity_test tests/semantic_identity_test.cpp)
-    target_include_directories(semantic_identity_test PRIVATE include tests)
-    target_link_libraries(semantic_identity_test PRIVATE celeg_base)
-    add_test(NAME semantic_identity_test COMMAND semantic_identity_test)
-    add_executable(automatic_inference_test tests/automatic_inference_test.cpp)
-    target_include_directories(automatic_inference_test PRIVATE include tests)
-    target_link_libraries(automatic_inference_test PRIVATE celeg_base)
-    add_test(NAME automatic_inference_test COMMAND automatic_inference_test)
-    add_executable(chat_template_test tests/chat_template_test.cpp)
-    target_include_directories(chat_template_test PRIVATE include tests)
-    target_link_libraries(chat_template_test PRIVATE celeg_base)
-    add_test(NAME chat_template_test COMMAND chat_template_test)
-    add_executable(chat_template_resolution_test tests/chat_template_resolution_test.cpp)
-    target_include_directories(chat_template_resolution_test PRIVATE include tests)
-    target_link_libraries(chat_template_resolution_test PRIVATE celeg_base)
-    add_test(NAME chat_template_resolution_test COMMAND chat_template_resolution_test)
-    add_executable(protocol_utils_test tests/protocol_utils_test.cpp)
-    target_include_directories(protocol_utils_test PRIVATE include tests)
-    add_test(NAME protocol_utils_test COMMAND protocol_utils_test)
-    add_executable(conversation_test tests/conversation_test.cpp)
-    target_include_directories(conversation_test PRIVATE include)
-    add_test(NAME conversation_test COMMAND conversation_test)
-    add_executable(reference_test tests/reference_test.cpp src/model/reference.cpp)
-    target_include_directories(reference_test PRIVATE include)
-    add_test(NAME reference_test COMMAND reference_test)
-    add_executable(tensor_resolver_test tests/tensor_resolver_test.cpp
-        src/model/weights/roles.cpp)
-    target_include_directories(tensor_resolver_test PRIVATE include)
-    add_test(NAME tensor_resolver_test COMMAND tensor_resolver_test)
-add_executable(policy_test tests/policy_test.cpp)
-target_include_directories(policy_test PRIVATE include tests)
-target_link_libraries(policy_test PRIVATE celeg_base)
-
-add_executable(weight_plan_test tests/weight_plan_test.cpp)
-target_include_directories(weight_plan_test PRIVATE include tests)
-target_link_libraries(weight_plan_test PRIVATE celeg_base)
-    add_test(NAME policy_test COMMAND policy_test)
-    add_executable(quantization_test tests/quantization_test.cpp src/model/weights/quantization.cpp)
-    target_include_directories(quantization_test PRIVATE include)
-    add_test(NAME quantization_test COMMAND quantization_test)
-    add_executable(tokenizer_test tests/tokenizer_test.cpp
-        src/text/tokenizer/tokenizer.cpp src/text/tokenizer/utf8.cpp
-        src/text/tokenizer/pretokenize.cpp src/text/tokenizer/byte_codec.cpp
-        src/text/tokenizer/bpe.cpp src/text/tokenizer/sentencepiece.cpp
-        src/text/tokenizer_json_loader.cpp
-        src/text/chat/template.cpp
-        src/checkpoint/formats/json.cpp src/checkpoint/formats/gguf.cpp
-        src/quantization/ggml.cpp src/checkpoint/formats/gguf_iq_tables.cpp
-        src/checkpoint/metadata.cpp)
-    target_include_directories(tokenizer_test PRIVATE include)
-    add_test(NAME tokenizer_test COMMAND tokenizer_test)
-    add_executable(tokenizer_benchmark tests/tokenizer_benchmark.cpp
-        src/text/tokenizer/tokenizer.cpp src/text/tokenizer/utf8.cpp
-        src/text/tokenizer/pretokenize.cpp src/text/tokenizer/byte_codec.cpp
-        src/text/tokenizer/bpe.cpp src/text/tokenizer/sentencepiece.cpp
-        src/text/tokenizer_json_loader.cpp
-        src/text/chat/template.cpp
-        src/checkpoint/formats/json.cpp src/checkpoint/formats/gguf.cpp
-        src/quantization/ggml.cpp src/checkpoint/formats/gguf_iq_tables.cpp
-        src/checkpoint/metadata.cpp)
-    target_include_directories(tokenizer_benchmark PRIVATE include)
-    add_executable(tokenizer_probe tests/tokenizer_probe.cpp
-        src/text/tokenizer/tokenizer.cpp src/text/tokenizer/utf8.cpp
-        src/text/tokenizer/pretokenize.cpp src/text/tokenizer/byte_codec.cpp
-        src/text/tokenizer/bpe.cpp src/text/tokenizer/sentencepiece.cpp
-        src/text/tokenizer_json_loader.cpp
-        src/text/chat/template.cpp
-        src/checkpoint/formats/json.cpp src/checkpoint/formats/gguf.cpp
-        src/quantization/ggml.cpp src/checkpoint/formats/gguf_iq_tables.cpp
-        src/checkpoint/metadata.cpp)
-    target_include_directories(tokenizer_probe PRIVATE include)
-    add_executable(safetensors_test tests/safetensors_test.cpp src/checkpoint/formats/safetensors.cpp src/checkpoint/formats/json.cpp)
-    target_include_directories(safetensors_test PRIVATE include)
-    add_test(NAME safetensors_test COMMAND safetensors_test)
-    add_executable(safetensors_repo_test tests/safetensors_repo_test.cpp src/checkpoint/formats/safetensors.cpp src/checkpoint/repositories/safetensors.cpp src/checkpoint/formats/json.cpp)
-    target_include_directories(safetensors_repo_test PRIVATE include)
-    add_test(NAME safetensors_repo_test COMMAND safetensors_repo_test)
-    add_executable(gguf_parse_test tests/gguf_parse_test.cpp
-        src/checkpoint/formats/gguf.cpp src/quantization/ggml.cpp
-        src/checkpoint/formats/gguf_iq_tables.cpp)
-    target_include_directories(gguf_parse_test PRIVATE include)
-    add_test(NAME gguf_parse_test COMMAND gguf_parse_test)
-    add_executable(gguf_repository_test tests/gguf_repository_test.cpp)
-    target_link_libraries(gguf_repository_test PRIVATE celeg_base)
-    target_include_directories(gguf_repository_test PRIVATE include
-        src/checkpoint/repositories/detail)
-    add_test(NAME gguf_repository_test COMMAND gguf_repository_test)
-    add_executable(moe_router_test tests/moe_router_test.cpp)
-    target_link_libraries(moe_router_test PRIVATE celeg_runtime)
-    target_include_directories(moe_router_test PRIVATE include)
-    add_test(NAME moe_router_test COMMAND moe_router_test)
-
-    add_executable(concurrent_policy_test tests/concurrent_policy_test.cpp src/runtime/concurrency/policy.cpp)
-    target_include_directories(concurrent_policy_test PRIVATE include)
-    add_test(NAME concurrent_policy_test COMMAND concurrent_policy_test)
-    add_executable(prefix_radix_test tests/prefix_radix_test.cpp src/runtime/cache/prefix_radix.cpp)
-    target_include_directories(prefix_radix_test PRIVATE include)
-    add_test(NAME prefix_radix_test COMMAND prefix_radix_test)
-    add_executable(page_lease_test tests/page_lease_test.cpp)
-    target_include_directories(page_lease_test PRIVATE include)
-    add_test(NAME page_lease_test COMMAND page_lease_test)
-    add_executable(api_header_test tests/api_header_test.c)
-    target_include_directories(api_header_test PRIVATE include)
-    add_test(NAME api_header_test COMMAND api_header_test)
-    add_executable(neutral_headers_compile_test tests/neutral_headers_compile_test.cpp)
-    target_include_directories(neutral_headers_compile_test PRIVATE include)
-    add_test(NAME neutral_headers_compile_test COMMAND neutral_headers_compile_test)
-
-    add_executable(model_compiler_test tests/model_compiler_test.cpp
-        src/backend/cpu/compiler.cpp src/backend/cuda/compiler.cpp)
-    target_include_directories(model_compiler_test PRIVATE include tests)
-    target_link_libraries(model_compiler_test PRIVATE celeg_base)
-    add_test(NAME model_compiler_test COMMAND model_compiler_test)
-    add_executable(fake_repository_backend_boundary_test
-        tests/fake_repository_backend_boundary_test.cpp
-        src/backend/cpu/compiler.cpp src/backend/cuda/compiler.cpp)
-    target_include_directories(fake_repository_backend_boundary_test PRIVATE include tests)
-    target_link_libraries(fake_repository_backend_boundary_test PRIVATE celeg_base)
-    add_test(NAME fake_repository_backend_boundary_test
-        COMMAND fake_repository_backend_boundary_test)
-    add_test(NAME architecture_boundary_test
-        COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/scripts/check_architecture_boundaries.py
-                --root ${CMAKE_CURRENT_SOURCE_DIR})
-    add_executable(numerical_compare_test tests/numerical_compare_test.cpp)
-    target_include_directories(numerical_compare_test PRIVATE tests)
-    add_test(NAME numerical_compare_test COMMAND numerical_compare_test)
-    add_executable(unsupported_moe_policy_test tests/quant/unsupported_moe_policy_test.cpp)
-    target_include_directories(unsupported_moe_policy_test PRIVATE include tests)
-    add_test(NAME unsupported_moe_policy_test COMMAND unsupported_moe_policy_test)
-    add_executable(checkpoint_capabilities_test tests/checkpoint_capabilities_test.cpp)
-    target_include_directories(checkpoint_capabilities_test PRIVATE include tests)
-    target_link_libraries(checkpoint_capabilities_test PRIVATE celeg_base)
-    add_test(NAME checkpoint_capabilities_test COMMAND checkpoint_capabilities_test)
-    add_executable(checkpoint_format_catalog_test tests/checkpoint_format_catalog_test.cpp)
-    target_include_directories(checkpoint_format_catalog_test PRIVATE include tests)
-    target_link_libraries(checkpoint_format_catalog_test PRIVATE celeg_base)
-    add_test(NAME checkpoint_format_catalog_test COMMAND checkpoint_format_catalog_test)
-    add_executable(runtime_context_test tests/runtime_context_test.cpp)
-    target_include_directories(runtime_context_test PRIVATE include tests)
-    target_link_libraries(runtime_context_test PRIVATE celeg_base)
-    add_test(NAME runtime_context_test COMMAND runtime_context_test)
-    add_executable(concurrent_metrics_test tests/concurrent_metrics_test.cpp)
-    target_link_libraries(concurrent_metrics_test PRIVATE celeg_runtime)
-    add_test(NAME concurrent_metrics_test COMMAND concurrent_metrics_test)
-    add_executable(execution_plan_test tests/execution_plan_test.cpp
-        src/backend/cuda/execution_plan.cpp)
-    target_link_libraries(execution_plan_test PRIVATE celeg_runtime)
-    add_test(NAME execution_plan_test COMMAND execution_plan_test)
-    add_executable(prefix_cache_test tests/prefix_cache_test.cpp)
-    target_link_libraries(prefix_cache_test PRIVATE celeg_runtime)
-    add_test(NAME prefix_cache_test COMMAND prefix_cache_test)
-    add_executable(public_facade_test tests/public_facade_test.cpp)
-    target_link_libraries(public_facade_test PRIVATE celeg_runtime)
-    add_test(NAME public_facade_test COMMAND public_facade_test)
-    add_executable(request_registry_test tests/request_registry_test.cpp)
-    target_link_libraries(request_registry_test PRIVATE celeg_runtime)
-    add_test(NAME request_registry_test COMMAND request_registry_test)
-    add_executable(generation_dispatcher_test tests/generation_dispatcher_test.cpp)
-    target_link_libraries(generation_dispatcher_test PRIVATE celeg_serve_core)
-    add_test(NAME generation_dispatcher_test COMMAND generation_dispatcher_test)
-    add_executable(request_lifecycle_test tests/request_lifecycle_test.cpp)
-    target_include_directories(request_lifecycle_test PRIVATE include tests)
-    add_test(NAME request_lifecycle_test COMMAND request_lifecycle_test)
-    if(CELEG_ENABLE_SERVE)
-        add_executable(chat_protocol_mapping_test tests/chat_protocol_mapping_test.cpp)
-        target_link_libraries(chat_protocol_mapping_test PRIVATE celeg_serve_protocol)
-        add_test(NAME chat_protocol_mapping_test COMMAND chat_protocol_mapping_test)
-    endif()
-    add_executable(visual_request_test tests/visual_request_test.cpp)
-    target_link_libraries(visual_request_test PRIVATE celeg_runtime)
-    target_include_directories(visual_request_test PRIVATE include tests)
-    add_test(NAME visual_request_test COMMAND visual_request_test)
-    add_executable(gemma4_vision_test tests/gemma4_vision_test.cpp)
-    target_link_libraries(gemma4_vision_test PRIVATE celeg_base)
-    target_include_directories(gemma4_vision_test PRIVATE include tests)
-    add_test(NAME gemma4_vision_test COMMAND gemma4_vision_test)
-    add_executable(qwen35_vision_test tests/qwen35_vision_test.cpp)
-    target_link_libraries(qwen35_vision_test PRIVATE celeg_base)
-    target_include_directories(qwen35_vision_test PRIVATE include tests)
-    add_test(NAME qwen35_vision_test COMMAND qwen35_vision_test)
-    add_executable(batch_planner_test tests/batch_planner_test.cpp)
-    target_link_libraries(batch_planner_test PRIVATE celeg_runtime)
-    add_test(NAME batch_planner_test COMMAND batch_planner_test)
-    add_executable(engine_worker_test tests/engine_worker_test.cpp)
-    target_link_libraries(engine_worker_test PRIVATE celeg_runtime)
-    add_test(NAME engine_worker_test COMMAND engine_worker_test)
-    add_executable(expert_offload_test tests/expert_offload_test.cpp)
-    target_link_libraries(expert_offload_test PRIVATE celeg_runtime)
-    target_include_directories(expert_offload_test PRIVATE include)
-    add_test(NAME expert_offload_test COMMAND expert_offload_test)
-
-    add_executable(host_expert_cache_test tests/host_expert_cache_test.cpp)
-    target_link_libraries(host_expert_cache_test PRIVATE celeg_runtime)
-    target_include_directories(host_expert_cache_test PRIVATE include)
-    add_test(NAME host_expert_cache_test COMMAND host_expert_cache_test)
-    add_executable(expert_policy_test tests/expert_policy_test.cpp)
-    target_include_directories(expert_policy_test PRIVATE include tests)
-    add_test(NAME expert_policy_test COMMAND expert_policy_test)
-
-    add_executable(cpu_isa_test tests/cpu_isa_test.cpp)
-    target_link_libraries(cpu_isa_test PRIVATE celeg_cpu_backend)
-    add_test(NAME cpu_isa_test COMMAND cpu_isa_test)
-    add_executable(cpu_thread_pool_test tests/cpu_thread_pool_test.cpp)
-    target_link_libraries(cpu_thread_pool_test PRIVATE celeg_cpu_backend)
-    add_test(NAME cpu_thread_pool_test COMMAND cpu_thread_pool_test)
-    add_executable(cpu_topology_test tests/cpu_topology_test.cpp)
-    target_link_libraries(cpu_topology_test PRIVATE celeg_cpu_backend)
-    add_test(NAME cpu_topology_test COMMAND cpu_topology_test)
-    add_executable(cpu_kv_topology_test tests/cpu_kv_topology_test.cpp)
-    target_link_libraries(cpu_kv_topology_test PRIVATE celeg_cpu_backend)
-    add_test(NAME cpu_kv_topology_test COMMAND cpu_kv_topology_test)
-    add_executable(cpu_quantization_test tests/cpu_quantization_test.cpp)
-    target_link_libraries(cpu_quantization_test PRIVATE celeg_cpu_backend)
-    add_test(NAME cpu_quantization_test COMMAND cpu_quantization_test)
-    add_executable(cpu_kernels_test tests/cpu_kernels_test.cpp)
-    target_link_libraries(cpu_kernels_test PRIVATE celeg_cpu_backend)
-    add_test(NAME cpu_kernels_test COMMAND cpu_kernels_test)
-    add_executable(cpu_gguf_kernels_test tests/cpu_gguf_kernels_test.cpp)
-    target_link_libraries(cpu_gguf_kernels_test PRIVATE celeg_cpu_backend)
-    add_test(NAME cpu_gguf_kernels_test COMMAND cpu_gguf_kernels_test)
-    add_executable(cpu_kv_cache_test tests/cpu_kv_cache_test.cpp)
-    target_link_libraries(cpu_kv_cache_test PRIVATE celeg_cpu_backend)
-    add_test(NAME cpu_kv_cache_test COMMAND cpu_kv_cache_test)
-    add_executable(cpu_paged_kv_test tests/cpu_paged_kv_test.cpp)
-    target_link_libraries(cpu_paged_kv_test PRIVATE celeg_cpu_backend)
-    add_test(NAME cpu_paged_kv_test COMMAND cpu_paged_kv_test)
-    add_executable(cpu_parallel_attention_test tests/cpu_parallel_attention_test.cpp)
-    target_link_libraries(cpu_parallel_attention_test PRIVATE celeg_cpu_backend)
-    add_test(NAME cpu_parallel_attention_test COMMAND cpu_parallel_attention_test)
-    add_executable(cpu_prefix_cache_test tests/cpu_prefix_cache_test.cpp)
-    target_link_libraries(cpu_prefix_cache_test PRIVATE celeg_cpu_backend)
-    add_test(NAME cpu_prefix_cache_test COMMAND cpu_prefix_cache_test)
-    add_executable(cpu_numa_test tests/cpu_numa_test.cpp)
-    target_link_libraries(cpu_numa_test PRIVATE celeg_cpu_backend)
-    add_test(NAME cpu_numa_test COMMAND cpu_numa_test)
-    add_executable(cpu_concurrent_metrics_test tests/cpu_concurrent_metrics_test.cpp)
-    target_link_libraries(cpu_concurrent_metrics_test PRIVATE celeg_cpu_backend)
-    add_test(NAME cpu_concurrent_metrics_test COMMAND cpu_concurrent_metrics_test)
-    add_executable(cpu_batch_scheduler_test tests/cpu_batch_scheduler_test.cpp)
-    target_link_libraries(cpu_batch_scheduler_test PRIVATE celeg_cpu_backend)
-    target_include_directories(cpu_batch_scheduler_test PRIVATE src/backend/cpu tests)
-    add_test(NAME cpu_batch_scheduler_test COMMAND cpu_batch_scheduler_test)
-    add_executable(cpu_model_options_test tests/cpu_model_options_test.cpp)
-    target_link_libraries(cpu_model_options_test PRIVATE celeg_cpu_backend)
-    add_test(NAME cpu_model_options_test COMMAND cpu_model_options_test)
-    add_executable(cpu_moe_route_test tests/cpu_moe_route_test.cpp)
-    target_include_directories(cpu_moe_route_test PRIVATE include src/backend/cpu tests)
-    target_link_libraries(cpu_moe_route_test PRIVATE celeg_cpu_backend)
-    add_test(NAME cpu_moe_route_test COMMAND cpu_moe_route_test)
-    add_executable(cpu_sampler_test tests/cpu_sampler_test.cpp)
-    target_link_libraries(cpu_sampler_test PRIVATE celeg_cpu_backend)
-    add_test(NAME cpu_sampler_test COMMAND cpu_sampler_test)
-    add_executable(cpu_granite_test tests/cpu_granite_test.cpp)
-    target_link_libraries(cpu_granite_test PRIVATE celeg_cpu_backend)
-    add_test(NAME cpu_granite_test COMMAND cpu_granite_test)
-    add_executable(gguf_rope_layout_test tests/gguf_rope_layout_test.cpp)
-    target_include_directories(gguf_rope_layout_test PRIVATE include tests)
-    target_link_libraries(gguf_rope_layout_test PRIVATE celeg_cpu_backend)
-    add_test(NAME gguf_rope_layout_test COMMAND gguf_rope_layout_test)
-    add_executable(cpu_mrope_test tests/cpu_mrope_test.cpp)
-    target_link_libraries(cpu_mrope_test PRIVATE celeg_cpu_backend)
-    add_test(NAME cpu_mrope_test COMMAND cpu_mrope_test)
-    add_executable(cpu_c_api_smoke_test tests/api_smoke_test.c)
-    target_link_libraries(cpu_c_api_smoke_test PRIVATE celeg)
-    target_include_directories(cpu_c_api_smoke_test PRIVATE include)
-    add_test(NAME cpu_c_api_smoke_test COMMAND cpu_c_api_smoke_test)
-    add_executable(runtime_backend_extension_test tests/runtime_backend_extension_test.cpp)
-    target_link_libraries(runtime_backend_extension_test PRIVATE celeg_base)
-    target_include_directories(runtime_backend_extension_test PRIVATE include tests)
-    add_test(NAME runtime_backend_extension_test COMMAND runtime_backend_extension_test)
-    if(CELEG_CUDA_AVAILABLE)
-        add_executable(cuda_attention_capability_test tests/cuda_attention_capability_test.cpp)
-        target_link_libraries(cuda_attention_capability_test PRIVATE celeg_base)
-        target_include_directories(cuda_attention_capability_test PRIVATE
-            include tests ${CUDAToolkit_INCLUDE_DIRS})
-        add_test(NAME cuda_attention_capability_test COMMAND cuda_attention_capability_test)
-    endif()
-    add_executable(image_codec_test tests/image_codec_test.cpp)
-    target_link_libraries(image_codec_test PRIVATE celeg_base)
-    target_include_directories(image_codec_test PRIVATE include tests)
-    add_test(NAME image_codec_test COMMAND image_codec_test)
-
-    if(CELEG_CUDA_AVAILABLE)
-        add_executable(cuda_kernels_test tests/cuda_kernels_test.cu
-            tests/cuda/sampling_tests.cu
-            tests/cuda/attention_tests.cu)
-        target_link_libraries(cuda_kernels_test PRIVATE celeg_cuda_backend celeg_cpu_backend)
-        target_include_directories(cuda_kernels_test PRIVATE include)
-        if(CELEG_RUN_CUDA_TESTS)
-            add_test(NAME cuda_kernels_test COMMAND cuda_kernels_test)
-        endif()
-
-        add_executable(cuda_gguf_kernels_test tests/cuda_gguf_kernels_test.cu)
-        target_link_libraries(cuda_gguf_kernels_test PRIVATE celeg_cuda_backend)
-        target_include_directories(cuda_gguf_kernels_test PRIVATE include)
-        if(CELEG_RUN_CUDA_TESTS)
-            add_test(NAME cuda_gguf_kernels_test COMMAND cuda_gguf_kernels_test)
-        endif()
-
-        add_executable(packed_workspace_test tests/packed/workspace_test.cpp)
-        target_link_libraries(packed_workspace_test PRIVATE celeg_cuda_backend)
-        target_include_directories(packed_workspace_test PRIVATE include)
-        add_test(NAME packed_workspace_test COMMAND packed_workspace_test)
-        add_executable(packed_commit_test tests/packed/commit_test.cpp)
-        target_link_libraries(packed_commit_test PRIVATE celeg_cuda_backend)
-        target_include_directories(packed_commit_test PRIVATE include tests)
-        if(CELEG_RUN_CUDA_TESTS)
-            add_test(NAME packed_commit_test COMMAND packed_commit_test)
-        endif()
-
-        add_executable(moe_route_test tests/moe_route_test.cu)
-        target_link_libraries(moe_route_test PRIVATE celeg_cuda_backend)
-        target_include_directories(moe_route_test PRIVATE include)
-        if(CELEG_RUN_CUDA_TESTS)
-            add_test(NAME moe_route_test COMMAND moe_route_test)
-        endif()
-
-        add_executable(moe_router_materialization_test tests/quant/moe_router_materialization_test.cpp)
-        target_link_libraries(moe_router_materialization_test PRIVATE celeg_cuda_backend)
-        target_include_directories(moe_router_materialization_test PRIVATE include tests)
-        if(CELEG_RUN_CUDA_TESTS)
-            add_test(NAME moe_router_materialization_test COMMAND moe_router_materialization_test)
-        endif()
-
-        add_executable(moe_ffn_test tests/moe_ffn_test.cu)
-        target_link_libraries(moe_ffn_test PRIVATE celeg_cuda_backend)
-        target_include_directories(moe_ffn_test PRIVATE include)
-        if(CELEG_RUN_CUDA_TESTS)
-            add_test(NAME moe_ffn_test COMMAND moe_ffn_test)
-        endif()
-
-        add_executable(moe_integration_test tests/moe_integration_test.cu)
-        target_link_libraries(moe_integration_test PRIVATE celeg_cuda_backend)
-        target_include_directories(moe_integration_test PRIVATE include)
-        if(CELEG_RUN_CUDA_TESTS)
-            add_test(NAME moe_integration_test COMMAND moe_integration_test)
-        endif()
-
-        add_executable(expert_residency_test tests/expert_residency_test.cu)
-        target_link_libraries(expert_residency_test PRIVATE celeg_cuda_backend)
-        target_include_directories(expert_residency_test PRIVATE include)
-        if(CELEG_RUN_CUDA_TESTS)
-            add_test(NAME expert_residency_test COMMAND expert_residency_test)
-        endif()
-
-        add_executable(cuda_granite_test tests/cuda_granite_test.cu)
-        target_link_libraries(cuda_granite_test PRIVATE celeg_cuda_backend)
-        target_include_directories(cuda_granite_test PRIVATE include)
-        if(CELEG_RUN_CUDA_TESTS)
-            add_test(NAME cuda_granite_test COMMAND cuda_granite_test)
-        endif()
-    endif()
-
-    if(CELEG_METAL_AVAILABLE)
-        add_executable(metal_device_test tests/metal_device_test.mm)
-        target_include_directories(metal_device_test PRIVATE include)
-        target_link_libraries(metal_device_test PRIVATE celeg_metal_backend)
-        if(CELEG_RUN_METAL_TESTS)
-            add_test(NAME metal_device_test COMMAND metal_device_test)
-        endif()
-        add_executable(metal_inference_test tests/metal_inference_test.mm)
-        target_include_directories(metal_inference_test PRIVATE include)
-        target_link_libraries(metal_inference_test PRIVATE celeg_serve_metal)
-        add_executable(metal_tensor_test tests/metal_tensor_test.mm)
-        target_include_directories(metal_tensor_test PRIVATE include
-            "${CMAKE_CURRENT_BINARY_DIR}/generated")
-        target_link_libraries(metal_tensor_test PRIVATE
-            "${CELEG_METAL_FRAMEWORK}" "${CELEG_FOUNDATION_FRAMEWORK}")
-        add_executable(metal_quantization_test tests/metal_quantization_test.mm)
-        target_include_directories(metal_quantization_test PRIVATE include
-            "${CMAKE_CURRENT_BINARY_DIR}/generated")
-        target_link_libraries(metal_quantization_test PRIVATE
-            celeg_base "${CELEG_METAL_FRAMEWORK}"
-            "${CELEG_FOUNDATION_FRAMEWORK}")
-        add_executable(metal_recurrent_test tests/metal_recurrent_test.mm)
-        target_include_directories(metal_recurrent_test PRIVATE include
-            "${CMAKE_CURRENT_BINARY_DIR}/generated")
-        target_link_libraries(metal_recurrent_test PRIVATE
-            celeg_base "${CELEG_METAL_FRAMEWORK}" "${CELEG_FOUNDATION_FRAMEWORK}")
-        if(CELEG_RUN_METAL_TESTS)
-            add_test(NAME metal_recurrent_test COMMAND metal_recurrent_test)
-            add_test(NAME metal_tensor_test COMMAND metal_tensor_test)
-        endif()
-        add_executable(metal_c_api_smoke_test tests/metal_c_api_smoke_test.c)
-        target_include_directories(metal_c_api_smoke_test PRIVATE include)
-        target_link_libraries(metal_c_api_smoke_test PRIVATE celeg)
-        add_executable(metal_service_test tests/metal_service_test.mm)
-        target_include_directories(metal_service_test PRIVATE include)
-        target_link_libraries(metal_service_test PRIVATE celeg_serve_metal)
-    endif()
-endif()
+include(tests/Targets.cmake)

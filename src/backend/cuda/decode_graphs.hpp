@@ -1,6 +1,6 @@
 #pragma once
 
-#include "celeg/backend/cuda/utils.cuh"
+#include "utils.cuh"
 
 #include <utility>
 

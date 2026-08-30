@@ -1,7 +1,7 @@
-#include "celeg/backend/cuda/gemm_dispatcher.hpp"
-#include "celeg/backend/cuda/kernels/gguf.cuh"
-#include "celeg/backend/cuda/kernels/mmq.hpp"
-#include "celeg/backend/cuda/kernels/embedding.hpp"
+#include "backend/cuda/gemm_dispatcher.hpp"
+#include "kernels/gguf.cuh"
+#include "kernels/mmq.hpp"
+#include "kernels/embedding.hpp"
 #include "../kernels/gemv_launch.hpp"
 
 #include <algorithm>

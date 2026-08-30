@@ -16,9 +16,9 @@
 #include "celeg/backend/cuda/packed/session.hpp"
 #include "celeg/backend/cuda/moe/offload.hpp"
 #include "celeg/backend/cuda/moe/expert_residency.hpp"
-#include "celeg/backend/cuda/model/detail/layer_state.hpp"
-#include "celeg/backend/cuda/model/detail/shared_weights.hpp"
-#include "celeg/backend/cuda/model/detail/resources.hpp"
+#include "layer_state.hpp"
+#include "shared_weights.hpp"
+#include "resources.hpp"
 #include "celeg/model/session.hpp"
 
 #include <chrono>
@@ -274,4 +274,3 @@ struct CudaCompiledModel {
 };
 
 }
-

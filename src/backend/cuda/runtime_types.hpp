@@ -2,7 +2,7 @@
 
 #include "celeg/model/runtime_types.hpp"
 #include "celeg/runtime/concurrency/policy_types.hpp"
-#include "celeg/backend/cuda/moe/offload.hpp"
+#include "backend/cuda/moe/offload.hpp"
 
 #include <cstddef>
 #include <cstdlib>

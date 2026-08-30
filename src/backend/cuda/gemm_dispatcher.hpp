@@ -1,10 +1,10 @@
 #pragma once
 
-#include "celeg/backend/cuda/utils.cuh"
-#include "celeg/backend/cuda/execution_plan.hpp"
-#include "celeg/backend/cuda/runtime_types.hpp"
-#include "celeg/backend/cuda/model/detail/gemm_plan.hpp"
-#include "celeg/backend/cuda/model/detail/linear_weights.hpp"
+#include "utils.cuh"
+#include "backend/cuda/execution_plan.hpp"
+#include "runtime_types.hpp"
+#include "detail/gemm_plan.hpp"
+#include "detail/linear_weights.hpp"
 
 #include <cublasLt.h>
 #include <cublas_v2.h>

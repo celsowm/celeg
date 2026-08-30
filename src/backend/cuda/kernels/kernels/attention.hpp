@@ -1,6 +1,6 @@
 #pragma once
 
-#include "celeg/backend/cuda/kernels/attention_args.hpp"
+#include "kernels/attention_args.hpp"
 
 #include <cublas_v2.h>
 #include <cuda_bf16.h>

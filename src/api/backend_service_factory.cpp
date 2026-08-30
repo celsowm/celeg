@@ -2,7 +2,7 @@
 #include "celeg/serve/cpu_inference_service.hpp"
 
 #ifdef CELEG_API_WITH_CUDA
-#include "celeg/backend/cuda/cuda_inference_service.hpp"
+#include "backend/cuda/cuda_inference_service.hpp"
 #endif
 #ifdef CELEG_API_WITH_METAL
 #include "celeg/serve/metal_inference_service.hpp"

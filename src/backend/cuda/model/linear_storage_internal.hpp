@@ -2,7 +2,7 @@
 
 #include "celeg/backend/cuda/runtime_types.hpp"
 #include "celeg/backend/cuda/utils.cuh"
-#include "celeg/backend/cuda/model/detail/device_weights.hpp"
+#include "detail/device_weights.hpp"
 #include "celeg/model/weights/quantization.hpp"
 
 #include <cstddef>

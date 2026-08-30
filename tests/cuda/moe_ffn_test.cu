@@ -1,6 +1,6 @@
-#include "celeg/backend/cuda/moe.hpp"
+#include "backend/cuda/moe.hpp"
 #include "support/assertions.hpp"
-#include "celeg/backend/cuda/utils.cuh"
+#include "utils.cuh"
 #include <cmath>
 #include <cstdint>
 #include <iostream>

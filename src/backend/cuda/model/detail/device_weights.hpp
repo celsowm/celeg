@@ -1,7 +1,7 @@
 #pragma once
 
 
-#include "celeg/backend/cuda/model/detail/linear_weights.hpp"
+#include "linear_weights.hpp"
 #include "celeg/backend/cuda/utils.cuh"
 
 #include <cuda_bf16.h>
@@ -30,4 +30,3 @@ struct DeviceWeight {
 using WeightMap = std::unordered_map<std::string, DeviceWeight>;
 
 }
-

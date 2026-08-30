@@ -1,7 +1,7 @@
 #pragma once
 
-#include "celeg/backend/cuda/utils.cuh"
-#include "celeg/backend/cuda/moe/offload.hpp"
+#include "utils.cuh"
+#include "backend/cuda/moe/offload.hpp"
 #include "celeg/runtime/cache/host_expert_cache.hpp"
 
 #include <cstddef>

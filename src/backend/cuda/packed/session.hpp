@@ -1,14 +1,14 @@
 #pragma once
 
-#include "celeg/backend/cuda/execution_plan.hpp"
-#include "celeg/backend/cuda/utils.cuh"
-#include "celeg/backend/cuda/runtime_types.hpp"
+#include "backend/cuda/execution_plan.hpp"
+#include "utils.cuh"
+#include "runtime_types.hpp"
 #include "celeg/model/resolved.hpp"
 #include "celeg/model/session.hpp"
-#include "celeg/backend/cuda/weight_layout.hpp"
-#include "celeg/backend/cuda/model/detail/layer_state.hpp"
-#include "celeg/backend/cuda/model/detail/linear_weights.hpp"
-#include "celeg/backend/cuda/model/detail/shared_weights.hpp"
+#include "weight_layout.hpp"
+#include "detail/layer_state.hpp"
+#include "detail/linear_weights.hpp"
+#include "detail/shared_weights.hpp"
 
 #include <cstddef>
 #include <cstdint>

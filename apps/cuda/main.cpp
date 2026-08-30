@@ -1,7 +1,7 @@
 #include "celeg/app/logit_diagnostics.hpp"
 #include "celeg/app/run_preparation.hpp"
 #include "celeg/runtime/request_types.hpp"
-#include "celeg/backend/cuda/model.hpp"
+#include "backend/cuda/model.hpp"
 #include "celeg/text/utf8.hpp"
 
 #include <algorithm>

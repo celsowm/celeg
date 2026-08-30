@@ -1,76 +1,4 @@
-# Backend-independent checkpoint, model, text, and runtime support.
-set(CELEG_BASE_RUNTIME_SOURCES
-    src/app/logit_diagnostics.cpp
-    src/app/run_preparation.cpp
-    src/checkpoint/formats/json.cpp
-    src/checkpoint/formats/safetensors.cpp
-    src/checkpoint/packed/int8.cpp
-    src/checkpoint/packed/int4.cpp
-    src/checkpoint/packed/fp8.cpp
-    src/checkpoint/packed/nvfp4.cpp
-    src/checkpoint/formats/gguf.cpp
-    src/checkpoint/formats/gguf_iq_tables.cpp
-    src/quantization/ggml.cpp
-    src/checkpoint/catalog.cpp
-    src/checkpoint/metadata.cpp
-    src/checkpoint/gguf_position_profile.cpp
-    src/checkpoint/repositories/safetensors.cpp
-    src/checkpoint/repositories/gguf.cpp
-    src/checkpoint/repositories/detail/gguf_tensor_mapper.cpp
-    src/checkpoint/repositories/detail/gguf_tensor_adapter.cpp
-    src/checkpoint/repositories/detail/gguf_tensor_resolver.cpp
-    src/checkpoint/formats/detail/gguf_tokenizer_metadata.cpp
-    src/checkpoint/downloader.cpp
-    src/checkpoint/hf_http.cpp
-    src/checkpoint/bootstrap.cpp
-    src/model/definition.cpp
-    src/model/descriptor/registration.cpp
-    src/model/descriptor/parser.cpp
-    src/model/descriptor/field_resolver.cpp
-    src/model/descriptor/probe_matcher.cpp
-    src/model/descriptor/graph_builder.cpp
-    src/model/descriptor/architecture.cpp
-    src/model/descriptor/binding_parser.cpp
-    src/model/descriptor/field_parser.cpp
-    src/model/descriptor/naming_policy.cpp
-    src/model/descriptor/probe.cpp
-    src/model/descriptor/role_codec.cpp
-    src/model/architecture.cpp
-    src/model/automatic_architecture.cpp
-    src/model/inference.cpp
-    src/model/inference/global_facts.cpp
-    src/model/inference/bindings/globals.cpp
-    src/model/inference/bindings/norms.cpp
-    src/model/inference/bindings/feed_forward.cpp
-    src/model/inference/bindings/attention_policy.cpp
-    src/model/inference/bindings/resolve.cpp
-    src/model/inference/rules.cpp
-    src/model/inference/rules_attention.cpp
-    src/model/inference/rules_recurrent.cpp
-    src/model/inference/support.cpp
-    src/model/inference/metadata.cpp
-    src/model/inference/inventory.cpp
-    src/model/inference/binding.cpp
-    src/model/inference/synthesis.cpp
-    src/model/inference/report.cpp
-    src/model/resolved.cpp
-    src/model/program.cpp
-    src/model/program_builder.cpp
-    src/model/program_fingerprint.cpp
-    src/model/weight_plan.cpp
-    src/composition/builtin_runtime.cpp
-    src/model/execution/runtime_types.cpp
-    src/model/weights/quantization.cpp
-    src/model/weights/roles.cpp
-    src/model/reference.cpp
-    src/text/tokenizer/tokenizer.cpp
-    src/text/tokenizer/utf8.cpp
-    src/text/tokenizer/pretokenize.cpp
-    src/text/tokenizer/byte_codec.cpp
-    src/text/tokenizer/bpe.cpp
-    src/text/tokenizer/sentencepiece.cpp
-    src/text/tokenizer_json_loader.cpp
-    src/text/chat/template.cpp
+set(CELEG_RUNTIME_SOURCES
     src/runtime/cache/host_expert_cache.cpp
     src/runtime/cache/prefix_radix.cpp
     src/runtime/cache/prefix_cache_index.cpp
@@ -89,4 +17,15 @@ set(CELEG_BASE_RUNTIME_SOURCES
     src/runtime/vision/gguf_projection.cpp
     src/runtime/vision/safetensor_projection.cpp
     src/runtime/vision/patch_projection.cpp
+)
+
+set(CELEG_BASE_RUNTIME_SOURCES
+    apps/logit_diagnostics.cpp
+    apps/run_preparation.cpp
+    ${CELEG_CHECKPOINT_SOURCES}
+    ${CELEG_MODEL_SOURCES}
+    ${CELEG_TEXT_SOURCES}
+    ${CELEG_QUANTIZATION_SOURCES}
+    ${CELEG_COMPOSITION_SOURCES}
+    ${CELEG_RUNTIME_SOURCES}
 )

@@ -1,5 +1,5 @@
 #include "celeg/backend/cpu/compiler.hpp"
-#include "celeg/backend/cuda/compiler.hpp"
+#include "backend/cuda/compiler.hpp"
 #include "celeg/checkpoint/view.hpp"
 #include "celeg/checkpoint/weight_repository.hpp"
 #include "celeg/model/weight_plan.hpp"

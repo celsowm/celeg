@@ -2,10 +2,10 @@
 
 #include <cuda_runtime.h>
 #include <cuda_bf16.h>
-#include <celeg/backend/cuda/utils.cuh>
+#include "utils.cuh"
 
 #include <celeg/checkpoint/formats/gguf.hpp>
-#include <celeg/backend/cuda/model/detail/linear_weights.hpp>
+#include "detail/linear_weights.hpp"
 
 namespace celeg {
 

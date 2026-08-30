@@ -1,5 +1,5 @@
 
-#include "celeg/backend/cuda/weight_policy.hpp"
+#include "weight_policy.hpp"
 
 #include "support/assertions.hpp"
 

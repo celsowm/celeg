@@ -1,4 +1,4 @@
-#include "celeg/backend/cuda/cuda_inference_service.hpp"
+#include "backend/cuda/cuda_inference_service.hpp"
 #include "celeg/serve/visual_request.hpp"
 
 #include <filesystem>

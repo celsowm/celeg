@@ -1,4 +1,4 @@
-#include "celeg/backend/cuda/model/detail/compiled_model.hpp"
+#include "detail/compiled_model.hpp"
 #include "celeg/detail/checkpoint/bootstrap.hpp"
 #include "celeg/backend/cuda/kernels/kernels.cuh"
 #include "celeg/backend/cuda/paged_kv.hpp"

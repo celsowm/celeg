@@ -1,7 +1,7 @@
 #pragma once
 
 
-#include "celeg/backend/cuda/model/detail/linear_weights.hpp"
+#include "linear_weights.hpp"
 
 #include <cstddef>
 #include <stdexcept>
@@ -89,4 +89,3 @@ inline LinearWeight ExpertLinearWeight::expert_view(int expert_id) const {
 }
 
 }
-

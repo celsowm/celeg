@@ -1,9 +1,9 @@
 #include "sampling_tests.hpp"
 
-#include "celeg/backend/cuda/utils.cuh"
+#include "utils.cuh"
 #include "../support/assertions.hpp"
 #include "../support/cuda_kernel_assertions.cuh"
-#include "celeg/backend/cuda/kernels/kernels.cuh"
+#include "kernels/kernels.cuh"
 #include "celeg/model/runtime_types.hpp"
 
 #include <algorithm>

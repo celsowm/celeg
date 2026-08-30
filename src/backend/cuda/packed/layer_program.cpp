@@ -1,4 +1,4 @@
-#include "celeg/backend/cuda/packed/layer_program.hpp"
+#include "packed/layer_program.hpp"
 
 #include <stdexcept>
 #include <type_traits>

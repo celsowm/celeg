@@ -1,4 +1,4 @@
-#include "celeg/detail/checkpoint/bootstrap.hpp"
+#include "checkpoint/detail/bootstrap.hpp"
 
 #include "celeg/checkpoint/catalog.hpp"
 

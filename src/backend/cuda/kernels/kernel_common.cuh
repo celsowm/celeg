@@ -1,7 +1,7 @@
 #pragma once
 
-#include "celeg/backend/cuda/kernels/kernels.cuh"
-#include "celeg/backend/cuda/utils.cuh"
+#include "kernels/kernels.cuh"
+#include "utils.cuh"
 
 #include <cfloat>
 #include <climits>

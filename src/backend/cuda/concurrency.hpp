@@ -1,7 +1,7 @@
 #pragma once
 
 #include "celeg/model/runtime_types.hpp"
-#include "celeg/backend/cuda/runtime_types.hpp"
+#include "runtime_types.hpp"
 #include "celeg/runtime/concurrency/policy.hpp"
 #include "celeg/runtime/concurrency/metrics.hpp"
 #include "celeg/runtime/request_types.hpp"

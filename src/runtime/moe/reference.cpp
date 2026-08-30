@@ -1,4 +1,4 @@
-#include "celeg/backend/cuda/moe.hpp"
+#include "backend/cuda/moe.hpp"
 
 #include <algorithm>
 #include <cmath>

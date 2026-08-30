@@ -1,9 +1,9 @@
 #pragma once
 
-#include "celeg/backend/cuda/runtime_types.hpp"
+#include "runtime_types.hpp"
 #include "celeg/model/resolved.hpp"
 #include "celeg/model/program.hpp"
-#include "celeg/backend/cuda/utils.cuh"
+#include "utils.cuh"
 
 #include <array>
 #include <cstdint>

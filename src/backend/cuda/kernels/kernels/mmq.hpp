@@ -2,7 +2,7 @@
 
 #include <cuda_bf16.h>
 #include <cuda_runtime.h>
-#include "celeg/backend/cuda/runtime_types.hpp"
+#include "runtime_types.hpp"
 #include <cstddef>
 #include <cstdint>
 

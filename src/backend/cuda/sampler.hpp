@@ -1,6 +1,6 @@
 #pragma once
 
-#include "celeg/backend/cuda/utils.cuh"
+#include "utils.cuh"
 #include "celeg/model/runtime_types.hpp"
 
 #include <cstdint>

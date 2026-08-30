@@ -1,5 +1,5 @@
-#include "celeg/backend/cuda/moe/offload.hpp"
-#include "celeg/detail/binary_codec.hpp"
+#include "backend/cuda/moe/offload.hpp"
+#include "checkpoint/detail/binary_codec.hpp"
 
 #include <algorithm>
 #include <array>

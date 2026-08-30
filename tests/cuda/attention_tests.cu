@@ -1,10 +1,10 @@
 #include "attention_tests.hpp"
 
-#include "celeg/backend/cuda/utils.cuh"
+#include "utils.cuh"
 #include "../support/assertions.hpp"
 #include "../support/cuda_kernel_assertions.cuh"
-#include "celeg/backend/cuda/kernels/kernels.cuh"
-#include "celeg/backend/cuda/paged_kv.hpp"
+#include "kernels/kernels.cuh"
+#include "backend/cuda/paged_kv.hpp"
 #include "celeg/model/reference.hpp"
 
 #include <algorithm>

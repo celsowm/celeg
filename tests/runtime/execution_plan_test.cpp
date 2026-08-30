@@ -1,4 +1,4 @@
-#include "celeg/backend/cuda/execution_plan.hpp"
+#include "backend/cuda/execution_plan.hpp"
 #include "support/assertions.hpp"
 #include <iostream>
 #include <stdexcept>

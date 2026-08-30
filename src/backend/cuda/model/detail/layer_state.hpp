@@ -2,8 +2,8 @@
 
 
 #include "celeg/detail/exhaustive_visit.hpp"
-#include "celeg/backend/cuda/model/detail/feed_forward_weights.hpp"
-#include "celeg/backend/cuda/model/detail/linear_weights.hpp"
+#include "feed_forward_weights.hpp"
+#include "linear_weights.hpp"
 #include "celeg/backend/cuda/utils.cuh"
 #include "celeg/model/graph.hpp"
 
@@ -275,4 +275,3 @@ decltype(auto) visit_layer(LayerRef&& layer, Handlers&&... handlers) {
 }
 
 }
-

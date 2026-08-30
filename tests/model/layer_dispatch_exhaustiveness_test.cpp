@@ -1,5 +1,5 @@
 
-#include "celeg/detail/exhaustive_visit.hpp"
+#include "detail/exhaustive_visit.hpp"
 #include "support/assertions.hpp"
 
 #include <iostream>

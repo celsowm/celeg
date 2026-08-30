@@ -1,12 +1,12 @@
 #pragma once
 
-#include "celeg/backend/cuda/utils.cuh"
+#include "utils.cuh"
 #include "celeg/checkpoint/formats/safetensors.hpp"
 #include "celeg/checkpoint/repositories/safetensors.hpp"
-#include "celeg/backend/cuda/runtime_types.hpp"
-#include "celeg/backend/cuda/model/detail/expert_weights.hpp"
-#include "celeg/backend/cuda/model/detail/layer_state.hpp"
-#include "celeg/backend/cuda/model/detail/shared_weights.hpp"
+#include "runtime_types.hpp"
+#include "detail/expert_weights.hpp"
+#include "detail/layer_state.hpp"
+#include "detail/shared_weights.hpp"
 #include "celeg/model/weights/roles.hpp"
 
 #include <cstddef>

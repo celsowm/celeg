@@ -1,6 +1,6 @@
 #pragma once
 
-#include "celeg/backend/cuda/kernels/norm_conv.hpp"
+#include "kernels/norm_conv.hpp"
 #include "celeg/model/graph.hpp"
 
 #include <cuda_bf16.h>

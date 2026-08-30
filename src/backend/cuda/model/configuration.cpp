@@ -1,4 +1,4 @@
-#include "celeg/backend/cuda/model/detail/compiled_model.hpp"
+#include "detail/compiled_model.hpp"
 #include "celeg/backend/cuda/compiler.hpp"
 #include "celeg/detail/checkpoint/bootstrap.hpp"
 #include "celeg/backend/cuda/weight_policy.hpp"

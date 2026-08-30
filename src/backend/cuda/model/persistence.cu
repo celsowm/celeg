@@ -1,5 +1,5 @@
 #include "celeg/backend/cuda/session_store.hpp"
-#include "celeg/backend/cuda/model/detail/compiled_model.hpp"
+#include "detail/compiled_model.hpp"
 
 #include <fstream>
 #include <stdexcept>

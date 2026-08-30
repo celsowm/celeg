@@ -1,6 +1,6 @@
 #include "detail/model_internal.hpp"
 
-#include "celeg/detail/checkpoint/bootstrap.hpp"
+#include "checkpoint/detail/bootstrap.hpp"
 #include "celeg/backend/cpu/compiler.hpp"
 #include "celeg/backend/cpu/weight_codec.hpp"
 #include "celeg/checkpoint/weight_repository.hpp"

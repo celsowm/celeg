@@ -1,5 +1,5 @@
 
-#include "celeg/backend/cuda/utils.cuh"
+#include "utils.cuh"
 
 #include <cuda_bf16.h>
 #include <cuda_runtime.h>
@@ -14,7 +14,7 @@
 
 namespace {
 
-#include "celeg/backend/cuda/kernels/gemv_kernels.cuh"
+#include "kernels/gemv_kernels.cuh"
 
 struct Shape {
     int n;

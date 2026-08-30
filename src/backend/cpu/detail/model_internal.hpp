@@ -7,7 +7,7 @@
 #include "celeg/backend/cpu/prefix_cache.hpp"
 #include "celeg/backend/cpu/quantization.hpp"
 #include "celeg/backend/cpu/thread_pool.hpp"
-#include "celeg/detail/exhaustive_visit.hpp"
+#include "detail/exhaustive_visit.hpp"
 #include "celeg/model/resolved.hpp"
 #include "celeg/model/program.hpp"
 #include "celeg/model/weights/roles.hpp"

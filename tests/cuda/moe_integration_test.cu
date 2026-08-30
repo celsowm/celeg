@@ -1,7 +1,7 @@
 
-#include "celeg/backend/cuda/moe.hpp"
-#include "celeg/backend/cuda/utils.cuh"
-#include "celeg/backend/cuda/kernels/norm_conv.hpp"
+#include "backend/cuda/moe.hpp"
+#include "utils.cuh"
+#include "kernels/norm_conv.hpp"
 
 #include <cassert>
 #include <cmath>

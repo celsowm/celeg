@@ -31,5 +31,5 @@ set(CELEG_METAL_SHADER_SOURCES
 )
 
 set(CELEG_METAL_APP_SOURCES
-    src/app/benchmark/metal/inference.cpp
+    apps/benchmark/metal/inference.cpp
 )

@@ -1,5 +1,5 @@
 #include "kernel_common.cuh"
-#include "celeg/backend/cuda/kernels/mamba2.hpp"
+#include "kernels/mamba2.hpp"
 
 #include <stdexcept>
 

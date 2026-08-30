@@ -1,4 +1,4 @@
-#include "celeg/backend/cuda/moe/offload.hpp"
+#include "backend/cuda/moe/offload.hpp"
 #include "support/assertions.hpp"
 #include <algorithm>
 #include <iostream>

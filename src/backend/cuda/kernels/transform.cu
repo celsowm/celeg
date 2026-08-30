@@ -1,6 +1,6 @@
 #include "kernel_common.cuh"
 
-#include "celeg/backend/cuda/kernels/gemv_kernels.cuh"
+#include "kernels/gemv_kernels.cuh"
 #include "gemv_launch.hpp"
 
 namespace celeg {

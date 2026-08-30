@@ -1,4 +1,4 @@
-#include "celeg/backend/cuda/model/detail/compiled_model.hpp"
+#include "detail/compiled_model.hpp"
 
 #include <functional>
 

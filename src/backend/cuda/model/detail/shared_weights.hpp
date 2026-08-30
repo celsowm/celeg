@@ -1,7 +1,7 @@
 #pragma once
 
 
-#include "celeg/backend/cuda/model/detail/device_weights.hpp"
+#include "device_weights.hpp"
 #include "celeg/backend/cuda/moe/offload.hpp"
 #include "celeg/backend/cuda/moe/expert_residency.hpp"
 #include "celeg/backend/cuda/utils.cuh"
@@ -54,4 +54,3 @@ struct SharedModelWeights {
 };
 
 }
-

@@ -1,9 +1,9 @@
-#include "celeg/backend/cuda/weights_loader.hpp"
-#include "celeg/detail/binary_codec.hpp"
+#include "weights_loader.hpp"
+#include "checkpoint/detail/binary_codec.hpp"
 #include "support/assertions.hpp"
 #include "celeg/checkpoint/repositories/safetensors.hpp"
-#include "celeg/backend/cuda/model/detail/expert_weights.hpp"
-#include "celeg/backend/cuda/utils.cuh"
+#include "detail/expert_weights.hpp"
+#include "utils.cuh"
 #include <bit>
 #include <cstdint>
 #include <cstring>

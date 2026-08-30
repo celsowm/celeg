@@ -1,5 +1,5 @@
-#include "celeg/backend/cuda/moe.hpp"
-#include "celeg/backend/cuda/utils.cuh"
+#include "backend/cuda/moe.hpp"
+#include "utils.cuh"
 #include "celeg/checkpoint/gguf_blocks.hpp"
 
 #include <cuda_runtime.h>

@@ -1,6 +1,6 @@
 
-#include "celeg/backend/cuda/attention_capability.hpp"
-#include "celeg/backend/cuda/attention_norm.hpp"
+#include "backend/cuda/attention_capability.hpp"
+#include "backend/cuda/attention_norm.hpp"
 #include "support/assertions.hpp"
 
 #include <algorithm>

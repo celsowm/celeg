@@ -1,6 +1,6 @@
 #pragma once
 
-#include "celeg/detail/runtime/concurrency/batch_planner.hpp"
+#include "runtime/concurrency/detail/batch_planner.hpp"
 #include "concurrent_request.hpp"
 
 #include <cstddef>

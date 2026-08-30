@@ -1,6 +1,6 @@
 #include "kernel_common.cuh"
 
-#include "celeg/backend/cuda/kernels/attention.hpp"
+#include "kernels/attention.hpp"
 
 #include <algorithm>
 

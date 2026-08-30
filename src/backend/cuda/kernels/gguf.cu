@@ -1,4 +1,4 @@
-#include "celeg/backend/cuda/kernels/gguf.cuh"
+#include "kernels/gguf.cuh"
 #include "celeg/checkpoint/gguf_blocks.hpp"
 
 #include <cuda_fp16.h>

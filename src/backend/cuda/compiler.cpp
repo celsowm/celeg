@@ -1,4 +1,4 @@
-#include "celeg/backend/cuda/compiler.hpp"
+#include "backend/cuda/compiler.hpp"
 
 #include "celeg/backend/moe_capabilities.hpp"
 

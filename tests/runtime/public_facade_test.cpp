@@ -1,6 +1,6 @@
-#include "celeg/backend/cuda/model.hpp"
+#include "backend/cuda/model.hpp"
 #include "support/assertions.hpp"
-#include "celeg/backend/cuda/concurrency.hpp"
+#include "backend/cuda/concurrency.hpp"
 #include <iostream>
 #include <memory>
 #include <type_traits>

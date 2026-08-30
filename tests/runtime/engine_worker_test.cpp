@@ -1,4 +1,4 @@
-#include "celeg/detail/runtime/concurrency/worker.hpp"
+#include "runtime/concurrency/detail/worker.hpp"
 #include "support/assertions.hpp"
 
 #include <atomic>

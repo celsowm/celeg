@@ -1,8 +1,8 @@
-#include "celeg/backend/cuda/packed/layer_executor.hpp"
+#include "packed/layer_executor.hpp"
 
-#include "celeg/backend/cuda/kernels/kernels.cuh"
-#include "celeg/backend/cuda/moe.hpp"
-#include "celeg/backend/cuda/model/detail/compiled_model.hpp"
+#include "kernels/kernels.cuh"
+#include "backend/cuda/moe.hpp"
+#include "detail/compiled_model.hpp"
 
 #include <algorithm>
 #include <stdexcept>

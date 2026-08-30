@@ -2,8 +2,8 @@
 
 #include "celeg/model/resolved.hpp"
 #include "celeg/model/program.hpp"
-#include "celeg/backend/cuda/packed/session.hpp"
-#include "celeg/backend/cuda/execution_plan.hpp"
+#include "packed/session.hpp"
+#include "backend/cuda/execution_plan.hpp"
 
 #include <cstddef>
 #include <cstdint>

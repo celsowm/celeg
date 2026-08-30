@@ -9,8 +9,8 @@
 #include "celeg/serve/inference_service.hpp"
 #include "celeg/text/tokenizer.hpp"
 #ifdef CELEG_API_WITH_CUDA
-#include "celeg/backend/cuda/runtime_types.hpp"
-#include "celeg/backend/cuda/concurrency.hpp"
+#include "runtime_types.hpp"
+#include "backend/cuda/concurrency.hpp"
 #endif
 #ifdef CELEG_API_WITH_METAL
 #include "celeg/backend/metal/runtime_types.hpp"

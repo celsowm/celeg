@@ -1,6 +1,6 @@
 #pragma once
 
-#include "celeg/backend/cuda/kernels/rope.hpp"
+#include "kernels/rope.hpp"
 #include "celeg/model/definition.hpp"
 
 #include <cuda_bf16.h>

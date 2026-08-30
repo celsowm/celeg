@@ -1,7 +1,7 @@
-#include "celeg/backend/cuda/moe/expert_source.hpp"
+#include "backend/cuda/moe/expert_source.hpp"
 
-#include "celeg/backend/cuda/model/detail/shared_weights.hpp"
-#include "celeg/backend/cuda/weights_loader.hpp"
+#include "detail/shared_weights.hpp"
+#include "weights_loader.hpp"
 
 #include <stdexcept>
 

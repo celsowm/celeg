@@ -1,8 +1,8 @@
-#include "celeg/backend/cuda/packed/metadata.hpp"
+#include "packed/metadata.hpp"
 
-#include "celeg/backend/cuda/paged_kv.hpp"
-#include "celeg/backend/cuda/kernels/kernels.cuh"
-#include "celeg/backend/cuda/model/detail/compiled_model.hpp"
+#include "backend/cuda/paged_kv.hpp"
+#include "kernels/kernels.cuh"
+#include "detail/compiled_model.hpp"
 
 #include <algorithm>
 #include <limits>

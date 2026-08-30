@@ -2,8 +2,8 @@
 
 #include "celeg/serve/inference_service.hpp"
 #include "celeg/serve/request_lifecycle.hpp"
-#include "celeg/backend/cuda/runtime_types.hpp"
-#include "celeg/backend/cuda/concurrency.hpp"
+#include "runtime_types.hpp"
+#include "backend/cuda/concurrency.hpp"
 
 #include <string>
 

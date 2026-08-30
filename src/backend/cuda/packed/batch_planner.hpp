@@ -1,7 +1,7 @@
 #pragma once
 
-#include "celeg/backend/cuda/packed/metadata_cache.hpp"
-#include "celeg/backend/cuda/packed/workspace.hpp"
+#include "packed/metadata_cache.hpp"
+#include "packed/workspace.hpp"
 
 #include <cstdint>
 #include <vector>

@@ -1,5 +1,5 @@
 #include "celeg/checkpoint/formats/safetensors.hpp"
-#include "celeg/detail/binary_codec.hpp"
+#include "checkpoint/detail/binary_codec.hpp"
 #include "support/assertions.hpp"
 #include <cstdint>
 #include <cstring>

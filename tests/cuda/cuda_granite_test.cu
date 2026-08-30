@@ -1,6 +1,6 @@
-#include "celeg/backend/cuda/model.hpp"
-#include "celeg/backend/cuda/concurrency.hpp"
-#include "celeg/backend/cuda/utils.cuh"
+#include "backend/cuda/model.hpp"
+#include "backend/cuda/concurrency.hpp"
+#include "utils.cuh"
 #include "support/assertions.hpp"
 
 #include <cstdint>

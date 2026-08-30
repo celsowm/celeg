@@ -1,6 +1,6 @@
 #pragma once
 
-#include "celeg/detail/runtime/concurrency/request_registry.hpp"
+#include "request_registry.hpp"
 
 #include <cstdint>
 #include <optional>

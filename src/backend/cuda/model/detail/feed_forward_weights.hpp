@@ -1,8 +1,8 @@
 #pragma once
 
 
-#include "celeg/backend/cuda/model/detail/expert_weights.hpp"
-#include "celeg/backend/cuda/model/detail/linear_weights.hpp"
+#include "expert_weights.hpp"
+#include "linear_weights.hpp"
 #include "celeg/backend/cuda/moe.hpp"
 #include "celeg/model/program.hpp"
 
@@ -129,4 +129,3 @@ inline celeg::MoeFfnDevice moe_ffn_device(const MoeFfnWeights& moe,
 }
 
 }
-

@@ -1,7 +1,7 @@
-#include "celeg/backend/cuda/moe/expert_residency.hpp"
-#include "celeg/backend/cuda/moe.hpp"
-#include "celeg/backend/cuda/utils.cuh"
-#include "celeg/backend/cuda/model/detail/feed_forward_weights.hpp"
+#include "backend/cuda/moe/expert_residency.hpp"
+#include "backend/cuda/moe.hpp"
+#include "utils.cuh"
+#include "detail/feed_forward_weights.hpp"
 #include "celeg/model/resolved.hpp"
 
 #include <cassert>

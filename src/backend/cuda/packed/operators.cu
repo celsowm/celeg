@@ -1,14 +1,14 @@
-#include "celeg/backend/cuda/packed/operators.hpp"
+#include "packed/operators.hpp"
 
-#include "celeg/backend/cuda/attention_norm.hpp"
-#include "celeg/backend/cuda/kernels/kernels.cuh"
-#include "celeg/backend/cuda/kernels/gated_delta.hpp"
-#include "celeg/backend/cuda/kernels/mamba2.hpp"
-#include "celeg/backend/cuda/kernels/attention_output.hpp"
-#include "celeg/backend/cuda/kernels/rope_pairing.hpp"
-#include "celeg/backend/cuda/moe.hpp"
-#include "celeg/backend/cuda/paged_kv.hpp"
-#include "celeg/backend/cuda/attention_capability.hpp"
+#include "backend/cuda/attention_norm.hpp"
+#include "kernels/kernels.cuh"
+#include "kernels/gated_delta.hpp"
+#include "kernels/mamba2.hpp"
+#include "kernels/attention_output.hpp"
+#include "kernels/rope_pairing.hpp"
+#include "backend/cuda/moe.hpp"
+#include "backend/cuda/paged_kv.hpp"
+#include "backend/cuda/attention_capability.hpp"
 
 #include <stdexcept>
 #include <string>

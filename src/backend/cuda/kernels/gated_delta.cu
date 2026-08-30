@@ -1,5 +1,5 @@
 #include "kernel_common.cuh"
-#include "celeg/backend/cuda/kernels/gated_delta.hpp"
+#include "kernels/gated_delta.hpp"
 
 #include <algorithm>
 #include <cmath>

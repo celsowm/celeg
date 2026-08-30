@@ -1,19 +1,14 @@
 set(CELEG_CPU_APP_SOURCES
-    celeg_cpu_run;src/app/cpu/main.cpp
-    celeg_cpu_pack;src/tools/cpu_pack.cpp
-    celeg_cpu_kernel_benchmark;src/app/benchmark/cpu/kernels.cpp
-    celeg_cpu_concurrent_benchmark;src/app/benchmark/cpu/concurrent.cpp
-    celeg_cpu_prefill_benchmark;src/app/benchmark/cpu/prefill.cpp
-    celeg_cpu_prefix_cache_benchmark;src/app/benchmark/cpu/prefix_cache.cpp
-    celeg_cpu_compare_reference;src/tools/cpu_compare_reference.cpp
+    celeg_cpu_run;apps/cpu/main.cpp
+    celeg_cpu_pack;tools/cpu_pack.cpp
+    celeg_cpu_kernel_benchmark;apps/benchmark/cpu/kernels.cpp
+    celeg_cpu_concurrent_benchmark;apps/benchmark/cpu/concurrent.cpp
+    celeg_cpu_prefill_benchmark;apps/benchmark/cpu/prefill.cpp
+    celeg_cpu_prefix_cache_benchmark;apps/benchmark/cpu/prefix_cache.cpp
+    celeg_cpu_compare_reference;tools/cpu_compare_reference.cpp
 )
 set(CELEG_CUDA_APP_SOURCES
-    celeg_run;src/app/cuda/main.cpp
-    celeg_concurrent_benchmark;src/app/benchmark/cuda/concurrent.cpp
-    celeg_prefix_cache_benchmark;src/app/benchmark/cuda/prefix_cache.cpp
-)
-set(CELEG_SHARED_TOOL_SOURCES
-    celeg_download;src/app/download/main.cpp
-    celeg_compare_logits;src/tools/compare_logits.cpp
-    celeg_pack_experts;src/tools/pack_experts.cpp
+    celeg_run;apps/cuda/main.cpp
+    celeg_concurrent_benchmark;apps/benchmark/cuda/concurrent.cpp
+    celeg_prefix_cache_benchmark;apps/benchmark/cuda/prefix_cache.cpp
 )

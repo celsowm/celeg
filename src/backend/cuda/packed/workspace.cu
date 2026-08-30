@@ -1,6 +1,6 @@
-#include "celeg/backend/cuda/packed/workspace.hpp"
+#include "packed/workspace.hpp"
 
-#include "celeg/backend/cuda/paged_kv.hpp"
+#include "backend/cuda/paged_kv.hpp"
 
 #include <algorithm>
 #include <stdexcept>

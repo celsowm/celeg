@@ -7,9 +7,9 @@ function(celeg_register_cpu_expert_cache_test)
         return()
     endif()
     add_executable(cpu_expert_cache_test
-        tests/cpu_expert_cache_test.cpp)
+        tests/cpu/cpu_expert_cache_test.cpp)
     target_include_directories(cpu_expert_cache_test PRIVATE
-        include src/backend/cpu)
+        include src src/backend/cpu)
     target_link_libraries(cpu_expert_cache_test PRIVATE
         celeg_cpu_backend Threads::Threads)
     add_test(NAME cpu_expert_cache_test COMMAND cpu_expert_cache_test)
@@ -20,9 +20,9 @@ function(celeg_register_attention_semantics_test)
         return()
     endif()
     add_executable(attention_semantics_test
-        tests/attention_semantics_test.cpp)
+        tests/cpu/attention_semantics_test.cpp)
     target_include_directories(attention_semantics_test PRIVATE
-        include src/backend/cpu tests)
+        include src/backend/cpu src tests)
     target_link_libraries(attention_semantics_test PRIVATE
         celeg_cpu_backend Threads::Threads)
     add_test(NAME attention_semantics_test COMMAND attention_semantics_test)
@@ -33,9 +33,9 @@ function(celeg_register_latent_prefill_path_test)
         return()
     endif()
     add_executable(latent_prefill_path_test
-        tests/latent_prefill_path_test.cpp)
+        tests/model/latent_prefill_path_test.cpp)
     target_include_directories(latent_prefill_path_test PRIVATE
-        include src/backend/cuda/model/prefill_batched/attention)
+        include src src/backend/cuda/model/prefill_batched/attention)
     target_link_libraries(latent_prefill_path_test PRIVATE
         celeg_base Threads::Threads)
     add_test(NAME latent_prefill_path_test COMMAND latent_prefill_path_test)
@@ -46,7 +46,7 @@ function(celeg_register_program_fingerprint_test)
         return()
     endif()
     add_executable(program_fingerprint_test
-        tests/program_fingerprint_test.cpp)
+        tests/model/program_fingerprint_test.cpp)
     target_include_directories(program_fingerprint_test PRIVATE
         include tests)
     target_link_libraries(program_fingerprint_test PRIVATE
@@ -59,7 +59,7 @@ function(celeg_register_layer_inference_rule_test)
         return()
     endif()
     add_executable(layer_inference_rule_test
-        tests/layer_inference_rule_test.cpp)
+        tests/model/layer_inference_rule_test.cpp)
     target_include_directories(layer_inference_rule_test PRIVATE
         include src/model tests)
     target_link_libraries(layer_inference_rule_test PRIVATE

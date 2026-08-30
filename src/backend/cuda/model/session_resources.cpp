@@ -1,4 +1,4 @@
-#include "celeg/backend/cuda/model/detail/compiled_model.hpp"
+#include "detail/compiled_model.hpp"
 #include "celeg/backend/cuda/workspace_plan.hpp"
 #include "celeg/backend/cuda/kernels/kernels.cuh"
 

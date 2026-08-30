@@ -1,6 +1,6 @@
 #pragma once
 
-#include "celeg/backend/cuda/gemm_dispatcher.hpp"
+#include "backend/cuda/gemm_dispatcher.hpp"
 
 #include <memory>
 

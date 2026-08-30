@@ -1,7 +1,7 @@
 #pragma once
 
-#include "celeg/backend/cuda/weight_layout.hpp"
-#include "celeg/backend/cuda/runtime_types.hpp"
+#include "weight_layout.hpp"
+#include "runtime_types.hpp"
 #include "celeg/model/weights/roles.hpp"
 
 #include <span>

@@ -1,10 +1,10 @@
-#include "celeg/backend/cuda/kernels/gguf.cuh"
-#include "celeg/backend/cuda/kernels/mmq.hpp"
-#include "celeg/backend/cuda/gemm_dispatcher.hpp"
-#include "celeg/backend/cuda/utils.cuh"
-#include "celeg/detail/checkpoint/bootstrap.hpp"
-#include "celeg/backend/cuda/model.hpp"
-#include "celeg/backend/cuda/weights_loader.hpp"
+#include "kernels/gguf.cuh"
+#include "kernels/mmq.hpp"
+#include "backend/cuda/gemm_dispatcher.hpp"
+#include "utils.cuh"
+#include "checkpoint/detail/bootstrap.hpp"
+#include "backend/cuda/model.hpp"
+#include "weights_loader.hpp"
 #include "celeg/checkpoint/formats/gguf.hpp"
 
 #include <cuda_bf16.h>

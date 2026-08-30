@@ -1,5 +1,5 @@
 #include "celeg/backend/cpu/concurrent.hpp"
-#include "celeg/detail/checkpoint/bootstrap.hpp"
+#include "checkpoint/detail/bootstrap.hpp"
 #include "celeg/text/tokenizer.hpp"
 #include "celeg/text/tokenizer_definition.hpp"
 

@@ -1,4 +1,4 @@
-#include "celeg/detail/checkpoint/bootstrap.hpp"
+#include "checkpoint/detail/bootstrap.hpp"
 #include "celeg/backend/cpu/concurrent.hpp"
 #include "celeg/text/chat_template.hpp"
 #include "celeg/text/tokenizer.hpp"

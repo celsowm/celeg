@@ -1,5 +1,5 @@
-#include "celeg/backend/cuda/kernels/attention_output.hpp"
-#include "celeg/backend/cuda/utils.cuh"
+#include "kernels/attention_output.hpp"
+#include "utils.cuh"
 
 #include <cmath>
 #include <stdexcept>

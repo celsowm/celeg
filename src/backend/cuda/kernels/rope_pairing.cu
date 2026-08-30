@@ -1,5 +1,5 @@
-#include "celeg/backend/cuda/kernels/rope_pairing.hpp"
-#include "celeg/backend/cuda/utils.cuh"
+#include "kernels/rope_pairing.hpp"
+#include "utils.cuh"
 
 #include <stdexcept>
 

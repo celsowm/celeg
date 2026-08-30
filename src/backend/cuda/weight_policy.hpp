@@ -1,7 +1,7 @@
 #pragma once
 
 
-#include "celeg/backend/cuda/runtime_types.hpp"
+#include "runtime_types.hpp"
 
 #include <string>
 #include <stdexcept>

@@ -1,4 +1,4 @@
-#include "celeg/backend/cuda/kernels/mmq.hpp"
+#include "kernels/mmq.hpp"
 #include "kernel_common.cuh"
 #include "celeg/checkpoint/gguf_blocks.hpp"
 

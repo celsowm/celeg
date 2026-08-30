@@ -1,8 +1,8 @@
 #pragma once
 
-#include "celeg/backend/cuda/moe/expert_residency.hpp"
-#include "celeg/backend/cuda/moe/offload.hpp"
-#include "celeg/backend/cuda/utils.cuh"
+#include "backend/cuda/moe/expert_residency.hpp"
+#include "backend/cuda/moe/offload.hpp"
+#include "utils.cuh"
 
 #include <cstddef>
 #include <cstdint>

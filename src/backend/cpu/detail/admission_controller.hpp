@@ -3,7 +3,7 @@
 #include "celeg/backend/cpu/concurrent.hpp"
 #include "celeg/backend/cpu/numa_placement.hpp"
 #include "celeg/backend/cpu/prefix_cache.hpp"
-#include "celeg/detail/runtime/concurrency/batch_planner.hpp"
+#include "runtime/concurrency/detail/batch_planner.hpp"
 #include "celeg/runtime/concurrency/metrics.hpp"
 #include "concurrent_request.hpp"
 
