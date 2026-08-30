@@ -4,9 +4,9 @@
 #include "celeg/checkpoint/formats/safetensors.hpp"
 #include "celeg/checkpoint/repositories/safetensors.hpp"
 #include "runtime_types.hpp"
-#include "detail/expert_weights.hpp"
-#include "detail/layer_state.hpp"
-#include "detail/shared_weights.hpp"
+#include "model/detail/expert_weights.hpp"
+#include "model/detail/layer_state.hpp"
+#include "model/detail/shared_weights.hpp"
 #include "celeg/model/weights/roles.hpp"
 
 #include <cstddef>
