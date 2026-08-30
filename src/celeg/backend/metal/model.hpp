@@ -62,9 +62,6 @@ public:
     MetalModel& operator=(MetalModel&&) noexcept;
 
     MetalInferenceSession session() { return MetalInferenceSession(*this); }
-    MetalInferenceSession session() const {
-        return MetalInferenceSession(const_cast<MetalModel&>(*this));
-    }
 
     int vocab_size() const;
     const std::string& model_identity() const;
