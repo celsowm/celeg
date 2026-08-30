@@ -2,7 +2,7 @@
 
 #include "celeg/backend/metal/model.hpp"
 #include "celeg/checkpoint/tensor_codec.hpp"
-#include "detail/checkpoint/bootstrap.hpp"
+#include "checkpoint/detail/bootstrap.hpp"
 #include "celeg/model/program.hpp"
 #include "celeg/model/linear_operation.hpp"
 #include "celeg/model/weights/roles.hpp"

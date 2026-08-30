@@ -1,5 +1,5 @@
 #include "detail/compiled_model.hpp"
-#include "detail/checkpoint/bootstrap.hpp"
+#include "checkpoint/detail/bootstrap.hpp"
 #include "kernels/kernels.cuh"
 #include "backend/cuda/paged_kv.hpp"
 #include "backend/cuda/weight_policy.hpp"

@@ -1,6 +1,6 @@
 #include "detail/compiled_model.hpp"
 #include "backend/cuda/compiler.hpp"
-#include "detail/checkpoint/bootstrap.hpp"
+#include "checkpoint/detail/bootstrap.hpp"
 #include "backend/cuda/weight_policy.hpp"
 #include "celeg/checkpoint/packed/int8.hpp"
 

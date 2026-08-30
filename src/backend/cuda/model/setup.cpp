@@ -1,5 +1,5 @@
 #include "detail/compiled_model.hpp"
-#include "detail/checkpoint/bootstrap.hpp"
+#include "checkpoint/detail/bootstrap.hpp"
 #include "kernels/mmq.hpp"
 
 #include <filesystem>

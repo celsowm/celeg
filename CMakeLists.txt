@@ -512,6 +512,7 @@ target_include_directories(celeg_cuda_backend PUBLIC include)
 target_include_directories(celeg_cuda_backend PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${CMAKE_CURRENT_SOURCE_DIR}/src/backend/cuda
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/backend/cuda/kernels
     ${CMAKE_CURRENT_SOURCE_DIR}/src/backend/cuda/model)
 target_link_libraries(celeg_cuda_backend PUBLIC celeg_runtime CUDA::cudart CUDA::cublas CUDA::cublasLt Threads::Threads)
     target_compile_options(celeg_cuda_backend PRIVATE
@@ -544,7 +545,8 @@ target_link_libraries(celeg_cuda_backend PUBLIC celeg_runtime CUDA::cudart CUDA:
     add_executable(celeg-prefix-cache-benchmark apps/benchmark/cuda/prefix_cache.cpp)
     target_link_libraries(celeg-prefix-cache-benchmark PRIVATE celeg_cuda_backend)
     add_executable(celeg-decode-gemv-benchmark apps/benchmark/cuda/decode_gemv.cu)
-    target_include_directories(celeg-decode-gemv-benchmark PRIVATE src/backend/cuda)
+    target_include_directories(celeg-decode-gemv-benchmark PRIVATE
+        src/backend/cuda src/backend/cuda/kernels)
     target_link_libraries(celeg-decode-gemv-benchmark PRIVATE celeg_cuda_backend)
 
     add_library(celeg_serve_cuda src/serve/cuda_inference_service.cpp)

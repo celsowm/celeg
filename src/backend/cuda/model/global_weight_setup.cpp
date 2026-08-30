@@ -1,7 +1,7 @@
 #include "backend/cuda/weight_setup.hpp"
 
 #include "detail/compiled_model.hpp"
-#include "detail/checkpoint/bootstrap.hpp"
+#include "checkpoint/detail/bootstrap.hpp"
 #include "backend/cuda/weight_layout.hpp"
 #include "backend/cuda/weight_setup_support.hpp"
 #include "backend/cuda/weights_loader.hpp"
