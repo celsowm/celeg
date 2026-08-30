@@ -25,14 +25,15 @@ void CudaWeightSetup::load(CudaCompiledModel& model,
                            const std::string& model_path,
                            const detail::ModelBootstrap& bootstrap,
                            LayerLoader load_layers) {
-    CudaManagedWeightAllocationScope managed_scope(
-        model.resources_.options_.managed_weights);
+    const bool managed_weights = model.resources_.options_.managed_weights;
+    CudaManagedWeightAllocationScope managed_scope(managed_weights);
     model.resources_.weights_ = WeightLoader::acquire(
         model_path, model.resources_.options_.weight_mode,
         model.resources_.options_.expert_offload.fingerprint() +
         "|mtp=" + (model.resources_.options_.enable_mtp ? "1" : "0") +
         "|mtp_steps=" +
-            std::to_string(model.resources_.options_.mtp_speculative_tokens));
+            std::to_string(model.resources_.options_.mtp_speculative_tokens),
+        managed_weights);
     model.resources_.weight_loader_ = std::make_unique<WeightLoader>(
         model.resources_.weights_, model.resources_.options_.weight_mode);
 
