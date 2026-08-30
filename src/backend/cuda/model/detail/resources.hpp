@@ -60,6 +60,8 @@ struct CudaModelResources {
     CudaModelResources(CudaModelResources&&) = delete;
     CudaModelResources& operator=(CudaModelResources&&) = delete;
 
+    const CudaModelOptions& options() const noexcept { return plan_.options(); }
+
     CudaExecutionPlan plan_;
     const CudaModelOptions& options_;
     ResolvedModel model_;
