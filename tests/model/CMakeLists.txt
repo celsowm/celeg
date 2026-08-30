@@ -18,6 +18,9 @@ foreach(test_name IN ITEMS
 endforeach()
 
 target_include_directories(layer_inference_rule_test PRIVATE src/model)
+target_sources(model_compiler_test PRIVATE
+    src/backend/cpu/compiler.cpp
+    src/backend/cuda/compiler.cpp)
 
 if(TARGET celeg_cuda_backend)
     add_executable(latent_prefill_path_test tests/model/latent_prefill_path_test.cpp)
