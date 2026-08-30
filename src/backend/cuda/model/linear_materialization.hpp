@@ -61,8 +61,6 @@ struct MaterializationPlan {
     std::string name;
     int rows = 0;
     int cols = 0;
-    bool native_gguf = false;
-    bool host_dequantization = false;
 };
 
 MaterializationPlan plan_linear_materialization(
