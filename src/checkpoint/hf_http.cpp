@@ -410,6 +410,6 @@ void http_download_file(const std::string& path,
     throw std::runtime_error("download failed after retries: " + last_error);
 }
 
-#endif
-
 }
+
+#endif
