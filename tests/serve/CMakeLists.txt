@@ -1,0 +1,5 @@
+add_executable(chat_protocol_mapping_test
+    tests/serve/chat_protocol_mapping_test.cpp)
+target_include_directories(chat_protocol_mapping_test PRIVATE include src tests)
+target_link_libraries(chat_protocol_mapping_test PRIVATE celeg_base celeg_serve_protocol)
+add_test(NAME chat_protocol_mapping_test COMMAND chat_protocol_mapping_test)
