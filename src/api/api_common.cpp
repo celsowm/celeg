@@ -223,8 +223,7 @@ MetalModelOptions metal_options(const celeg_metal_model_options& input) {
     return {
         MetalWeightMode::Bf16,
         MetalKvCacheMode::Bf16,
-        input.storage_mode == CELEG_METAL_STORAGE_PRIVATE
-            ? MetalStorageMode::Private : MetalStorageMode::Shared,
+        input.storage_mode,
         input.kv_page_tokens,
     };
 }
