@@ -6,6 +6,14 @@
 
 namespace celeg {
 
+enum class MetalWeightMode : std::int32_t {
+    Bf16 = 0,
+};
+
+enum class MetalKvCacheMode : std::int32_t {
+    Bf16 = 0,
+};
+
 enum class MetalStorageMode : std::int32_t {
     Shared = 0,
     Private = 1,
@@ -27,9 +35,9 @@ struct MetalCapabilities {
 };
 
 struct MetalModelOptions {
-    int32_t weight_mode = 0;
-    int32_t kv_cache_mode = 0;
-    int32_t storage_mode = 0;
+    MetalWeightMode weight_mode = MetalWeightMode::Bf16;
+    MetalKvCacheMode kv_cache_mode = MetalKvCacheMode::Bf16;
+    MetalStorageMode storage_mode = MetalStorageMode::Shared;
     int32_t kv_page_tokens = 16;
 };
 
