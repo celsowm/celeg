@@ -99,9 +99,12 @@ python scripts/dev.py smoke --backend cuda
 The smoke command checks CLI startup, the C API, expert residency and cached
 230M inference. It never downloads a checkpoint implicitly.
 
-Note: the LFM2.5-8B-A1B checkpoint is sharded across ~16 GB of BF16 weights and
-does not fit in the 12 GB VRAM of the reference RTX 3060, so full BF16
-inference validation of that model must run on a larger GPU.
+Note: the LFM2.5-8B-A1B checkpoint contains roughly 16 GB of BF16 weights and
+does not fit fully resident in the 12 GB VRAM of the reference RTX 3060. CUDA
+validation on that machine must use `--expert-offload auto`; with
+`--expert-backing disk`, non-expert weights and the routed expert working set
+remain on the GPU while the other experts are served from the host/SSD cache.
+Only fully GPU-resident BF16 validation requires a larger GPU.
 
 ## Refactoring policy
 

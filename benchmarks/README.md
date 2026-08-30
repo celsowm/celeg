@@ -129,7 +129,7 @@ logits snapshot, or both). Storing them apart is Phase 0 task 0.2 of
 | `dense_int4.json` | `LiquidAI/LFM2.5-230M` | INT4 per-output-channel dense |
 | `gguf_q4k.json` | `LiquidAI/LFM2.5-230M-GGUF:Q4_K_M` | native GGUF MMQ |
 | `gguf_q6k.json` | `LiquidAI/LFM2.5-230M-GGUF:Q6_K` | native GGUF MMQ |
-| `moe_bf16.json` | `LiquidAI/LFM2.5-8B-A1B` | BF16 MoE (needs >12 GB VRAM) |
+| `moe_bf16.json` | `LiquidAI/LFM2.5-8B-A1B` | BF16 MoE (use expert offload on 12 GB GPUs; larger GPU only for fully resident weights) |
 
 Manifest schema and tolerance classes are documented inline in each manifest;
 tolerances are model- and format-specific, never one global number (Phase 0

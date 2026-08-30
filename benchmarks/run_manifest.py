@@ -59,7 +59,7 @@ def build_run_cmd(manifest: dict[str, Any], exe: Path) -> list[str]:
     repo = manifest["repo"]
     if manifest.get("quant_tag"):
         repo = f"{repo}:{manifest['quant_tag']}"
-    return [
+    cmd = [
         str(exe),
         "--repo", repo,
         "--prompt", manifest["prompt"],
@@ -73,6 +73,26 @@ def build_run_cmd(manifest: dict[str, Any], exe: Path) -> list[str]:
         "--kv-cache", manifest.get("kv_cache_mode", "bf16"),
         "--runtime-tokens",
     ]
+    optional_flags = (
+        ("context", "--context"),
+        ("prefill_chunk", "--prefill-chunk"),
+        ("expert_offload", "--expert-offload"),
+        ("expert_host_mode", "--expert-host-mode"),
+        ("expert_cache_policy", "--expert-cache-policy"),
+        ("expert_cache_mib", "--expert-cache-mib"),
+        ("expert_cache_per_layer", "--expert-cache-per-layer"),
+        ("expert_backing", "--expert-backing"),
+        ("expert_host_cache_mib", "--expert-host-cache-mib"),
+        ("expert_io_backend", "--expert-io-backend"),
+        ("expert_io_workers", "--expert-io-workers"),
+        ("expert_io_queue_depth", "--expert-io-queue-depth"),
+    )
+    for key, flag in optional_flags:
+        if key in manifest:
+            cmd.extend([flag, str(manifest[key])])
+    if manifest.get("expert_direct_io"):
+        cmd.append("--expert-direct-io")
+    return cmd
 
 
 def capture_stdout(cmd: list[str]) -> str:
