@@ -124,7 +124,7 @@ const ExpertLinearWeight* WeightLoader::load_moe_gate_up(
         }
         if (is_host_decoded_moe_type(first_gate_type)) {
             const size_t per_expert = rows * static_cast<size_t>(hidden);
-            DeviceWeight weight;
+            DeviceWeight weight(weights_->memory_kind);
             weight.shape = {num_experts, static_cast<int>(rows), hidden};
             weight.bf16_storage.reset(static_cast<size_t>(num_experts) * per_expert);
             for (int e = 0; e < num_experts; ++e) {
@@ -166,7 +166,7 @@ const ExpertLinearWeight* WeightLoader::load_moe_gate_up(
                                                 names.gate.front());
         const size_t source_bytes = static_cast<size_t>(moe_intermediate) * row_bytes;
         const size_t expert_bytes = rows * row_bytes;
-        DeviceWeight weight;
+        DeviceWeight weight(weights_->memory_kind);
         weight.shape = {num_experts, static_cast<int>(rows), hidden};
         weight.gguf_expert_storage.reset(static_cast<size_t>(num_experts) * expert_bytes);
         for (int e = 0; e < num_experts; ++e) {
@@ -204,7 +204,7 @@ const ExpertLinearWeight* WeightLoader::load_moe_gate_up(
     }
 
     const size_t per_expert = rows * static_cast<size_t>(hidden);
-    DeviceWeight weight;
+    DeviceWeight weight(weights_->memory_kind);
     weight.shape = {num_experts, static_cast<int>(rows), hidden};
     weight.bf16_storage.reset(static_cast<size_t>(num_experts) * per_expert);
     const size_t projection_bytes = static_cast<size_t>(moe_intermediate) * hidden *
@@ -255,7 +255,7 @@ const ExpertLinearWeight* WeightLoader::load_moe_down(
         const GgmlType first_type = ggml_type_from_block_encoding(first.block_encoding);
         if (is_host_decoded_moe_type(first_type)) {
             const size_t per_expert = static_cast<size_t>(hidden) * moe_intermediate;
-            DeviceWeight weight;
+            DeviceWeight weight(weights_->memory_kind);
             weight.shape = {num_experts, hidden, moe_intermediate};
             weight.bf16_storage.reset(static_cast<size_t>(num_experts) * per_expert);
             for (int e = 0; e < num_experts; ++e) {
@@ -286,7 +286,7 @@ const ExpertLinearWeight* WeightLoader::load_moe_down(
         const size_t row_bytes = gguf_row_bytes(moe_intermediate, first_type,
                                                 names.down.front());
         const size_t expert_bytes = static_cast<size_t>(hidden) * row_bytes;
-        DeviceWeight weight;
+        DeviceWeight weight(weights_->memory_kind);
         weight.shape = {num_experts, hidden, moe_intermediate};
         weight.gguf_expert_storage.reset(static_cast<size_t>(num_experts) * expert_bytes);
         for (int e = 0; e < num_experts; ++e) {
@@ -319,7 +319,7 @@ const ExpertLinearWeight* WeightLoader::load_moe_down(
 
     const size_t per_expert = static_cast<size_t>(hidden) * moe_intermediate;
     const size_t bytes = per_expert * sizeof(__nv_bfloat16);
-    DeviceWeight weight;
+    DeviceWeight weight(weights_->memory_kind);
     weight.shape = {num_experts, hidden, moe_intermediate};
     weight.bf16_storage.reset(static_cast<size_t>(num_experts) * per_expert);
     for (int e = 0; e < num_experts; ++e) {
