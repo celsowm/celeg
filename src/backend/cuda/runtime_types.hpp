@@ -11,22 +11,6 @@
 
 namespace celeg {
 
-namespace detail {
-
-inline bool env_nonzero_flag(const char* name, bool fallback) {
-    const char* value = std::getenv(name);
-    if (value == nullptr || value[0] == '\0') return fallback;
-    return value[0] != '0';
-}
-
-inline std::optional<bool> env_exact_one_flag(const char* name) {
-    const char* value = std::getenv(name);
-    if (value == nullptr) return std::nullopt;
-    return std::string_view(value) == "1";
-}
-
-}
-
 struct CudaDeviceCapabilities {
     int device_ordinal = -1;
     int compute_major = 0;
@@ -72,10 +56,23 @@ struct CudaModelOptions {
     bool enable_mtp = false;
     int mtp_speculative_tokens = 1;
     ExpertOffloadOptions expert_offload;
-
-    bool flash_attn = detail::env_nonzero_flag("CELEG_FLASH_ATTN", false);
-    std::optional<bool> mmq_tensor_cores = detail::env_exact_one_flag("CELEG_MMQ_TENSOR_CORES");
-    bool managed_weights = detail::env_exact_one_flag("CELEG_CUDA_MANAGED_WEIGHTS").value_or(false);
+    bool flash_attn = false;
+    std::optional<bool> mmq_tensor_cores;
+    bool managed_weights = false;
 };
+
+inline CudaModelOptions cuda_model_options_from_environment(CudaModelOptions options = {}) {
+    if (const char* value = std::getenv("CELEG_FLASH_ATTN");
+        value != nullptr && value[0] != '\0') {
+        options.flash_attn = value[0] != '0';
+    }
+    if (const char* value = std::getenv("CELEG_MMQ_TENSOR_CORES"); value != nullptr) {
+        options.mmq_tensor_cores = std::string_view(value) == "1";
+    }
+    if (const char* value = std::getenv("CELEG_CUDA_MANAGED_WEIGHTS"); value != nullptr) {
+        options.managed_weights = std::string_view(value) == "1";
+    }
+    return options;
+}
 
 }
