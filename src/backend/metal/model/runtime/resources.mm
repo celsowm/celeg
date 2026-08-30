@@ -38,7 +38,7 @@ namespace celeg {
 using metal_model_detail::request_for;
 
 id<MTLBuffer> MetalModel::Impl::immutable_buffer(const void* data, size_t bytes) const {
-    if (options.storage_mode != static_cast<std::int32_t>(MetalStorageMode::Private)) {
+    if (options.storage_mode != MetalStorageMode::Private) {
         id<MTLBuffer> result = [device newBufferWithBytes:data
                                                     length:bytes
                                                    options:MTLResourceStorageModeShared];
