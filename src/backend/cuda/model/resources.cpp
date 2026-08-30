@@ -80,7 +80,7 @@ void CudaCompiledModel::allocate_celeg_resources() {
         const int mtp_layers = resources_.options().enable_mtp
             ? resources_.dims_.mtp_num_hidden_layers : 0;
         workspace_.moe_router_float_.resize(static_cast<size_t>(
-            resources_.shape_.num_hidden_layers + mtp_layers));
+            resources_.shape().num_hidden_layers + mtp_layers));
     }
 
     if (resources_.plan_.segmented_capable() && plan.attention_query_heads > 0) {
