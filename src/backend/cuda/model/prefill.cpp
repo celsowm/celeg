@@ -54,8 +54,8 @@ void CudaCompiledModel::prefill(const std::vector<int32_t>& tokens) {
         prefill_chunk(tokens, true, true);
         return;
     }
-    if (resources_.options_.expert_offload.enabled() &&
-        resources_.options_.expert_offload.backing == ExpertBackingMode::DiskCached) {
+    if (resources_.options().expert_offload.enabled() &&
+        resources_.options().expert_offload.backing == ExpertBackingMode::DiskCached) {
         prefill_chunk(tokens, true, true);
         return;
     }
