@@ -186,21 +186,21 @@ void configure_cuda_expert_resources(CudaCompiledModel& model) {
     CELEG_CUDA(cudaMemGetInfo(&free_bytes, &total_bytes));
     const int moe_layers = moe_layer_count(resources.program_) +
         (resources.options().enable_mtp && resources.program_.has_moe()
-            ? resources.dims_.mtp_num_hidden_layers : 0);
+            ? resources.dims().mtp_num_hidden_layers : 0);
     const size_t expert_bytes = bytes_per_expert_bf16(resources.program_);
     ExpertOffloadPlanInputs inputs(resources.program_);
     inputs.options = resources.options().expert_offload;
     inputs.gpu_free_bytes = free_bytes;
     inputs.non_expert_weight_bytes = estimate_non_expert_weights(
-        resources.dims_, resources.program_, resources.model_.graph.tied_embeddings) +
+        resources.dims(), resources.program_, resources.model_.graph.tied_embeddings) +
         (resources.options().enable_mtp
-            ? estimate_mtp_non_expert_weights(resources.dims_, resources.program_) : 0) +
+            ? estimate_mtp_non_expert_weights(resources.dims(), resources.program_) : 0) +
         (64ull << 20);
     inputs.workspace_bytes = resources.options().lt_workspace_bytes + (256ull << 20);
     inputs.context_tokens = model.max_context_;
     if (resources.options().enable_mtp) {
         inputs.extra_moe_layers = resources.program_.has_moe()
-            ? resources.dims_.mtp_num_hidden_layers : 0;
+            ? resources.dims().mtp_num_hidden_layers : 0;
         const int full_attention_layer = [&]() {
             for (int layer = static_cast<int>(resources.program_.layers.size()) - 1;
                  layer >= 0; --layer) {
@@ -216,7 +216,7 @@ void configure_cuda_expert_resources(CudaCompiledModel& model) {
                 resources.program_.layers.at(
                     static_cast<size_t>(full_attention_layer)).mixer).semantics;
             inputs.extra_kv_reservation_bytes = static_cast<size_t>(
-                resources.dims_.mtp_num_hidden_layers) * 2ull *
+                resources.dims().mtp_num_hidden_layers) * 2ull *
                 static_cast<size_t>(attention.key_value_width()) *
                 sizeof(__nv_bfloat16) * static_cast<size_t>(model.max_context_);
         }
