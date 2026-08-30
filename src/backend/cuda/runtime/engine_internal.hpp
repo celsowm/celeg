@@ -2,6 +2,7 @@
 
 #include "backend/cuda/concurrency.hpp"
 #include "backend/cuda/model.hpp"
+#include "backend/cuda/weight_cache.hpp"
 #include "celeg/model/resolved.hpp"
 #include "celeg/model/program.hpp"
 #include "packed/executor.hpp"
@@ -60,6 +61,7 @@ private:
     CudaModelOptions model_options_;
     ConcurrentEngineOptions engine_options_;
     std::shared_ptr<const RuntimeContext> runtime_;
+    std::shared_ptr<CudaWeightCache> weight_cache_;
     RuntimeTopology topology_;
     ExecutionTopology& shape_;
     CompiledModelProgram program_;
