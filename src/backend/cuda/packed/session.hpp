@@ -6,9 +6,9 @@
 #include "celeg/model/resolved.hpp"
 #include "celeg/model/session.hpp"
 #include "weight_layout.hpp"
-#include "detail/layer_state.hpp"
-#include "detail/linear_weights.hpp"
-#include "detail/shared_weights.hpp"
+#include "model/detail/layer_state.hpp"
+#include "model/detail/linear_weights.hpp"
+#include "model/detail/shared_weights.hpp"
 
 #include <cstddef>
 #include <cstdint>
