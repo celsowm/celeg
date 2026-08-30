@@ -45,7 +45,7 @@ void CudaCompiledModel::load_checkpoint_weights(
     CudaWeightSetup::load(*this, model_path, bootstrap,
         [this](const IWeightRepository& repo) {
     configure_cuda_expert_resources(*this);
-    const int mtp_layer_count = resources_.options_.enable_mtp
+    const int mtp_layer_count = resources_.options().enable_mtp
         ? resources_.dims_.mtp_num_hidden_layers : 0;
     const int resource_layer_count = resources_.shape_.num_hidden_layers +
         mtp_layer_count;
@@ -182,7 +182,7 @@ void CudaCompiledModel::load_checkpoint_weights(
                             "disable expert offload to keep packed Q4/Q6 weights resident");
                     }
                 }
-                if (resources_.options_.expert_offload.backing == ExpertBackingMode::DiskCached) {
+                if (resources_.options().expert_offload.backing == ExpertBackingMode::DiskCached) {
                     std::vector<ExpertLocation> catalog =
                         resources_.weight_loader_->build_expert_catalog(
                             repo, expert_names, E, inter,
@@ -197,7 +197,7 @@ void CudaCompiledModel::load_checkpoint_weights(
                     auto cache = std::make_unique<ExpertLayerCache>(
                         E, workspace_.expert_offload_plan_.experts_per_layer,
                         gate_up_bytes, down_bytes);
-                    cache->set_policy(resources_.options_.expert_offload.policy);
+                    cache->set_policy(resources_.options().expert_offload.policy);
                     std::vector<const __nv_bfloat16*> empty_host_dev(static_cast<size_t>(E), nullptr);
                     cache->set_host_sources(empty_host_dev, empty_host_dev);
 
@@ -236,11 +236,11 @@ void CudaCompiledModel::load_checkpoint_weights(
                             repo, expert_names, E, inter,
                             resources_.program_.hidden,
                             workspace_.host_expert_store_,
-                            resources_.options_.expert_offload.host_mode);
+                            resources_.options().expert_offload.host_mode);
                     auto cache = std::make_unique<ExpertLayerCache>(
                         E, workspace_.expert_offload_plan_.experts_per_layer,
                         host_layer.gate_up_bytes, host_layer.down_bytes);
-                    cache->set_policy(resources_.options_.expert_offload.policy);
+                    cache->set_policy(resources_.options().expert_offload.policy);
                     cache->set_host_sources(host_layer.gate_up_host_dev,
                                             host_layer.down_host_dev);
 
@@ -323,7 +323,7 @@ void CudaCompiledModel::load_checkpoint_weights(
                     attention_layer.alibi_slopes.bytes(), cudaMemcpyHostToDevice));
             }
             if (layout.uses_latent_state()) {
-                if (resources_.options_.kv_cache_mode == KvCacheMode::Int8) {
+                if (resources_.options().kv_cache_mode == KvCacheMode::Int8) {
                     throw std::invalid_argument(
                         "CUDA latent attention currently requires BF16 state storage");
                 }
@@ -406,7 +406,7 @@ void CudaCompiledModel::load_checkpoint_weights(
                         {resources_.program_.hidden, layout.latent_query_content_width()});
                 }
                 attention_layer.state = LatentAttentionRuntimeState{};
-                if (resources_.options_.allocate_local_kv_cache && owns_latent_state) {
+                if (resources_.options().allocate_local_kv_cache && owns_latent_state) {
                     auto& latent_state = std::get<LatentAttentionRuntimeState>(attention_layer.state);
                     latent_state.latent_key_cache.reset(
                         static_cast<size_t>(max_context_) * latent.latent_rank);
@@ -472,15 +472,15 @@ void CudaCompiledModel::load_checkpoint_weights(
                 }
             }
 
-            if (resources_.options_.kv_cache_mode == KvCacheMode::Int8) {
+            if (resources_.options().kv_cache_mode == KvCacheMode::Int8) {
                 attention_layer.state = OrdinaryInt8KvState{};
             } else {
                 attention_layer.state = OrdinaryBf16KvState{};
             }
-            if (resources_.options_.allocate_local_kv_cache && attention_layer.key) {
+            if (resources_.options().allocate_local_kv_cache && attention_layer.key) {
                 const size_t cache_elements = static_cast<size_t>(max_context_) *
                     static_cast<size_t>(layout.key_value_width());
-                if (resources_.options_.kv_cache_mode == KvCacheMode::Int8) {
+                if (resources_.options().kv_cache_mode == KvCacheMode::Int8) {
                     auto& ordinary_state = std::get<OrdinaryInt8KvState>(attention_layer.state);
                     ordinary_state.key_cache.reset(cache_elements);
                     ordinary_state.value_cache.reset(cache_elements);
