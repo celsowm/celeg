@@ -28,7 +28,7 @@ void CudaCompiledModel::enqueue_decode_standard_attention(
             const AttentionSpec& layout = attention->layout;
             const float qk_norm_epsilon = layout.query_norm
                 ? layout.query_norm->epsilon : resources_.program_.final_norm.epsilon;
-            const bool fuse_mixer_residual = resources_.options_.fused_residuals &&
+            const bool fuse_mixer_residual = resources_.options().fused_residuals &&
                 !semantics.mixer_norm.after.has_value() &&
                 !std::holds_alternative<std::monostate>(semantics.feed_forward);
             AttentionLayer* owner = attention;
@@ -90,13 +90,13 @@ void CudaCompiledModel::enqueue_decode_standard_attention(
             decode_phase_profile().end(DecodePhase::RopeKv, stream_.get());
             decode_phase_profile().begin(stream_.get());
             AttentionRequest attention_request;
-            attention_request.kv_format = resources_.options_.kv_cache_mode;
+            attention_request.kv_format = resources_.options().kv_cache_mode;
             attention_request.operation = AttentionOperation::Decode;
             attention_request.layout = AttentionKvLayout::Contiguous;
             attention_request.position_source = AttentionPositionSource::DeviceCounter;
             attention_request.bias = attention->alibi_slopes.data()
                 ? AttentionPositionBias::Alibi : AttentionPositionBias::None;
-            attention_request.fast_attention = resources_.options_.fast_attention;
+            attention_request.fast_attention = resources_.options().fast_attention;
             attention_request.segmented_attention = session_.active_segmented_attention_;
             attention_request.head_dim = owner_layout.head_dim;
             const AttentionCapability attention_plan =
