@@ -92,7 +92,7 @@ void run_layer(
     const bool mixer_only =
         std::holds_alternative<std::monostate>(semantics.feed_forward);
 
-    if (!model.resources_.options_.fused_residuals || mixer_after || mixer_only) {
+    if (!model.resources_.options().fused_residuals || mixer_after || mixer_only) {
         CELEG_CUDA(cudaMemcpyAsync(
             workspace.prefill_residual_.data(),
             workspace.prefill_hidden_.data(),
@@ -124,7 +124,7 @@ void run_layer(
             semantics.mixer_norm.after->epsilon, model.stream_.get());
     }
 
-    if (!model.resources_.options_.fused_residuals || mixer_after || mixer_only) {
+    if (!model.resources_.options().fused_residuals || mixer_after || mixer_only) {
         prof.begin(model.stream_.get());
         launch_residual_add(
             workspace.prefill_hidden_.data(), workspace.prefill_residual_.data(),
