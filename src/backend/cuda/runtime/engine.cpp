@@ -34,6 +34,7 @@ CudaSchedulerDriver::CudaSchedulerDriver(std::string model_path,
       model_options_(model_options),
       engine_options_(engine_options),
       runtime_(runtime ? std::move(runtime) : create_builtin_runtime_context()),
+      weight_cache_(std::make_shared<CudaWeightCache>()),
       shape_(topology_.exec) {
     if (max_context_ <= 0) throw std::invalid_argument("max_context must be positive");
     if (engine_options_.max_active_requests <= 0)
