@@ -17,13 +17,13 @@ AttentionCapability CudaCompiledModel::token_attention_plan(
     AttentionLayer& attention, const AttentionSpec& owner_layout,
     const TokenKvPolicy& kv) {
     AttentionRequest request;
-    request.kv_format = resources_.options_.kv_cache_mode;
+    request.kv_format = resources_.options().kv_cache_mode;
     request.operation = AttentionOperation::Decode;
     request.layout = kv.kv_layout;
     request.position_source = kv.position_source;
     request.bias = attention.alibi_slopes.data()
         ? AttentionPositionBias::Alibi : AttentionPositionBias::None;
-    request.fast_attention = resources_.options_.fast_attention;
+    request.fast_attention = resources_.options().fast_attention;
     request.segmented_attention =
         kv.paged() && use_segmented_attention(session_.position_);
     request.head_dim = owner_layout.head_dim;
@@ -130,17 +130,17 @@ void CudaCompiledModel::store_and_attend_token_paged(
         .layer_vector_offset = paged_kv.layer_vector_offset(slot)};
     const auto segmentation = [&] {
         const int chunks = (session_.position_ + 1 +
-            resources_.options_.attention_chunk_tokens - 1) /
-            resources_.options_.attention_chunk_tokens;
+            resources_.options().attention_chunk_tokens - 1) /
+            resources_.options().attention_chunk_tokens;
         return AttentionSegmentation{
-            .chunk_tokens = resources_.options_.attention_chunk_tokens,
+            .chunk_tokens = resources_.options().attention_chunk_tokens,
             .chunks = chunks,
             .partial_max = workspace_.attention_partial_max_.data(),
             .partial_denom = workspace_.attention_partial_denom_.data(),
             .partial_accum = workspace_.attention_partial_accum_.data()};
     };
 
-    if (resources_.options_.kv_cache_mode == KvCacheMode::Int8) {
+    if (resources_.options().kv_cache_mode == KvCacheMode::Int8) {
         const PagedKvScaleIndex scale_index{
             .page_scale_elements = paged_kv.page_scale_elements(),
             .layer_scale_offset = paged_kv.layer_scale_offset(slot)};
@@ -246,7 +246,7 @@ void CudaCompiledModel::run_token_latent_attention_paged(
     const CompiledLayerProgram& semantics, int layer_index, const TokenKvPolicy& kv) {
     const AttentionSpec& layout = attention.layout;
     PhysicalPagedKvCache& paged_kv = *kv.paged_kv;
-    if (resources_.options_.kv_cache_mode == KvCacheMode::Int8) {
+    if (resources_.options().kv_cache_mode == KvCacheMode::Int8) {
         throw std::invalid_argument(
             "CUDA latent attention requires BF16 paged state storage");
     }
@@ -331,7 +331,7 @@ void CudaCompiledModel::run_token_latent_attention_paged(
                      .score_scale = layout.query_scale,
                      .sliding_window = layout.sliding_window_size()},
         .stream = stream_.get()});
-    const bool fuse_residual = resources_.options_.fused_residuals &&
+    const bool fuse_residual = resources_.options().fused_residuals &&
         !semantics.mixer_norm.after.has_value() &&
         !std::holds_alternative<std::monostate>(semantics.feed_forward);
     linear(workspace_.op_output_.data(), *attention.out,
@@ -389,10 +389,6 @@ void CudaCompiledModel::run_token_attention(
     }
 
     if (gate_packed) {
-        // q currently holds `query_heads` chunks of `2 * head_dim`
-        // (query, gate interleaved per head -- see
-        // extract_attention_output_gate_kernel); de-interleave into
-        // dedicated buffers before qk-norm/RoPE/attention touch q.
         launch_extract_attention_output_gate(
             q, workspace_.q_.data(), workspace_.attention_gate_.data(),
             1, layout.query_width(), layout.head_dim, stream_.get());
@@ -456,7 +452,7 @@ void CudaCompiledModel::run_token_attention(
         launch_sigmoid_multiply(workspace_.op_output_.data(), gate,
                                 layout.query_width(), stream_.get());
     }
-    const bool fuse_residual = resources_.options_.fused_residuals &&
+    const bool fuse_residual = resources_.options().fused_residuals &&
         !semantics.mixer_norm.after.has_value() &&
         !std::holds_alternative<std::monostate>(semantics.feed_forward);
     linear(workspace_.op_output_.data(), *attention.out, workspace_.hidden_.data(),
