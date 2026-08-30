@@ -34,8 +34,7 @@ CudaSchedulerDriver::CudaSchedulerDriver(std::string model_path,
       model_options_(model_options),
       engine_options_(engine_options),
       runtime_(runtime ? std::move(runtime) : create_builtin_runtime_context()),
-      weight_cache_(std::make_shared<CudaWeightCache>()),
-      shape_(topology_.exec) {
+      weight_cache_(std::make_shared<CudaWeightCache>()) {
     if (max_context_ <= 0) throw std::invalid_argument("max_context must be positive");
     if (engine_options_.max_active_requests <= 0)
         throw std::invalid_argument("max_active_requests must be positive");
@@ -70,7 +69,7 @@ CudaSchedulerDriver::CudaSchedulerDriver(std::string model_path,
     if (engine_options_.packed_decode) {
         paged_kv_ = std::make_unique<PhysicalPagedKvCache>(
             total_pages, engine_options_.page_tokens, max_context_,
-            model_options_.kv_cache_mode, shape_, program_);
+            model_options_.kv_cache_mode, topology_.exec, program_);
     }
     if (paged_kv_) {
         prefix_cache_ = std::make_unique<PrefixCacheManager>(
@@ -92,7 +91,7 @@ CudaSchedulerDriver::CudaSchedulerDriver(std::string model_path,
         packed_executor_ = std::make_unique<PackedDecodeExecutor>(
             static_cast<size_t>(engine_options_.max_active_requests),
             static_cast<size_t>(engine_options_.max_batched_tokens),
-            paged_kv_.get(), shape_, program_, topology_.dims.vocab_size,
+            paged_kv_.get(), topology_.exec, program_, topology_.dims.vocab_size,
             CudaExecutionPlan::compile(
                 packed_options, max_context_, discover_cuda_device_capabilities()));
     }
