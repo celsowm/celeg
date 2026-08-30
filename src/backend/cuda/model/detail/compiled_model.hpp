@@ -143,7 +143,7 @@ struct CudaCompiledModel {
     int max_context() const { return max_context_; }
     bool active_segmented_attention() const { return session_.active_segmented_attention_; }
     void set_active_segmented_attention(bool value) { session_.active_segmented_attention_ = value; }
-    const CudaModelOptions& options() const { return resources_.options_; }
+    const CudaModelOptions& options() const { return resources_.options(); }
     const GenerationConfig& generation() const { return session_.generation_; }
     const ExecutionTopology& shape() const { return resources_.shape_; }
     const std::shared_ptr<SharedModelWeights>& weights() const { return resources_.weights_; }
