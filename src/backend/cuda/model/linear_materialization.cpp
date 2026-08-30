@@ -48,18 +48,7 @@ std::optional<LinearSource> classify_linear_source(
 MaterializationPlan plan_linear_materialization(
     const LinearSource& source, WeightMode mode, std::string_view name,
     int rows, int cols) {
-    MaterializationPlan plan;
-    plan.source = source;
-    plan.mode = mode;
-    plan.name = name;
-    plan.rows = rows;
-    plan.cols = cols;
-    if (const auto* gguf = std::get_if<GgufSource>(&source)) {
-        const GgmlType type = ggml_type_from_block_encoding(gguf->tensor.block_encoding);
-        plan.native_gguf = mode == WeightMode::NativeGguf;
-        plan.host_dequantization = !cuda_gguf_native_mmq(type);
-    }
-    return plan;
+    return MaterializationPlan{source, mode, std::string(name), rows, cols};
 }
 
 DeviceWeight materialize_linear(const MaterializationPlan& plan,
@@ -146,7 +135,8 @@ DeviceWeight materialize_linear(const MaterializationPlan& plan,
             if (tensor.bytes != static_cast<std::size_t>(plan.rows) * row_bytes) {
                 throw std::runtime_error("invalid GGUF linear byte count: " + plan.name);
             }
-            if (plan.native_gguf && !plan.host_dequantization) {
+            const bool host_dequantization = !cuda_gguf_native_mmq(type);
+            if (plan.mode == WeightMode::NativeGguf && !host_dequantization) {
                 DeviceBuffer<std::uint8_t> raw(tensor.bytes, memory_kind);
                 CELEG_CUDA(cudaMemcpy(raw.data(), tensor.data, tensor.bytes,
                                       cudaMemcpyHostToDevice));
@@ -156,7 +146,7 @@ DeviceWeight materialize_linear(const MaterializationPlan& plan,
                 weight.linear.storage = GgufLinearStorage{{segment}};
                 return;
             }
-            if (plan.host_dequantization) {
+            if (host_dequantization) {
                 std::vector<__nv_bfloat16> host;
                 dequantize_gguf_to_bf16(tensor, host);
                 weight.bf16_storage.reset(host.size());
