@@ -17,6 +17,8 @@ foreach(test_name IN ITEMS
     add_test(NAME ${test_name} COMMAND ${test_name})
 endforeach()
 
+target_include_directories(layer_inference_rule_test PRIVATE src/model)
+
 add_executable(latent_prefill_path_test tests/model/latent_prefill_path_test.cpp)
 target_include_directories(latent_prefill_path_test PRIVATE
     include src tests src/backend/cuda/model/prefill_batched/attention)
