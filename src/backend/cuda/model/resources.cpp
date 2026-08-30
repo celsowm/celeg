@@ -37,7 +37,7 @@ void CudaCompiledModel::allocate_celeg_resources() {
     workspace_.activated_.reset(plan.ffn_intermediate);
     workspace_.mlp_output_.reset(static_cast<size_t>(resources_.program_.hidden));
     workspace_.logits_.reset(static_cast<size_t>(resources_.dims_.vocab_size));
-    if (resources_.options_.enable_mtp && resources_.dims_.mtp_num_hidden_layers > 0) {
+    if (resources_.options().enable_mtp && resources_.dims_.mtp_num_hidden_layers > 0) {
         workspace_.mtp_embedding_.reset(static_cast<size_t>(resources_.program_.hidden));
         workspace_.mtp_hidden_norm_.reset(static_cast<size_t>(resources_.program_.hidden));
         workspace_.mtp_fused_.reset(static_cast<size_t>(2 * resources_.program_.hidden));
@@ -77,7 +77,7 @@ void CudaCompiledModel::allocate_celeg_resources() {
         workspace_.moe_shared_gate_.reset(1);
         workspace_.moe_gu_scratch_.reset(static_cast<size_t>(K) * 2 * inter);
         workspace_.moe_act_scratch_.reset(static_cast<size_t>(K) * inter);
-        const int mtp_layers = resources_.options_.enable_mtp
+        const int mtp_layers = resources_.options().enable_mtp
             ? resources_.dims_.mtp_num_hidden_layers : 0;
         workspace_.moe_router_float_.resize(static_cast<size_t>(
             resources_.shape_.num_hidden_layers + mtp_layers));
@@ -95,10 +95,10 @@ void CudaCompiledModel::allocate_celeg_resources() {
         workspace_.attention_partial_denom_.reset(partials);
         workspace_.attention_partial_accum_.reset(partials * plan.attention_head_dim);
     }
-    if (resources_.options_.gemm_backend == GemmBackend::CublasLt &&
-        resources_.options_.lt_workspace_bytes > 0) {
+    if (resources_.options().gemm_backend == GemmBackend::CublasLt &&
+        resources_.options().lt_workspace_bytes > 0) {
     }
-    gemm_ = std::make_unique<GemmDispatcher>(stream_.get(), resources_.options_);
+    gemm_ = std::make_unique<GemmDispatcher>(stream_.get(), resources_.options());
 }
 
 }
