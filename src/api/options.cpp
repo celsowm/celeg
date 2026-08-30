@@ -62,27 +62,34 @@ void celeg_request_options_init(celeg_request_options* options) {
 }
 
 const char* celeg_backend_capabilities(const char* backend_id) {
-    if (backend_id && std::strcmp(backend_id, "cpu") == 0) {
+    if (!backend_id || !*backend_id) return "backend id is required";
+
+    if (std::strcmp(backend_id, "cpu") == 0) {
         celeg::api::global_error = celeg::detect_cpu_capabilities().summary();
         return celeg::api::global_error.c_str();
     }
+
+    if (std::strcmp(backend_id, "cuda") == 0) {
+#ifdef CELEG_API_WITH_CUDA
+        celeg::api::global_error =
+            "CUDA backend available for celeg_engine_*; celeg_model_* remains CPU-only";
+        return celeg::api::global_error.c_str();
+#else
+        return "CUDA backend unavailable in this build";
+#endif
+    }
+
+    if (std::strcmp(backend_id, "metal") == 0) {
 #ifdef CELEG_API_WITH_METAL
-    if (backend_id && std::strcmp(backend_id, "metal") == 0) {
         celeg::api::global_error =
             "Metal backend available for celeg_engine_*; celeg_model_* remains CPU-only";
         return celeg::api::global_error.c_str();
-    }
-#endif
-#ifdef CELEG_API_WITH_CUDA
-    celeg::api::global_error =
-        "CUDA backend available for celeg_engine_*; celeg_model_* remains CPU-only";
-    return celeg::api::global_error.c_str();
 #else
-    if (backend_id && std::strcmp(backend_id, "metal") == 0) {
         return "Metal backend unavailable in this build";
-    }
-    return "CUDA backend unavailable in this build";
 #endif
+    }
+
+    return "unknown backend";
 }
 
 }
