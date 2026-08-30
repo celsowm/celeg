@@ -133,12 +133,10 @@ bool CudaSchedulerDriver::admit_requests_locked() {
         std::vector<uint32_t> pages;
         if (prefix_hit) {
             pages = std::move(prefix.pages);
-        } else {
-            if (prefix_cache_) {
-                auto allocated = prefix_cache_->allocate_request_pages(reserved_tokens);
-                if (!allocated) break;
-                pages = std::move(*allocated);
-            }
+        } else if (prefix_cache_) {
+            auto allocated = prefix_cache_->allocate_request_pages(reserved_tokens);
+            if (!allocated) break;
+            pages = std::move(*allocated);
         }
 
         try {
@@ -148,7 +146,7 @@ bool CudaSchedulerDriver::admit_requests_locked() {
                     !engine_options_.packed_decode || forced_lane;
                 lane->model = std::make_unique<CudaModel>(
                     model_path_, max_context_, lane_options,
-                    request.options.generation, runtime_);
+                    request.options.generation, runtime_, 0, weight_cache_);
             } else {
                 lane->model->session().set_generation_config(request.options.generation);
             }
@@ -193,7 +191,7 @@ bool CudaSchedulerDriver::admit_requests_locked() {
     for (const auto& lane : lanes_) {
         if (lane->request_id != 0) ++metrics_.active_requests;
     }
-        metrics_.logical_pages_used = paged_kv_ ? paged_kv_->used_pages() : 0;
+    metrics_.logical_pages_used = paged_kv_ ? paged_kv_->used_pages() : 0;
     return did_work;
 }
 
@@ -216,7 +214,6 @@ void CudaSchedulerDriver::finish_request_locked(Request& request,
     if (status_value == RequestStatus::Failed) ++metrics_.failed;
     metrics_.logical_pages_used = paged_kv_ ? paged_kv_->used_pages() : 0;
 }
-
 
 void CudaSchedulerDriver::complete_prefill_locked(Request& request, Lane& lane) {
     request.paged_ready = engine_options_.packed_decode && packed_executor_ != nullptr;
