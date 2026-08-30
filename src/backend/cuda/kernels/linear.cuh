@@ -370,12 +370,13 @@ void launch_nvfp4_w4a4_fallback(
     float act_global_scale, const uint8_t* weight_packed,
     const __nv_fp8_e4m3* weight_scales, float weight_global_scale,
     __nv_bfloat16* y, int m, int n, int k, float beta, cudaStream_t stream) {
+    constexpr int kNvfp4FallbackBlockSize = 16;
     constexpr int threads = 128;
     const dim3 grid(static_cast<unsigned>((n + threads - 1) / threads),
                     static_cast<unsigned>(m));
     nvfp4_w4a4_fallback_kernel<<<grid, threads, 0, stream>>>(
         act_packed, act_scales, act_global_scale, weight_packed, weight_scales,
-        weight_global_scale, y, m, n, k, kNvfp4BlockSize, beta);
+        weight_global_scale, y, m, n, k, kNvfp4FallbackBlockSize, beta);
     CELEG_KERNEL_DEBUG_SYNC(stream);
 }
 

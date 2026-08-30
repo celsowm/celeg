@@ -82,6 +82,12 @@ void launch_dequant_nvfp4(const uint8_t* packed, const __nv_fp8_e4m3* block_scal
                          float global_scale, __nv_bfloat16* out,
                          int rows, int cols, int block_size, cudaStream_t stream);
 
+void launch_nvfp4_w4a4_fallback(
+    const uint8_t* act_packed, const __nv_fp8_e4m3* act_scales,
+    float act_global_scale, const uint8_t* weight_packed,
+    const __nv_fp8_e4m3* weight_scales, float weight_global_scale,
+    __nv_bfloat16* y, int m, int n, int k, float beta, cudaStream_t stream);
+
 // Quantizes bf16 to packed NVFP4 (e2m1) with per-16-block UE4M3 scales
 // (row-major), given a per-tensor fp32 global scale.
 void launch_quantize_e2m1_per_block(const __nv_bfloat16* x, uint8_t* packed,
