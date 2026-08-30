@@ -55,6 +55,11 @@ struct CudaModelResources {
         : plan_(std::move(execution_plan)), options_(plan_.options()),
           shape_(topology_.exec), dims_(topology_.dims) {}
 
+    CudaModelResources(const CudaModelResources&) = delete;
+    CudaModelResources& operator=(const CudaModelResources&) = delete;
+    CudaModelResources(CudaModelResources&&) = delete;
+    CudaModelResources& operator=(CudaModelResources&&) = delete;
+
     CudaExecutionPlan plan_;
     const CudaModelOptions& options_;
     ResolvedModel model_;
