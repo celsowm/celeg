@@ -2,19 +2,15 @@
 #include "backend/cuda/moe/expert_source.hpp"
 
 #include <filesystem>
-#include <mutex>
 #include <sstream>
 #include <stdexcept>
-#include <unordered_map>
 #include <utility>
 
 namespace celeg {
 
-std::shared_ptr<SharedModelWeights> WeightLoader::acquire(
+std::shared_ptr<SharedModelWeights> CudaWeightCache::acquire(
     const std::string& model_path, WeightMode weight_mode,
     const std::string& residency_fingerprint, bool managed_weights) {
-    static std::mutex cache_mutex;
-    static std::unordered_map<std::string, std::weak_ptr<SharedModelWeights>> cache;
     int device_id = 0;
     CELEG_CUDA(cudaGetDevice(&device_id));
     std::ostringstream key_builder;
@@ -22,9 +18,9 @@ std::shared_ptr<SharedModelWeights> WeightLoader::acquire(
                 << (managed_weights ? "managed" : "device") << ':'
                 << std::filesystem::weakly_canonical(model_path).string();
     const std::string key = key_builder.str();
-    std::lock_guard<std::mutex> lock(cache_mutex);
+    std::lock_guard<std::mutex> lock(mutex_);
     std::shared_ptr<SharedModelWeights> weights;
-    if (const auto found = cache.find(key); found != cache.end())
+    if (const auto found = entries_.find(key); found != entries_.end())
         weights = found->second.lock();
     if (weights && weights->residency_fingerprint != residency_fingerprint)
         throw std::invalid_argument("incompatible CUDA MoE residency options for shared checkpoint weights");
@@ -34,9 +30,14 @@ std::shared_ptr<SharedModelWeights> WeightLoader::acquire(
         weights->residency_coordinator =
             std::make_shared<CudaExpertResidencyCoordinator>(*weights);
         weights->expert_source = std::make_shared<CudaExpertSource>(*weights);
-        cache[key] = weights;
+        entries_[key] = weights;
     }
     return weights;
+}
+
+CudaWeightCache& default_cuda_weight_cache() {
+    static CudaWeightCache cache;
+    return cache;
 }
 
 WeightLoader::WeightLoader(std::shared_ptr<SharedModelWeights> weights,
@@ -57,4 +58,3 @@ WeightLoader::WeightLoader(std::shared_ptr<SharedModelWeights> weights,
 }
 
 }
-
