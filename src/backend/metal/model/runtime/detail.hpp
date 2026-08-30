@@ -192,18 +192,18 @@ struct MetalModel::Impl {
     uint64_t command_dispatches = 0;
 
 
-    id<MTLBuffer> buffer(const std::vector<float>& values) const;
+    id<MTLBuffer> buffer(const std::vector<float>& values);
     id<MTLBuffer> immutable_buffer(const void* data, size_t bytes) const;
-    id<MTLBuffer> zero_buffer(size_t bytes) const;
-    id<MTLBuffer> raw_buffer(const std::byte* data, size_t bytes) const;
+    id<MTLBuffer> zero_buffer(size_t bytes);
+    id<MTLBuffer> raw_buffer(const std::byte* data, size_t bytes);
 
     std::vector<float> load_vector_values(TensorRole role, int layer, int width,
                                           bool allow_missing = false) const;
     id<MTLBuffer> load_vector(TensorRole role, int layer, int width,
-                              bool allow_missing = false) const;
-    Linear load_linear(TensorRole role, int layer, int rows, int cols) const;
-    Linear load_linear_source(const std::string& name, int rows, int cols) const;
-    id<MTLBuffer> load_conv_kernel(int layer, int width, int cache_length) const;
+                              bool allow_missing = false);
+    Linear load_linear(TensorRole role, int layer, int rows, int cols);
+    Linear load_linear_source(const std::string& name, int rows, int cols);
+    id<MTLBuffer> load_conv_kernel(int layer, int width, int cache_length);
 
     id<MTLComputePipelineState> pipeline(std::string_view name);
     id<MTLComputePipelineState> tensor_pipeline(std::string_view name);
