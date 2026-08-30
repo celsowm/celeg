@@ -122,8 +122,8 @@ void store_and_attend(
         break;
     case AttentionAlgorithm::Segmented: {
         const int chunks =
-            (rows + CudaCompiledModel::kPrefillAttnChunkTokens - 1) /
-            CudaCompiledModel::kPrefillAttnChunkTokens;
+            (rows + kAttentionPrefillChunkTokens - 1) /
+            kAttentionPrefillChunkTokens;
         launch_gqa_prefill_segmented({
             .query = model.workspace_.prefill_q_.data(),
             .kv = bf16_kv,
@@ -131,7 +131,7 @@ void store_and_attend(
             .geometry = geometry,
             .extent = extent,
             .segmentation = {
-                .chunk_tokens = CudaCompiledModel::kPrefillAttnChunkTokens,
+                .chunk_tokens = kAttentionPrefillChunkTokens,
                 .chunks = chunks,
                 .partial_max = model.workspace_.prefill_attn_partial_max_.data(),
                 .partial_denom = model.workspace_.prefill_attn_partial_denom_.data(),
