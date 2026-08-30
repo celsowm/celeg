@@ -33,6 +33,20 @@ enum class WeightMode {
     NativeGguf,
 };
 
+inline constexpr bool is_rowwise_quantized_weight_mode(WeightMode mode) {
+    return mode == WeightMode::Int8 || mode == WeightMode::Int4;
+}
+
+inline constexpr std::string_view weight_mode_name(WeightMode mode) {
+    switch (mode) {
+    case WeightMode::Bf16: return "bf16";
+    case WeightMode::Int8: return "int8";
+    case WeightMode::Int4: return "int4";
+    case WeightMode::NativeGguf: return "native-gguf";
+    }
+    return "unknown";
+}
+
 enum class KvCacheMode {
     Bf16,
     Int8,
