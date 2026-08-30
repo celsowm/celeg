@@ -11,10 +11,12 @@ CudaCompiledModel::CudaCompiledModel(const std::string& model_path,
                    int max_context,
                    CudaModelOptions options,
                    GenerationConfig generation,
+                   CudaWeightCache& weight_cache,
                    std::shared_ptr<const RuntimeContext> runtime,
                    int tokenizer_vocab_size)
     : resources_(CudaExecutionPlan::compile(
           options, max_context, discover_cuda_device_capabilities())),
+      weight_cache_(weight_cache),
       runtime_(runtime ? std::move(runtime) : create_builtin_runtime_context()),
       session_(generation),
       stream_(),
