@@ -179,7 +179,7 @@ CudaModelOptions cuda_options(const celeg_cuda_model_options& input) {
     if (input.flags != 0) {
         throw std::invalid_argument("CUDA model option flags are reserved and must be zero");
     }
-    CudaModelOptions result = cuda_model_options_from_environment();
+    CudaModelOptions result;
     result.weight_mode = cuda_weight_mode(input.weight_mode);
     result.kv_cache_mode = cuda_kv_cache_mode(input.kv_cache_mode);
     result.gemm_backend = cuda_gemm_backend(input.gemm_backend);
