@@ -215,7 +215,6 @@ kernel void celeg_matmul_q6k(device const uchar* weights [[buffer(0)]],
         const uint block_index = col / 256;
         const device uchar* block = row_data + static_cast<size_t>(block_index) * 210;
         const uint within = col & 255;
-        const uint sub = within >> 6;
         const uint q = static_cast<uint>(celeg_q6k_value(block, within));
         const int scale = static_cast<int>(static_cast<char>(block[192 + within / 16]));
         const float d = celeg_half_to_float(static_cast<ushort>(block[208]) |
