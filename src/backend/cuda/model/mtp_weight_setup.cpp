@@ -55,14 +55,14 @@ MoeExpertTensorNames mtp_expert_names(const std::string& experts_prefix,
 
 void load_mtp_weights(CudaCompiledModel& model, const IWeightRepository& repo) {
     CudaModelResources& resources = model.resources_;
-    if (!resources.options_.enable_mtp) return;
+    if (!resources.options().enable_mtp) return;
     if (resources.dims_.mtp_num_hidden_layers <= 0) {
         throw std::invalid_argument("MTP was requested but the checkpoint has no MTP layers");
     }
     if (!repo.contains("mtp.fc.weight")) {
         throw std::runtime_error("MTP was requested but mtp.fc.weight is missing");
     }
-    if (!resources.options_.allocate_local_kv_cache) {
+    if (!resources.options().allocate_local_kv_cache) {
         throw std::invalid_argument("MTP requires a local KV cache; disable packed/paged execution");
     }
     const int full_layer = last_full_attention_layer(resources.program_);
@@ -165,11 +165,11 @@ void load_mtp_weights(CudaCompiledModel& model, const IWeightRepository& repo) {
                 auto cache = std::make_unique<ExpertLayerCache>(
                     E, model.workspace_.expert_offload_plan_.experts_per_layer,
                     gate_up_bytes, down_bytes);
-                cache->set_policy(resources.options_.expert_offload.policy);
+                cache->set_policy(resources.options().expert_offload.policy);
                 auto controller = std::make_unique<ResidencyController>();
                 controller->cache = std::move(cache);
                 controller->transfer_stream = std::make_unique<CudaStream>();
-                if (resources.options_.expert_offload.backing == ExpertBackingMode::DiskCached) {
+                if (resources.options().expert_offload.backing == ExpertBackingMode::DiskCached) {
                     std::vector<const __nv_bfloat16*> empty(static_cast<size_t>(E), nullptr);
                     controller->cache->set_host_sources(empty, empty);
                     std::vector<ExpertHostLease> seed_leases(static_cast<size_t>(
@@ -199,7 +199,7 @@ void load_mtp_weights(CudaCompiledModel& model, const IWeightRepository& repo) {
                             repo, expert_names, E, inter,
                             resources.program_.hidden,
                             model.workspace_.host_expert_store_,
-                            resources.options_.expert_offload.host_mode);
+                            resources.options().expert_offload.host_mode);
                     controller->cache->set_host_sources(host_layer.gate_up_host_dev,
                                                         host_layer.down_host_dev);
                     std::vector<int> seed(static_cast<size_t>(
@@ -269,7 +269,7 @@ void load_mtp_weights(CudaCompiledModel& model, const IWeightRepository& repo) {
             NormWeightKind::Scale);
         const size_t cache_elements = static_cast<size_t>(model.max_context_) *
             static_cast<size_t>(mtp_layout.key_value_width());
-        if (resources.options_.kv_cache_mode == KvCacheMode::Int8) {
+        if (resources.options().kv_cache_mode == KvCacheMode::Int8) {
             attention.state = OrdinaryInt8KvState{};
             auto& ordinary_state = std::get<OrdinaryInt8KvState>(attention.state);
             ordinary_state.key_cache.reset(cache_elements);
