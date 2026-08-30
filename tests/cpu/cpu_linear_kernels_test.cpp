@@ -4,6 +4,29 @@
 #include <cmath>
 #include <vector>
 
+namespace {
+
+std::vector<float> run_gemv(const celeg::Q4GroupMatrix& weight,
+                            const std::vector<float>& input,
+                            celeg::CpuIsa isa) {
+    celeg::CpuThreadPool pool(4);
+    celeg::CpuLinearEngine engine(isa, pool);
+    std::vector<float> output(weight.rows);
+    engine.gemv(weight, input.data(), output.data());
+    return output;
+}
+
+void check_close(const std::vector<float>& actual,
+                 const std::vector<float>& expected,
+                 float tolerance) {
+    CELEG_TEST_CHECK(actual.size() == expected.size());
+    for (size_t i = 0; i < actual.size(); ++i) {
+        CELEG_TEST_CHECK(std::abs(actual[i] - expected[i]) < tolerance);
+    }
+}
+
+}
+
 int main() {
     constexpr size_t rows = 37;
     constexpr size_t cols = 128;
@@ -18,19 +41,12 @@ int main() {
 
     const auto q4 = celeg::quantize_float_groupwise_q4(
         weights.data(), rows, cols, 32);
-    celeg::CpuThreadPool pool(4);
-    celeg::CpuLinearEngine scalar_engine(celeg::CpuIsa::Scalar, pool);
-    std::vector<float> scalar(rows);
-    scalar_engine.gemv(q4, input.data(), scalar.data());
+    const std::vector<float> scalar = run_gemv(q4, input, celeg::CpuIsa::Scalar);
 
     const celeg::CpuCapabilities caps = celeg::detect_cpu_capabilities();
-    if (caps.avx2 && caps.fma) {
-        celeg::CpuLinearEngine avx2_engine(celeg::CpuIsa::Avx2, pool);
-        std::vector<float> avx2(rows);
-        avx2_engine.gemv(q4, input.data(), avx2.data());
-        for (size_t row = 0; row < rows; ++row) {
-            CELEG_TEST_CHECK(std::abs(avx2[row] - scalar[row]) < 0.08f);
-        }
+    if (caps.avx2 && caps.fma && celeg::cpu_isa_compiled(celeg::CpuIsa::Avx2)) {
+        const auto avx2 = run_gemv(q4, input, celeg::CpuIsa::Avx2);
+        check_close(avx2, scalar, 0.08f);
 
         const auto activation = celeg::quantize_float_groupwise_q8(
             input.data(), cols, 32);
@@ -46,6 +62,13 @@ int main() {
             CELEG_TEST_CHECK(std::abs(value - scalar[row]) < 0.08f);
         }
     }
+    if (caps.avx_vnni && celeg::cpu_isa_compiled(celeg::CpuIsa::AvxVnni)) {
+        check_close(run_gemv(q4, input, celeg::CpuIsa::AvxVnni), scalar, 0.08f);
+    }
+    if (caps.avx512f && caps.avx512_vnni &&
+        celeg::cpu_isa_compiled(celeg::CpuIsa::Avx512Vnni)) {
+        check_close(run_gemv(q4, input, celeg::CpuIsa::Avx512Vnni), scalar, 0.08f);
+    }
 
     constexpr size_t batch = 5;
     std::vector<float> batch_input(batch * cols);
@@ -55,6 +78,8 @@ int main() {
                 (1.0f + 0.05f * static_cast<float>(b));
         }
     }
+
+    celeg::CpuThreadPool pool(6);
     celeg::CpuLinearEngine best_engine(caps.best_isa(), pool);
     std::vector<float> batch_output(batch * rows);
     best_engine.gemm(q4, batch_input.data(), batch_output.data(), batch);
@@ -64,5 +89,11 @@ int main() {
         for (size_t row = 0; row < rows; ++row) {
             CELEG_TEST_CHECK(std::abs(one[row] - batch_output[b * rows + row]) < 1e-5f);
         }
+    }
+
+    std::vector<float> accumulated = batch_output;
+    best_engine.gemm(q4, batch_input.data(), accumulated.data(), batch, 0.5f);
+    for (size_t i = 0; i < accumulated.size(); ++i) {
+        CELEG_TEST_CHECK(std::abs(accumulated[i] - 1.5f * batch_output[i]) < 1e-4f);
     }
 }
