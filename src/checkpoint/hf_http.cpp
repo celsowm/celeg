@@ -411,3 +411,5 @@ void http_download_file(const std::string& path,
 }
 
 #endif
+
+}
