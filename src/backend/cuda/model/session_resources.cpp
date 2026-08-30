@@ -163,13 +163,14 @@ void CudaCompiledModel::allocate_prefill_workspace(int rows) {
         workspace_.prefill_per_layer_gate_.reserve(gate_elements);
     }
 
-    if (rows <= kMaxGemmAttentionRows) {
+    if (rows <= kAttentionMaxGemmRows) {
         const size_t scores_elems =
             static_cast<size_t>(plan.attention_query_heads) * r * r;
         workspace_.prefill_attn_scores_.reserve(scores_elems);
         workspace_.prefill_attn_probs_.reserve(scores_elems);
     } else {
-        const size_t chunks = (r + kPrefillAttnChunkTokens - 1) / kPrefillAttnChunkTokens;
+        const size_t chunks = (r + kAttentionPrefillChunkTokens - 1) /
+            kAttentionPrefillChunkTokens;
         const size_t partials = r * plan.attention_query_heads * chunks;
         workspace_.prefill_attn_partial_max_.reserve(partials);
         workspace_.prefill_attn_partial_denom_.reserve(partials);
