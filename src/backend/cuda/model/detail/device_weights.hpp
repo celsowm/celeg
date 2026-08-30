@@ -14,7 +14,8 @@
 namespace celeg {
 
 struct DeviceWeight {
-    explicit DeviceWeight(CudaMemoryKind memory_kind = CudaMemoryKind::Device)
+    DeviceWeight() : DeviceWeight(cuda_current_memory_kind()) {}
+    explicit DeviceWeight(CudaMemoryKind memory_kind)
         : bf16_storage(memory_kind),
           int8_storage(memory_kind),
           int4_storage(memory_kind),
