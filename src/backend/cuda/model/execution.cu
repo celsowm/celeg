@@ -32,7 +32,7 @@ PhaseProfile& decode_phase_profile() {
 
 void CudaCompiledModel::enqueue_sampling() {
     sampling_.enqueue(
-        workspace_.logits_, resources_.dims_.vocab_size,
+        workspace_.logits_, resources_.dims().vocab_size,
         session_.generation_, stream_.get());
 }
 
@@ -109,16 +109,16 @@ void CudaCompiledModel::enqueue_decode_forward() {
                    workspace_.normed_.data(), 1, resources_.program_.hidden,
                    resources_.program_.final_norm.epsilon, stream_.get());
     linear(workspace_.normed_.data(), *logits_weight(), workspace_.logits_.data(),
-           1, resources_.dims_.vocab_size, resources_.program_.hidden);
-    launch_scale(workspace_.logits_.data(), resources_.dims_.vocab_size,
+           1, resources_.dims().vocab_size, resources_.program_.hidden);
+    launch_scale(workspace_.logits_.data(), resources_.dims().vocab_size,
                  resources_.program_.logits_multiplier /
                      resources_.program_.logits_divisor,
                  stream_.get());
     if (resources_.program_.final_logit_softcap > 0.0f) {
-        launch_tanh_softcap(workspace_.logits_.data(), resources_.dims_.vocab_size,
+        launch_tanh_softcap(workspace_.logits_.data(), resources_.dims().vocab_size,
                             resources_.program_.final_logit_softcap, stream_.get());
     }
-    launch_mask_logits(workspace_.logits_.data(), resources_.dims_.vocab_size,
+    launch_mask_logits(workspace_.logits_.data(), resources_.dims().vocab_size,
                        tokenizer_vocab_size_, stream_.get());
     finalize_mtp_verification();
     decode_phase_profile().end(DecodePhase::Logits, stream_.get());
@@ -137,7 +137,7 @@ void CudaCompiledModel::enqueue_decode_step() {
             sizeof(int32_t), cudaMemcpyDeviceToDevice, stream_.get()));
         launch_mark_seen(sampling_.sampled_device.data(),
                          sampling_.seen_tokens.data(),
-                         resources_.dims_.vocab_size, stream_.get());
+                         resources_.dims().vocab_size, stream_.get());
         ++session_.metrics_.mtp_used_tokens;
     } else {
         enqueue_sampling();
@@ -387,14 +387,14 @@ std::vector<float> CudaCompiledModel::copy_logits() {
     if (session_.phase_ != SessionPhase::Ready) {
         throw std::runtime_error("logits are unavailable before prefill");
     }
-    std::vector<__nv_bfloat16> bf16_logits(resources_.dims_.vocab_size);
+    std::vector<__nv_bfloat16> bf16_logits(resources_.dims().vocab_size);
     CELEG_CUDA(cudaMemcpyAsync(
         bf16_logits.data(), workspace_.logits_.data(), workspace_.logits_.bytes(),
         cudaMemcpyDeviceToHost, stream_.get()));
     CELEG_CUDA(cudaStreamSynchronize(stream_.get()));
 
-    std::vector<float> result(resources_.dims_.vocab_size);
-    for (int i = 0; i < resources_.dims_.vocab_size; ++i) {
+    std::vector<float> result(resources_.dims().vocab_size);
+    for (int i = 0; i < resources_.dims().vocab_size; ++i) {
         result[static_cast<size_t>(i)] =
             __bfloat162float(bf16_logits[static_cast<size_t>(i)]);
     }
