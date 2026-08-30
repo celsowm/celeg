@@ -37,7 +37,7 @@ struct MetalCapabilities {
 struct MetalModelOptions {
     MetalWeightMode weight_mode = MetalWeightMode::Bf16;
     MetalKvCacheMode kv_cache_mode = MetalKvCacheMode::Bf16;
-    int32_t storage_mode = static_cast<int32_t>(MetalStorageMode::Shared);
+    MetalStorageMode storage_mode = MetalStorageMode::Shared;
     int32_t kv_page_tokens = 16;
 };
 
