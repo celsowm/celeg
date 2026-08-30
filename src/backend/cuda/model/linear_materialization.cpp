@@ -54,26 +54,11 @@ MaterializationPlan plan_linear_materialization(
     plan.name = name;
     plan.rows = rows;
     plan.cols = cols;
-    std::visit([&](const auto& value) {
-        using Source = std::decay_t<decltype(value)>;
-        if constexpr (std::is_same_v<Source, PackedInt8Source>) {
-            plan.kernel = LinearKernelKind::W8A16;
-        } else if constexpr (std::is_same_v<Source, PackedInt4Source>) {
-            plan.kernel = LinearKernelKind::W4A16;
-        } else if constexpr (std::is_same_v<Source, PackedFp8Source>) {
-            plan.kernel = LinearKernelKind::Fp8W8A8;
-        } else if constexpr (std::is_same_v<Source, PackedNvfp4Source>) {
-            plan.kernel = LinearKernelKind::Nvfp4W4A4;
-        } else if constexpr (std::is_same_v<Source, GgufSource>) {
-            const GgmlType type = ggml_type_from_block_encoding(value.tensor.block_encoding);
-            plan.native_gguf = mode == WeightMode::NativeGguf;
-            plan.host_dequantization = !cuda_gguf_native_mmq(type);
-        } else {
-            plan.kernel = mode == WeightMode::Int8 ? LinearKernelKind::W8A16
-                : mode == WeightMode::Int4 ? LinearKernelKind::W4A16
-                : LinearKernelKind::Bf16Cublas;
-        }
-    }, source);
+    if (const auto* gguf = std::get_if<GgufSource>(&source)) {
+        const GgmlType type = ggml_type_from_block_encoding(gguf->tensor.block_encoding);
+        plan.native_gguf = mode == WeightMode::NativeGguf;
+        plan.host_dequantization = !cuda_gguf_native_mmq(type);
+    }
     return plan;
 }
 
