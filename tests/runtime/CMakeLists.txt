@@ -14,10 +14,12 @@ add_executable(concurrent_metrics_test tests/runtime/concurrent_metrics_test.cpp
 target_link_libraries(concurrent_metrics_test PRIVATE celeg_runtime)
 add_test(NAME concurrent_metrics_test COMMAND concurrent_metrics_test)
 
-add_executable(execution_plan_test tests/runtime/execution_plan_test.cpp src/backend/cuda/execution_plan.cpp)
-target_include_directories(execution_plan_test PRIVATE include src)
-target_link_libraries(execution_plan_test PRIVATE celeg_runtime)
-add_test(NAME execution_plan_test COMMAND execution_plan_test)
+if(TARGET celeg_cuda_backend)
+    add_executable(execution_plan_test tests/runtime/execution_plan_test.cpp)
+    target_include_directories(execution_plan_test PRIVATE include src tests)
+    target_link_libraries(execution_plan_test PRIVATE celeg_cuda_backend)
+    add_test(NAME execution_plan_test COMMAND execution_plan_test)
+endif()
 
 add_executable(prefix_cache_test tests/runtime/prefix_cache_test.cpp)
 target_include_directories(prefix_cache_test PRIVATE include src)
