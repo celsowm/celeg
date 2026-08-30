@@ -54,7 +54,7 @@ void CudaCompiledModel::enqueue_decode_forward() {
         const bool mixer_after = semantics.mixer_norm.after.has_value();
         const bool mixer_only =
             std::holds_alternative<std::monostate>(semantics.feed_forward);
-        if (!resources_.options_.fused_residuals || mixer_after || mixer_only) {
+        if (!resources_.options().fused_residuals || mixer_after || mixer_only) {
             CELEG_CUDA(cudaMemcpyAsync(
                 workspace_.residual_.data(), workspace_.hidden_.data(),
                 workspace_.hidden_.bytes(), cudaMemcpyDeviceToDevice,
@@ -82,7 +82,7 @@ void CudaCompiledModel::enqueue_decode_forward() {
                            workspace_.hidden_.data(), 1, resources_.program_.hidden,
                            semantics.mixer_norm.after->epsilon, stream_.get());
         }
-        if (!resources_.options_.fused_residuals || mixer_after || mixer_only) {
+        if (!resources_.options().fused_residuals || mixer_after || mixer_only) {
             decode_phase_profile().begin(stream_.get());
             launch_residual_add(workspace_.hidden_.data(), workspace_.residual_.data(),
                                 resources_.program_.hidden, stream_.get());
@@ -159,7 +159,7 @@ CudaGraphExec& CudaCompiledModel::graph_for_attention(bool segmented) {
 }
 
 void CudaCompiledModel::capture_decode_graph(bool segmented) {
-    if (!resources_.options_.cuda_graph) return;
+    if (!resources_.options().cuda_graph) return;
     session_.active_segmented_attention_ = segmented;
     decode_graphs_.capture_if_needed(
         segmented, stream_.get(), [this]() { enqueue_decode_step(); });
@@ -190,7 +190,7 @@ void CudaCompiledModel::decode_async_begin() {
     const bool forcing_prefix = session_.generation_.forced_prefix &&
         session_.generation_.forced_prefix->position <
             session_.generation_.forced_prefix->tokens.size();
-    if (resources_.options_.cuda_graph && !forcing_prefix) {
+    if (resources_.options().cuda_graph && !forcing_prefix) {
         CudaGraphExec& graph = graph_for_attention(segmented);
         if (!graph.ready()) capture_decode_graph(segmented);
         graph.launch(stream_.get());
@@ -258,7 +258,7 @@ DecodeBenchmark CudaCompiledModel::benchmark_decode(int warmup_steps,
     if (session_.position_ + total_steps > max_context_) {
         throw std::runtime_error("decode benchmark exceeds context limit");
     }
-    if (resources_.options_.cuda_graph) {
+    if (resources_.options().cuda_graph) {
         const int final_position = session_.position_ + total_steps - 1;
         const bool starts_segmented = use_segmented_attention(session_.position_);
         const bool ends_segmented = use_segmented_attention(final_position);
@@ -270,7 +270,7 @@ DecodeBenchmark CudaCompiledModel::benchmark_decode(int warmup_steps,
     auto launch_step = [&]() {
         const bool segmented = use_segmented_attention(simulated_position);
         session_.active_segmented_attention_ = segmented;
-        if (resources_.options_.cuda_graph) {
+        if (resources_.options().cuda_graph) {
             CudaGraphExec& graph = graph_for_attention(segmented);
             if (!graph.ready()) capture_decode_graph(segmented);
             graph.launch(stream_.get());
