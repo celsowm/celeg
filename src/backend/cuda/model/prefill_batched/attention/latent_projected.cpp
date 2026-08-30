@@ -119,7 +119,7 @@ void run_projected_latent_attention(
     prof.end(PrefillPhase::Attention, model.stream_.get());
 
     prof.begin(model.stream_.get());
-    const bool fuse_residual = model.resources_.options_.fused_residuals &&
+    const bool fuse_residual = model.resources_.options().fused_residuals &&
         !semantics.mixer_norm.after.has_value() &&
         !std::holds_alternative<std::monostate>(semantics.feed_forward);
     model.linear(
