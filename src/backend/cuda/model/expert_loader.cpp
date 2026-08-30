@@ -45,7 +45,7 @@ const ExpertLinearWeight* WeightLoader::load_expert_linear_weight(
         throw std::runtime_error("invalid expert byte count for " + name);
     }
 
-    DeviceWeight weight;
+    DeviceWeight weight(weights_->memory_kind);
     weight.shape = {experts, rows_per_expert, cols};
     weight.bf16_storage.reset(count);
     CELEG_CUDA(cudaMemcpy(weight.bf16_storage.data(), tensor.data, tensor.bytes,
