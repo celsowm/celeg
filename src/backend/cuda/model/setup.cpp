@@ -53,15 +53,15 @@ CudaCompiledModel::CudaCompiledModel(const std::string& model_path,
     workspace_.io_futures_.reserve(
         static_cast<size_t>(maximum_experts));
     load_checkpoint_weights(model_path, bootstrap);
-    if (resources_.options_.cuda_graph ||
-        resources_.options_.gemm_backend == GemmBackend::CublasLt) {
+    if (resources_.options().cuda_graph ||
+        resources_.options().gemm_backend == GemmBackend::CublasLt) {
         warmup_decode_gemms();
     }
-    if (resources_.options_.fast_attention) {
+    if (resources_.options().fast_attention) {
         warmup_prefill_attention_gemm();
     }
-    local_kv_cache_available_ = resources_.options_.allocate_local_kv_cache;
-    reset(resources_.options_.allocate_local_kv_cache);
+    local_kv_cache_available_ = resources_.options().allocate_local_kv_cache;
+    reset(resources_.options().allocate_local_kv_cache);
 }
 
 }
