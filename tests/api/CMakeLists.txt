@@ -1,0 +1,13 @@
+add_executable(api_header_test tests/api/api_header_test.c)
+target_include_directories(api_header_test PRIVATE include)
+add_test(NAME api_header_test COMMAND api_header_test)
+
+add_executable(api_defaults_test tests/api/api_defaults_test.cpp)
+target_include_directories(api_defaults_test PRIVATE include)
+target_link_libraries(api_defaults_test PRIVATE celeg)
+add_test(NAME api_defaults_test COMMAND api_defaults_test)
+
+add_executable(cpu_c_api_smoke_test tests/api/api_smoke_test.c)
+target_include_directories(cpu_c_api_smoke_test PRIVATE include)
+target_link_libraries(cpu_c_api_smoke_test PRIVATE celeg)
+add_test(NAME cpu_c_api_smoke_test COMMAND cpu_c_api_smoke_test)
