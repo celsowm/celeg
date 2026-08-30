@@ -210,6 +210,7 @@ MetalModel::MetalModel(const std::string& path, int context,
         layer.ffn_norm = (*impl_).load_vector(TensorRole::FfnInputNorm,
                                               static_cast<int>(index), hidden, true);
         if (const auto* convolution = std::get_if<ShortConvolutionSpec>(&program_layer.mixer)) {
+            layer.mixer_kind = Impl::Layer::MixerKind::ShortConvolution;
             layer.convolution = true;
             layer.cache_length = convolution->cache_length;
             layer.mixer_in = (*impl_).load_linear(TensorRole::ShortConvInput,
@@ -223,6 +224,7 @@ MetalModel::MetalModel(const std::string& path, int context,
             layer.value_cache = layer.key_cache;
         } else if (const auto* gated_delta =
                        std::get_if<GatedDeltaNetSpec>(&program_layer.mixer)) {
+            layer.mixer_kind = Impl::Layer::MixerKind::GatedDelta;
             layer.gated_delta = true;
             layer.recurrent_conv_kernel = gated_delta->conv_kernel;
             layer.recurrent_key_head_dim = gated_delta->key_head_dim;
@@ -302,6 +304,7 @@ MetalModel::MetalModel(const std::string& path, int context,
                 static_cast<size_t>(value_width) * gated_delta->key_head_dim * sizeof(float));
         } else if (const auto* mamba =
                        std::get_if<Mamba2Spec>(&program_layer.mixer)) {
+            layer.mixer_kind = Impl::Layer::MixerKind::Mamba2;
             layer.mamba2 = true;
             layer.recurrent_conv_kernel = mamba->conv_kernel;
             layer.recurrent_inner = mamba->intermediate_size;
@@ -446,6 +449,5 @@ MetalModel::MetalModel(const std::string& path, int context,
     (*impl_).seen.resize(static_cast<size_t>(vocab));
     (*impl_).reset();
 }
-
 
 }
