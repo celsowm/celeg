@@ -21,7 +21,7 @@ struct Arguments {
     int decode_tokens = 8;
     int warmup = 1;
     int repetitions = 3;
-    int storage_mode = 0;
+    celeg::MetalStorageMode storage_mode = celeg::MetalStorageMode::Shared;
 };
 
 std::string value(int& index, int argc, char** argv, const std::string& key) {
@@ -41,8 +41,8 @@ Arguments parse(int argc, char** argv) {
         else if (key == "--repetitions") result.repetitions = std::stoi(value(index, argc, argv, key));
         else if (key == "--storage-mode") {
             const std::string mode = value(index, argc, argv, key);
-            if (mode == "shared") result.storage_mode = 0;
-            else if (mode == "private") result.storage_mode = 1;
+            if (mode == "shared") result.storage_mode = celeg::MetalStorageMode::Shared;
+            else if (mode == "private") result.storage_mode = celeg::MetalStorageMode::Private;
             else throw std::invalid_argument("storage mode must be shared or private");
         }
         else if (key == "--help") {
@@ -184,7 +184,9 @@ int main(int argc, char** argv) {
                   << "  \"decode_tokens\": " << args.decode_tokens << ",\n"
                   << "  \"warmup\": " << args.warmup << ",\n"
                   << "  \"repetitions\": " << args.repetitions << ",\n"
-                  << "  \"storage_mode\": " << json_string(args.storage_mode == 1 ? "private" : "shared") << ",\n"
+                  << "  \"storage_mode\": "
+                  << json_string(args.storage_mode == celeg::MetalStorageMode::Private
+                                     ? "private" : "shared") << ",\n"
                   << "  \"prefill_ms\": " << std::setprecision(10) << prefill_ms << ",\n"
                   << "  \"prefill_samples_ms\": ";
         json_samples(std::cout, samples, &Sample::prefill_ms);
