@@ -1,7 +1,6 @@
 foreach(test_name IN ITEMS
     architecture_resolution_test
     automatic_inference_test
-    expert_weight_test
     layer_dispatch_exhaustiveness_test
     model_compiler_test
     policy_test
@@ -16,4 +15,12 @@ foreach(test_name IN ITEMS
     add_test(NAME ${test_name} COMMAND ${test_name})
 endforeach()
 
-target_include_directories(expert_weight_test PRIVATE src/backend/cpu)
+if(TARGET celeg_cuda_backend)
+    add_executable(expert_weight_test tests/model/expert_weight_test.cpp)
+    target_include_directories(expert_weight_test PRIVATE
+        include src tests src/backend/cuda)
+    target_link_libraries(expert_weight_test PRIVATE celeg_cuda_backend)
+    if(CELEG_RUN_CUDA_TESTS)
+        add_test(NAME expert_weight_test COMMAND expert_weight_test)
+    endif()
+endif()
