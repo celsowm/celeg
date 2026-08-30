@@ -1,5 +1,5 @@
 #include "detail/compiled_model.hpp"
-#include "celeg/backend/cuda/kernels/kernels.cuh"
+#include "kernels/kernels.cuh"
 
 namespace celeg {
 

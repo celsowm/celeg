@@ -1,7 +1,7 @@
-#include "celeg/backend/cuda/sampler.hpp"
-#include "celeg/backend/cuda/sampling_state.hpp"
+#include "backend/cuda/sampler.hpp"
+#include "backend/cuda/sampling_state.hpp"
 
-#include "celeg/backend/cuda/kernels/kernels.cuh"
+#include "kernels/kernels.cuh"
 
 namespace celeg {
 

@@ -1,4 +1,4 @@
-#include "celeg/backend/cuda/attention_norm.hpp"
+#include "backend/cuda/attention_norm.hpp"
 
 namespace celeg::prefill_detail {
 

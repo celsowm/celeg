@@ -1,6 +1,6 @@
 #include "detail/compiled_model.hpp"
-#include "celeg/detail/checkpoint/bootstrap.hpp"
-#include "celeg/backend/cuda/kernels/mmq.hpp"
+#include "detail/checkpoint/bootstrap.hpp"
+#include "kernels/mmq.hpp"
 
 #include <filesystem>
 #include <algorithm>

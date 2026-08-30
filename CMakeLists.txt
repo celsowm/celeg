@@ -146,6 +146,7 @@ target_include_directories(celeg PUBLIC include)
 target_include_directories(celeg PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${CMAKE_CURRENT_SOURCE_DIR}/src/backend/cuda
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/backend/cuda/kernels
     ${CMAKE_CURRENT_SOURCE_DIR}/src/backend/cuda/model)
 target_compile_definitions(celeg PRIVATE CELEG_API_BUILD=1)
 set_target_properties(celeg PROPERTIES

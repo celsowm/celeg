@@ -1,4 +1,4 @@
-#include "celeg/backend/cuda/session_store.hpp"
+#include "backend/cuda/session_store.hpp"
 #include "detail/compiled_model.hpp"
 
 #include <fstream>

@@ -1,9 +1,9 @@
 #include "detail/compiled_model.hpp"
-#include "celeg/backend/cuda/kernels/kernels.cuh"
-#include "celeg/backend/cuda/paged_kv.hpp"
-#include "celeg/backend/cuda/phase_profile.hpp"
-#include "celeg/backend/cuda/weight_layout.hpp"
-#include "celeg/backend/cuda/moe.hpp"
+#include "kernels/kernels.cuh"
+#include "backend/cuda/paged_kv.hpp"
+#include "backend/cuda/phase_profile.hpp"
+#include "backend/cuda/weight_layout.hpp"
+#include "backend/cuda/moe.hpp"
 
 #include <algorithm>
 #include <chrono>

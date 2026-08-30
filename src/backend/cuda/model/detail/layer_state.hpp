@@ -1,10 +1,10 @@
 #pragma once
 
 
-#include "celeg/detail/exhaustive_visit.hpp"
+#include "detail/exhaustive_visit.hpp"
 #include "feed_forward_weights.hpp"
 #include "linear_weights.hpp"
-#include "celeg/backend/cuda/utils.cuh"
+#include "backend/cuda/utils.cuh"
 #include "celeg/model/graph.hpp"
 
 #include <cuda_bf16.h>

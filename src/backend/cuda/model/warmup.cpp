@@ -1,6 +1,6 @@
 #include "detail/compiled_model.hpp"
-#include "celeg/backend/cuda/kernels/kernels.cuh"
-#include "celeg/backend/cuda/weight_layout.hpp"
+#include "kernels/kernels.cuh"
+#include "backend/cuda/weight_layout.hpp"
 
 #include <stdexcept>
 namespace celeg {

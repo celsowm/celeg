@@ -1,5 +1,5 @@
-#include "celeg/backend/cuda/weights_loader.hpp"
-#include "celeg/backend/cuda/moe/expert_source.hpp"
+#include "backend/cuda/weights_loader.hpp"
+#include "backend/cuda/moe/expert_source.hpp"
 
 #include <filesystem>
 #include <mutex>

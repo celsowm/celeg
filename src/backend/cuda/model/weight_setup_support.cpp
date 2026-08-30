@@ -1,4 +1,4 @@
-#include "celeg/backend/cuda/weight_setup_support.hpp"
+#include "backend/cuda/weight_setup_support.hpp"
 
 #include "celeg/model/weights/roles.hpp"
 

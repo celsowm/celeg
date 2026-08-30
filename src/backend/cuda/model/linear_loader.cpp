@@ -1,7 +1,7 @@
-#include "celeg/backend/cuda/weights_loader.hpp"
+#include "backend/cuda/weights_loader.hpp"
 #include "celeg/model/weights/quantization.hpp"
-#include "celeg/backend/cuda/moe/expert_residency.hpp"
-#include "celeg/backend/cuda/kernels/gguf.cuh"
+#include "backend/cuda/moe/expert_residency.hpp"
+#include "kernels/gguf.cuh"
 #include "celeg/checkpoint/gguf_blocks.hpp"
 #include "celeg/checkpoint/tensor_names.hpp"
 #include "celeg/checkpoint/tensor_codec.hpp"
@@ -93,10 +93,6 @@ const LinearWeight* WeightLoader::load_concat_linear_weight(
     if (std::all_of(parts.begin(), parts.end(), [&](const auto& part) {
             return has_packed_fp8_matrix(repo, part.first);
         })) {
-        // Per-row (per-output-channel) weight scale, dynamic per-token
-        // activation quant shared across all rows: stacking rows from
-        // multiple parts needs no scale reconciliation, exactly like the
-        // int8 case above.
         const int64_t cols = parts.front().second.at(1);
         int64_t rows = 0;
         std::vector<uint8_t> values;
@@ -117,14 +113,6 @@ const LinearWeight* WeightLoader::load_concat_linear_weight(
     if (std::all_of(parts.begin(), parts.end(), [&](const auto& part) {
             return has_packed_nvfp4_matrix(repo, part.first);
         })) {
-        // The per-16-block weight scale varies per row/block, but
-        // global_scale and input_global_scale are single per-tensor
-        // scalars -- concatenating parts calibrated with different
-        // scalars would require re-quantizing one part's fp8 block
-        // scales, losing precision the checkpoint doesn't actually need
-        // to lose (in practice, a gate/up pair sharing one calibration
-        // pass always carries identical scalars; fail loudly rather than
-        // silently reconcile if a checkpoint ever violates that).
         const int64_t cols = parts.front().second.at(1);
         int64_t rows = 0;
         std::vector<uint8_t> packed_values;
@@ -218,9 +206,6 @@ const LinearWeight* WeightLoader::load_concat_linear_weight(
                 throw std::runtime_error("mixed dense/unsupported quantized concat is not supported: " +
                                          synthetic_name + " (" + ggml_type_name(v_ggml_type) + ")");
             }
-            // One member without an MMQ kernel forces the whole concat onto
-            // the host-dequantized path, since the segments must end up in a
-            // single storage kind.
             requires_host_dequantization =
                     requires_host_dequantization || !cuda_gguf_native_mmq(v_ggml_type);
         }

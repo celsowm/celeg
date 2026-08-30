@@ -2,9 +2,9 @@
 
 
 #include "device_weights.hpp"
-#include "celeg/backend/cuda/moe/offload.hpp"
-#include "celeg/backend/cuda/moe/expert_residency.hpp"
-#include "celeg/backend/cuda/utils.cuh"
+#include "backend/cuda/moe/offload.hpp"
+#include "backend/cuda/moe/expert_residency.hpp"
+#include "backend/cuda/utils.cuh"
 #include "celeg/checkpoint/formats/safetensors.hpp"
 #include "celeg/runtime/cache/host_expert_cache.hpp"
 

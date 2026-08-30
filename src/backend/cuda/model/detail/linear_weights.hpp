@@ -1,7 +1,7 @@
 #pragma once
 
 
-#include "celeg/backend/cuda/execution_plan.hpp"
+#include "backend/cuda/execution_plan.hpp"
 #include "celeg/checkpoint/formats/gguf.hpp"
 
 #include <cuda_bf16.h>
@@ -186,4 +186,3 @@ inline LinearWeight slice_rows(const LinearWeight& weight,
 }
 
 }
-

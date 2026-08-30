@@ -1,11 +1,11 @@
 #include "detail/compiled_model.hpp"
-#include "celeg/backend/cuda/attention_norm.hpp"
-#include "celeg/backend/cuda/phase_profile.hpp"
-#include "celeg/backend/cuda/kernels/kernels.cuh"
-#include "celeg/backend/cuda/kernels/attention_output.hpp"
-#include "celeg/backend/cuda/kernels/rope_pairing.hpp"
-#include "celeg/backend/cuda/paged_kv.hpp"
-#include "celeg/backend/cuda/weight_layout.hpp"
+#include "backend/cuda/attention_norm.hpp"
+#include "backend/cuda/phase_profile.hpp"
+#include "kernels/kernels.cuh"
+#include "kernels/attention_output.hpp"
+#include "kernels/rope_pairing.hpp"
+#include "backend/cuda/paged_kv.hpp"
+#include "backend/cuda/weight_layout.hpp"
 
 #include <stdexcept>
 

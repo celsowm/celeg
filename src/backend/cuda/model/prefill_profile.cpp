@@ -1,4 +1,4 @@
-#include "celeg/backend/cuda/phase_profile.hpp"
+#include "backend/cuda/phase_profile.hpp"
 
 namespace celeg {
 

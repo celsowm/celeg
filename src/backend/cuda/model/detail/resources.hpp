@@ -2,9 +2,9 @@
 
 #include "celeg/model/resolved.hpp"
 #include "celeg/model/program.hpp"
-#include "celeg/backend/cuda/execution_plan.hpp"
-#include "celeg/backend/cuda/weight_layout.hpp"
-#include "celeg/backend/cuda/weights_loader.hpp"
+#include "backend/cuda/execution_plan.hpp"
+#include "backend/cuda/weight_layout.hpp"
+#include "backend/cuda/weights_loader.hpp"
 #include "celeg/model/weights/roles.hpp"
 
 #include <memory>
@@ -76,4 +76,3 @@ struct CudaModelResources {
 };
 
 }
-

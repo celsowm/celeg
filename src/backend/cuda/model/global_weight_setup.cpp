@@ -1,10 +1,10 @@
-#include "celeg/backend/cuda/weight_setup.hpp"
+#include "backend/cuda/weight_setup.hpp"
 
 #include "detail/compiled_model.hpp"
-#include "celeg/detail/checkpoint/bootstrap.hpp"
-#include "celeg/backend/cuda/weight_layout.hpp"
-#include "celeg/backend/cuda/weight_setup_support.hpp"
-#include "celeg/backend/cuda/weights_loader.hpp"
+#include "detail/checkpoint/bootstrap.hpp"
+#include "backend/cuda/weight_layout.hpp"
+#include "backend/cuda/weight_setup_support.hpp"
+#include "backend/cuda/weights_loader.hpp"
 #include "celeg/model/weights/quantization.hpp"
 
 #include <memory>

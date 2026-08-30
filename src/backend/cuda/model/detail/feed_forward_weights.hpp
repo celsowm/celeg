@@ -3,7 +3,7 @@
 
 #include "expert_weights.hpp"
 #include "linear_weights.hpp"
-#include "celeg/backend/cuda/moe.hpp"
+#include "backend/cuda/moe.hpp"
 #include "celeg/model/program.hpp"
 
 #include <cstddef>

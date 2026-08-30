@@ -1,7 +1,7 @@
 #include "detail/compiled_model.hpp"
-#include "celeg/backend/cuda/compiler.hpp"
-#include "celeg/detail/checkpoint/bootstrap.hpp"
-#include "celeg/backend/cuda/weight_policy.hpp"
+#include "backend/cuda/compiler.hpp"
+#include "detail/checkpoint/bootstrap.hpp"
+#include "backend/cuda/weight_policy.hpp"
 #include "celeg/checkpoint/packed/int8.hpp"
 
 #include <algorithm>

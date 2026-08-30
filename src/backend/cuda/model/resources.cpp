@@ -1,6 +1,6 @@
 #include "detail/compiled_model.hpp"
-#include "celeg/backend/cuda/workspace_plan.hpp"
-#include "celeg/backend/cuda/kernels/attention_args.hpp"
+#include "backend/cuda/workspace_plan.hpp"
+#include "kernels/attention_args.hpp"
 
 #include <algorithm>
 #include <cstddef>

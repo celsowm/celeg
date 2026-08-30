@@ -1,8 +1,8 @@
 #include "linear_materialization.hpp"
 
 #include "celeg/checkpoint/tensor_codec.hpp"
-#include "celeg/backend/cuda/kernels/kernels/gguf.cuh"
-#include "celeg/backend/cuda/weights_loader.hpp"
+#include "kernels/gguf.cuh"
+#include "backend/cuda/weights_loader.hpp"
 #include "linear_storage_internal.hpp"
 
 #include <cuda_bf16.h>

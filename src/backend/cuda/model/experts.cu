@@ -1,5 +1,5 @@
-#include "celeg/backend/cuda/weights_loader.hpp"
-#include "celeg/backend/cuda/moe/expert_residency.hpp"
+#include "backend/cuda/weights_loader.hpp"
+#include "backend/cuda/moe/expert_residency.hpp"
 #include "celeg/checkpoint/tensor_names.hpp"
 #include "celeg/checkpoint/packed/int4.hpp"
 #include <cstring>

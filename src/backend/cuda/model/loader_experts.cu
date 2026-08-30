@@ -1,5 +1,5 @@
-#include "celeg/backend/cuda/weights_loader.hpp"
-#include "celeg/backend/cuda/kernels/gguf.cuh"
+#include "backend/cuda/weights_loader.hpp"
+#include "kernels/gguf.cuh"
 #include "celeg/checkpoint/formats/gguf.hpp"
 #include "celeg/checkpoint/tensor_names.hpp"
 #include "celeg/checkpoint/packed/int4.hpp"

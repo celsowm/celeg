@@ -1,7 +1,7 @@
 #include "detail/compiled_model.hpp"
-#include "celeg/backend/cuda/kernels/kernels.cuh"
-#include "celeg/backend/cuda/moe.hpp"
-#include "celeg/backend/cuda/moe/expert_source.hpp"
+#include "kernels/kernels.cuh"
+#include "backend/cuda/moe.hpp"
+#include "backend/cuda/moe/expert_source.hpp"
 #include <algorithm>
 #include <stdexcept>
 #include <vector>

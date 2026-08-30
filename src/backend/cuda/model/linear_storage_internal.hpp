@@ -1,7 +1,7 @@
 #pragma once
 
-#include "celeg/backend/cuda/runtime_types.hpp"
-#include "celeg/backend/cuda/utils.cuh"
+#include "backend/cuda/runtime_types.hpp"
+#include "backend/cuda/utils.cuh"
 #include "detail/device_weights.hpp"
 #include "celeg/model/weights/quantization.hpp"
 
