@@ -14,8 +14,10 @@ namespace celeg {
 
 struct PackedDecodeExecutorImpl;
 class PhysicalPagedKvCache;
+class CudaWeightCache;
 class CudaModel;
 struct CudaCompiledModel;
+struct CudaSchedulerDriver;
 struct PackedSessionContext;
 
 class CudaInferenceSession {
@@ -91,6 +93,7 @@ class CudaModel {
     friend class CudaInferenceSession;
     friend class CudaModelDiagnostics;
     friend class SessionPersistence;
+    friend struct CudaSchedulerDriver;
     friend PackedSessionContext packed_session_context(CudaModel& model);
 public:
     CudaModel(const std::string& model_path,
@@ -111,6 +114,15 @@ public:
     SessionPersistence persistence() { return SessionPersistence(*this); }
 
 private:
+    CudaModel(const std::string& model_path,
+              int max_context,
+              CudaModelOptions options,
+              GenerationConfig generation,
+              std::shared_ptr<const RuntimeContext> runtime,
+              int tokenizer_vocab_size,
+              std::shared_ptr<CudaWeightCache> weight_cache);
+
+    std::shared_ptr<CudaWeightCache> weight_cache_;
     std::unique_ptr<CudaCompiledModel> state_;
 };
 
