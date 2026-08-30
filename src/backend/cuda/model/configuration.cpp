@@ -27,7 +27,7 @@ void CudaCompiledModel::configure_model(
             return layer.residual.multiplier != 1.0f;
         });
     if (non_default_residual ||
-        (resources_.shape_.conv_layer_count == 0 &&
+        (resources_.shape().conv_layer_count == 0 &&
          (resources_.program_.embedding_transform.multiplier != 1.0f ||
           resources_.program_.logits_multiplier != 1.0f ||
           resources_.program_.logits_divisor != 1.0f))) {
