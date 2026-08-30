@@ -34,6 +34,33 @@ CompiledAttentionStateLayout lower_attention_state_layout(
     }, attention.state);
 }
 
+CompiledAttentionExecution lower_attention_execution(const AttentionSpec& attention) {
+    CompiledAttentionExecution result;
+    result.has_key_value = !std::holds_alternative<SharedKvConsumer>(attention.kv_sharing);
+    result.has_query_key_norm = attention.has_query_key_norm();
+    result.has_rope = attention.rope_position() != nullptr;
+    if (const RopePositionSpec* rope = attention.rope_position()) {
+        result.rope_pairing = rope->pairing;
+    }
+    if (attention.output_gate) {
+        result.gate_granularity = attention.output_gate->granularity;
+    }
+    if (const LatentAttentionStateSpec* latent = attention.latent_state()) {
+        result.kind = latent->factorized()
+            ? AttentionExecutionKind::FactorizedLatent
+            : AttentionExecutionKind::Latent;
+        result.has_decoupled_rope = latent->decoupled_rope;
+        result.rotary_width = latent->decoupled_rope ? latent->rope_head_dim : 0;
+    } else {
+        result.rotary_width = attention.rope_position()
+            ? static_cast<int>(static_cast<double>(attention.head_dim) *
+                               attention.rope_position()->rotary_fraction)
+            : 0;
+    }
+    result.validate();
+    return result;
+}
+
 CompiledMixerProgram lower_mixer(const LayerSpec& layer) {
     return std::visit([](const auto& mixer) -> CompiledMixerProgram {
         using Mixer = std::decay_t<decltype(mixer)>;
@@ -44,7 +71,8 @@ CompiledMixerProgram lower_mixer(const LayerSpec& layer) {
                     "model program does not implement this position policy");
             }
             return CompiledAttentionProgram{
-                mixer, lower_attention_state_layout(mixer)};
+                mixer, lower_attention_state_layout(mixer),
+                lower_attention_execution(mixer)};
         } else if constexpr (
             std::is_same_v<Mixer, ShortConvolutionSpec> ||
             std::is_same_v<Mixer, GatedDeltaNetSpec> ||

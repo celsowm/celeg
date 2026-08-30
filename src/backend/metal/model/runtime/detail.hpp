@@ -6,6 +6,7 @@
 #include "celeg/model/program.hpp"
 #include "celeg/model/linear_operation.hpp"
 #include "celeg/model/weights/roles.hpp"
+#include "linear_bindings.hpp"
 
 #import <Metal/Metal.h>
 
@@ -48,16 +49,7 @@ struct MetalPipelineCache {
 };
 
 struct MetalModel::Impl {
-    enum class LinearStorage {
-        Float32,
-        Float16,
-        BFloat16,
-        Q4_0,
-        Q4K,
-        Q5K,
-        Q6K,
-        Q8_0,
-    };
+    using LinearStorage = metal_model_detail::MetalLinearStorage;
 
     struct Linear {
         id<MTLBuffer> buffer = nil;

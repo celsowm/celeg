@@ -3,8 +3,8 @@
 #include "celeg/backend/cuda/moe/expert_residency.hpp"
 #include "celeg/backend/cuda/kernels/gguf.cuh"
 #include "celeg/checkpoint/gguf_blocks.hpp"
+#include "celeg/checkpoint/tensor_codec.hpp"
 #include "celeg/checkpoint/tensor_names.hpp"
-#include "weight_loader_internal.hpp"
 
 #include <cstddef>
 #include <cuda_bf16.h>
@@ -40,7 +40,7 @@ const ExpertLinearWeight* WeightLoader::load_expert_linear_weight(
     if (tensor.shape != expected && tensor.shape != packed_shape) {
         throw std::runtime_error("unexpected packed expert shape for " + name);
     }
-    const size_t count = cuda_loader_detail::checked_element_count(tensor.shape);
+    const size_t count = tensor_element_count(tensor.shape, name);
     if (tensor.bytes != count * sizeof(__nv_bfloat16)) {
         throw std::runtime_error("invalid expert byte count for " + name);
     }

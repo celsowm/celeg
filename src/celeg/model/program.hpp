@@ -155,9 +155,29 @@ using CompiledAttentionStateLayout = std::variant<
     CompiledOrdinaryKvStateLayout,
     CompiledLatentStateLayout>;
 
+enum class AttentionExecutionKind : std::uint8_t {
+    Standard,
+    Latent,
+    FactorizedLatent,
+};
+
+struct CompiledAttentionExecution {
+    AttentionExecutionKind kind = AttentionExecutionKind::Standard;
+    bool has_key_value = true;
+    bool has_query_key_norm = false;
+    bool has_rope = false;
+    bool has_decoupled_rope = false;
+    RopePairingKind rope_pairing = RopePairingKind::SplitHalf;
+    AttentionGateGranularity gate_granularity = AttentionGateGranularity::OutputWise;
+    int rotary_width = 0;
+
+    void validate() const;
+};
+
 struct CompiledAttentionProgram {
     AttentionSpec semantics;
     CompiledAttentionStateLayout state_layout;
+    CompiledAttentionExecution execution;
 };
 
 using CompiledMixerProgram = std::variant<

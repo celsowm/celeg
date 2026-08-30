@@ -31,6 +31,65 @@ typedef enum celeg_request_status {
     CELEG_REQUEST_CANCELLED = 4, CELEG_REQUEST_FAILED = 5
 } celeg_request_status;
 
+typedef enum celeg_cpu_isa_value {
+    CELEG_CPU_ISA_AUTO = 0,
+    CELEG_CPU_ISA_SCALAR = 1,
+    CELEG_CPU_ISA_AVX2 = 2,
+    CELEG_CPU_ISA_AVX_VNNI = 3,
+    CELEG_CPU_ISA_AVX512_VNNI = 4,
+    CELEG_CPU_ISA_AMX_INT8 = 5,
+    CELEG_CPU_ISA_NEON = 6,
+    CELEG_CPU_ISA_DOTPROD = 7,
+    CELEG_CPU_ISA_I8MM = 8,
+    CELEG_CPU_ISA_SVE2 = 9,
+    CELEG_CPU_ISA_SME2 = 10
+} celeg_cpu_isa_value;
+
+typedef enum celeg_cpu_affinity_value {
+    CELEG_CPU_AFFINITY_NONE = 0,
+    CELEG_CPU_AFFINITY_COMPACT = 1,
+    CELEG_CPU_AFFINITY_SCATTER = 2
+} celeg_cpu_affinity_value;
+
+typedef enum celeg_cpu_kv_cache_value {
+    CELEG_CPU_KV_CACHE_FP32 = 0,
+    CELEG_CPU_KV_CACHE_BF16 = 1
+} celeg_cpu_kv_cache_value;
+
+typedef enum celeg_cpu_numa_value {
+    CELEG_CPU_NUMA_DISABLED = 0,
+    CELEG_CPU_NUMA_LOCAL = 1,
+    CELEG_CPU_NUMA_REPLICATE_WEIGHTS = 2
+} celeg_cpu_numa_value;
+
+typedef enum celeg_weight_mode_value {
+    CELEG_WEIGHT_MODE_BF16 = 0,
+    CELEG_WEIGHT_MODE_INT8 = 1,
+    CELEG_WEIGHT_MODE_INT4 = 2,
+    CELEG_WEIGHT_MODE_NATIVE_GGUF = 3
+} celeg_weight_mode_value;
+
+typedef enum celeg_cuda_kv_cache_value {
+    CELEG_CUDA_KV_CACHE_BF16 = 0,
+    CELEG_CUDA_KV_CACHE_INT8 = 1
+} celeg_cuda_kv_cache_value;
+
+typedef enum celeg_cuda_gemm_backend_value {
+    CELEG_CUDA_GEMM_CUBLAS = 0,
+    CELEG_CUDA_GEMM_CUBLASLT = 1
+} celeg_cuda_gemm_backend_value;
+
+typedef enum celeg_cuda_attention_mode_value {
+    CELEG_CUDA_ATTENTION_SINGLE = 0,
+    CELEG_CUDA_ATTENTION_SEGMENTED = 1,
+    CELEG_CUDA_ATTENTION_AUTO = 2
+} celeg_cuda_attention_mode_value;
+
+typedef enum celeg_cuda_scheduler_policy_value {
+    CELEG_CUDA_SCHEDULER_GUARANTEED_NO_EVICT = 0,
+    CELEG_CUDA_SCHEDULER_MAX_UTILIZATION = 1
+} celeg_cuda_scheduler_policy_value;
+
 typedef struct celeg_model celeg_model;
 typedef struct celeg_engine celeg_engine;
 typedef struct celeg_tokenizer celeg_tokenizer;

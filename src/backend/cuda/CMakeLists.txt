@@ -29,6 +29,9 @@ set(CELEG_CUDA_BACKEND_SOURCES
     src/backend/cuda/model/dense_mlp_execution.cu
     src/backend/cuda/model/execution.cu
     src/backend/cuda/model/attention_execution.cu
+    src/backend/cuda/model/attention_dispatch.cu
+    src/backend/cuda/model/attention_latent_execution.cu
+    src/backend/cuda/model/attention_factorized_execution.cu
     src/backend/cuda/model/non_attention_execution.cu
     src/backend/cuda/model/sampler.cu
     src/backend/cuda/model/decode/layers.cpp
@@ -60,6 +63,7 @@ set(CELEG_CUDA_BACKEND_SOURCES
     src/backend/cuda/model/gguf_dequant.cpp
     src/backend/cuda/model/weight_upload.cpp
     src/backend/cuda/model/linear_loader.cpp
+    src/backend/cuda/model/linear_materialization.cpp
     src/backend/cuda/model/expert_loader.cpp
     src/backend/cuda/model/loader_experts.cu
     src/backend/cuda/model/experts.cu

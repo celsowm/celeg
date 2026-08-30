@@ -5,7 +5,6 @@
 #include "celeg/checkpoint/gguf_blocks.hpp"
 #include "celeg/checkpoint/tensor_codec.hpp"
 #include "celeg/checkpoint/tensor_names.hpp"
-#include "weight_loader_internal.hpp"
 
 #include <cstddef>
 #include <cuda_bf16.h>
@@ -90,7 +89,7 @@ const __nv_bfloat16* WeightLoader::load_rms_norm_weight(
         }
         return cached->second.bf16_storage.data();
     }
-    const size_t count = cuda_loader_detail::checked_element_count(expected);
+    const size_t count = tensor_element_count(expected, name);
     std::vector<__nv_bfloat16> host(count);
     if (weight_kind == NormWeightKind::None) {
         for (__nv_bfloat16& value : host) value = __float2bfloat16(1.0f);
@@ -132,7 +131,7 @@ const float* WeightLoader::load_f32_weight(
     if (tensor.shape != expected) {
         throw std::runtime_error("unexpected f32 shape for " + name);
     }
-    const size_t count = cuda_loader_detail::checked_element_count(tensor.shape);
+    const size_t count = tensor_element_count(tensor.shape, name);
     if (tensor.bytes != count * sizeof(float)) {
         throw std::runtime_error("invalid f32 byte count for " + name);
     }

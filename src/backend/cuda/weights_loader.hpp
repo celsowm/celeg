@@ -14,6 +14,7 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <vector>
 
@@ -115,6 +116,10 @@ public:
     WeightMode weight_mode() const { return weight_mode_; }
 
 private:
+    const LinearWeight* commit_linear(std::string_view name,
+                                      DeviceWeight&& weight,
+                                      int rows, int cols);
+
     WeightMode resolve_weight_mode(const std::string& name) const {
         return weight_mode_resolver_(name);
     }

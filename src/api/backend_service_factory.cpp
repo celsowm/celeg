@@ -43,24 +43,14 @@ public:
 
     std::shared_ptr<const IBackendOptions> decode_options(
         std::span<const std::byte> bytes) const override {
-        if (bytes.size() < sizeof(celeg_cpu_backend_options)) {
-            throw std::invalid_argument("CPU backend options are truncated");
-        }
-        const auto* source = reinterpret_cast<const celeg_cpu_backend_options*>(bytes.data());
-        if (source->struct_size < sizeof(*source) || source->struct_size > bytes.size()) {
-            throw std::invalid_argument("CPU backend options have an invalid struct size");
-        }
+        const auto& source = decode_abi_struct<celeg_cpu_backend_options>(bytes, "CPU backend");
         return std::make_shared<CpuBackendOptions>(
-            cpu_options(source->model), cpu_engine_options(source->engine));
+            cpu_options(source.model), cpu_engine_options(source.engine));
     }
 
     std::unique_ptr<serve::ServiceBundle> create(
         const BackendCreateRequest& request) const override {
-        if (!request.runtime || !request.options ||
-            request.backend_id != id() ||
-            request.options->backend_id() != id()) {
-            throw std::invalid_argument("CPU backend request has invalid options");
-        }
+        validate_backend_request(request, id());
         const auto* options = request.options->as<CpuBackendOptions>();
         if (!options) throw std::invalid_argument("CPU backend options type mismatch");
         auto service = std::make_unique<serve::CpuInferenceService>(
@@ -98,24 +88,14 @@ public:
 
     std::shared_ptr<const IBackendOptions> decode_options(
         std::span<const std::byte> bytes) const override {
-        if (bytes.size() < sizeof(celeg_cuda_backend_options)) {
-            throw std::invalid_argument("CUDA backend options are truncated");
-        }
-        const auto* source = reinterpret_cast<const celeg_cuda_backend_options*>(bytes.data());
-        if (source->struct_size < sizeof(*source) || source->struct_size > bytes.size()) {
-            throw std::invalid_argument("CUDA backend options have an invalid struct size");
-        }
+        const auto& source = decode_abi_struct<celeg_cuda_backend_options>(bytes, "CUDA backend");
         return std::make_shared<CudaBackendOptions>(
-            cuda_options(source->model), cuda_engine_options(source->engine));
+            cuda_options(source.model), cuda_engine_options(source.engine));
     }
 
     std::unique_ptr<serve::ServiceBundle> create(
         const BackendCreateRequest& request) const override {
-        if (!request.runtime || !request.options ||
-            request.backend_id != id() ||
-            request.options->backend_id() != id()) {
-            throw std::invalid_argument("CUDA backend request has invalid options");
-        }
+        validate_backend_request(request, id());
         const auto* options = request.options->as<CudaBackendOptions>();
         if (!options) throw std::invalid_argument("CUDA backend options type mismatch");
         auto service = std::make_unique<serve::CudaInferenceService>(
@@ -150,24 +130,14 @@ public:
 
     std::shared_ptr<const IBackendOptions> decode_options(
         std::span<const std::byte> bytes) const override {
-        if (bytes.size() < sizeof(celeg_metal_backend_options)) {
-            throw std::invalid_argument("Metal backend options are truncated");
-        }
-        const auto* source =
-            reinterpret_cast<const celeg_metal_backend_options*>(bytes.data());
-        if (source->struct_size < sizeof(*source) || source->struct_size > bytes.size()) {
-            throw std::invalid_argument("Metal backend options have an invalid struct size");
-        }
+        const auto& source = decode_abi_struct<celeg_metal_backend_options>(bytes, "Metal backend");
         return std::make_shared<MetalBackendOptions>(
-            metal_options(source->model), metal_engine_options(source->engine));
+            metal_options(source.model), metal_engine_options(source.engine));
     }
 
     std::unique_ptr<serve::ServiceBundle> create(
         const BackendCreateRequest& request) const override {
-        if (!request.runtime || !request.options ||
-            request.backend_id != id() || request.options->backend_id() != id()) {
-            throw std::invalid_argument("Metal backend request has invalid options");
-        }
+        validate_backend_request(request, id());
         const auto* options = request.options->as<MetalBackendOptions>();
         if (!options) throw std::invalid_argument("Metal backend options type mismatch");
         auto service = std::make_unique<serve::MetalInferenceService>(

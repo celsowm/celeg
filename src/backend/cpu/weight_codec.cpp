@@ -30,14 +30,6 @@ GgmlMatrixView gguf_matrix(const HostTensorView& tensor,
     return matrix;
 }
 
-std::vector<float> dequantize_matrix(const GgmlMatrixView& matrix) {
-    std::vector<float> values(static_cast<size_t>(matrix.rows) * matrix.cols);
-    for (size_t row = 0; row < matrix.rows; ++row) {
-        ggml_decode_row(matrix, row, values.data() + row * matrix.cols);
-    }
-    return values;
-}
-
 }
 
 CpuWeightCodec::CpuWeightCodec(IWeightRepository* source, CpuPackReader* reader,
@@ -83,7 +75,8 @@ CpuLinearWeight CpuWeightCodec::matrix(
         /// GGUF files (e.g. a Q4_0 file that sprinkles in Q4_1 tensors)
         /// loadable without special casing.
         if (!gguf_type_is_native_dot(matrix.type) || (matrix.cols % 256) != 0) {
-            const std::vector<float> values = dequantize_matrix(matrix);
+            const std::vector<float> values = decode_tensor_f32(
+                tensor, expected, name);
             return CpuLinearWeight::from_q4(quantize_float_groupwise_q4(
                 values.data(), matrix.rows, matrix.cols, group_size_));
         }
@@ -188,8 +181,10 @@ CpuLinearWeight CpuWeightCodec::concat(
         if (needs_repack) {
             std::vector<float> joined(total_rows * static_cast<size_t>(cols));
             size_t row_offset = 0;
-            for (const GgmlMatrixView& matrix : matrices) {
-                const std::vector<float> values = dequantize_matrix(matrix);
+            for (size_t i = 0; i < matrices.size(); ++i) {
+                const GgmlMatrixView& matrix = matrices[i];
+                const std::vector<float> values = decode_tensor_f32(
+                    tensors[i], parts[i].second, parts[i].first);
                 std::copy(values.begin(), values.end(), joined.begin() +
                     static_cast<ptrdiff_t>(row_offset * static_cast<size_t>(cols)));
                 row_offset += matrix.rows;

@@ -29,13 +29,14 @@ CompiledModelProgram CudaModelCompiler::compile(const ResolvedModel& model) cons
             throw std::invalid_argument(
                 "CUDA lowering currently supports ALiBi but not relative-position tables");
         }
-        if (attention.uses_latent_state()) {
+        if (compiled->execution.kind != AttentionExecutionKind::Standard) {
             const auto& latent = *attention.latent_state();
             if (latent.latent_rank > 512) {
                 throw std::invalid_argument(
                     "CUDA latent attention currently supports latent ranks up to 512");
             }
-            if ((attention.output_gate.has_value() && !latent.factorized()) ||
+            if ((attention.output_gate.has_value() &&
+                 compiled->execution.kind != AttentionExecutionKind::FactorizedLatent) ||
                 attention.multi_axis_position()) {
                 throw std::invalid_argument(
                     "CUDA latent attention does not support query gates or M-RoPE yet");

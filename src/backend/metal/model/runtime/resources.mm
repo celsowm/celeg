@@ -138,16 +138,13 @@ MetalModel::Impl::Linear MetalModel::Impl::load_linear_source(const std::string&
         const std::vector<int64_t> expected_values{rows, cols};
         const std::span<const int64_t> expected(expected_values.data(),
                                                  expected_values.size());
-        if (view.shape.size() != expected.size() ||
-            !std::equal(view.shape.begin(), view.shape.end(), expected.begin())) {
+        if (!tensor_shape_matches(view.shape, expected)) {
             throw std::runtime_error("unexpected Metal tensor shape: " + name);
         }
         if (view.dtype == TensorDType::Quantized) {
             const GgmlType type = ggml_type_from_block_encoding(view.block_encoding);
-            if ((type == GgmlType::Q4_0 || type == GgmlType::Q4_K ||
-                 type == GgmlType::Q5_K || type == GgmlType::Q6_K ||
-                 type == GgmlType::Q8_0) &&
-                cols % static_cast<int>(ggml_type_trait(type).block_size) == 0) {
+            if (const auto binding = metal_model_detail::metal_linear_binding(type);
+                binding && binding->supports_width(cols)) {
                 const GgmlTypeTrait trait = ggml_type_trait(type);
                 const size_t row_bytes = static_cast<size_t>(cols) /
                     static_cast<size_t>(trait.block_size) *
@@ -158,11 +155,7 @@ MetalModel::Impl::Linear MetalModel::Impl::load_linear_source(const std::string&
                 return {raw_buffer(view.data, view.bytes),
                         static_cast<uint32_t>(rows), static_cast<uint32_t>(cols),
                         static_cast<uint32_t>(row_bytes),
-                        type == GgmlType::Q4_0 ? LinearStorage::Q4_0
-                        : type == GgmlType::Q4_K ? LinearStorage::Q4K
-                        : type == GgmlType::Q5_K ? LinearStorage::Q5K
-                        : type == GgmlType::Q6_K ? LinearStorage::Q6K
-                                               : LinearStorage::Q8_0};
+                        binding->storage};
             }
         }
         if (view.dtype == TensorDType::F16 || view.dtype == TensorDType::BF16) {

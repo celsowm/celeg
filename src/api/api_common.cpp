@@ -12,6 +12,14 @@ void require_size(uint32_t actual, size_t expected, const char* name) {
     }
 }
 
+void validate_backend_request(const BackendCreateRequest& request,
+                             BackendId expected) {
+    if (!request.runtime || !request.options || request.backend_id != expected ||
+        request.options->backend_id() != expected) {
+        throw std::invalid_argument("backend request has invalid options");
+    }
+}
+
 GenerationConfig generation(const celeg_generation_options& source) {
     GenerationConfig result;
     result.temperature = source.temperature;
@@ -25,43 +33,43 @@ GenerationConfig generation(const celeg_generation_options& source) {
 
 CpuIsa cpu_isa(int value) {
     switch (value) {
-        case 0: return CpuIsa::Auto;
-        case 1: return CpuIsa::Scalar;
-        case 2: return CpuIsa::Avx2;
-        case 3: return CpuIsa::AvxVnni;
-        case 4: return CpuIsa::Avx512Vnni;
-        case 5: return CpuIsa::AmxInt8;
-        case 6: return CpuIsa::Neon;
-        case 7: return CpuIsa::DotProd;
-        case 8: return CpuIsa::I8mm;
-        case 9: return CpuIsa::Sve2;
-        case 10: return CpuIsa::Sme2;
+        case CELEG_CPU_ISA_AUTO: return CpuIsa::Auto;
+        case CELEG_CPU_ISA_SCALAR: return CpuIsa::Scalar;
+        case CELEG_CPU_ISA_AVX2: return CpuIsa::Avx2;
+        case CELEG_CPU_ISA_AVX_VNNI: return CpuIsa::AvxVnni;
+        case CELEG_CPU_ISA_AVX512_VNNI: return CpuIsa::Avx512Vnni;
+        case CELEG_CPU_ISA_AMX_INT8: return CpuIsa::AmxInt8;
+        case CELEG_CPU_ISA_NEON: return CpuIsa::Neon;
+        case CELEG_CPU_ISA_DOTPROD: return CpuIsa::DotProd;
+        case CELEG_CPU_ISA_I8MM: return CpuIsa::I8mm;
+        case CELEG_CPU_ISA_SVE2: return CpuIsa::Sve2;
+        case CELEG_CPU_ISA_SME2: return CpuIsa::Sme2;
         default: throw std::invalid_argument("invalid CPU ISA");
     }
 }
 
 CpuAffinityPolicy cpu_affinity(int value) {
     switch (value) {
-        case 0: return CpuAffinityPolicy::None;
-        case 1: return CpuAffinityPolicy::Compact;
-        case 2: return CpuAffinityPolicy::Scatter;
+        case CELEG_CPU_AFFINITY_NONE: return CpuAffinityPolicy::None;
+        case CELEG_CPU_AFFINITY_COMPACT: return CpuAffinityPolicy::Compact;
+        case CELEG_CPU_AFFINITY_SCATTER: return CpuAffinityPolicy::Scatter;
         default: throw std::invalid_argument("invalid CPU affinity policy");
     }
 }
 
 CpuKvCacheMode cpu_kv_cache_mode(int value) {
     switch (value) {
-        case 0: return CpuKvCacheMode::Fp32;
-        case 1: return CpuKvCacheMode::Bf16;
+        case CELEG_CPU_KV_CACHE_FP32: return CpuKvCacheMode::Fp32;
+        case CELEG_CPU_KV_CACHE_BF16: return CpuKvCacheMode::Bf16;
         default: throw std::invalid_argument("invalid CPU KV cache mode");
     }
 }
 
 CpuNumaMode cpu_numa_mode(int value) {
     switch (value) {
-        case 0: return CpuNumaMode::Disabled;
-        case 1: return CpuNumaMode::Local;
-        case 2: return CpuNumaMode::ReplicateWeights;
+        case CELEG_CPU_NUMA_DISABLED: return CpuNumaMode::Disabled;
+        case CELEG_CPU_NUMA_LOCAL: return CpuNumaMode::Local;
+        case CELEG_CPU_NUMA_REPLICATE_WEIGHTS: return CpuNumaMode::ReplicateWeights;
         default: throw std::invalid_argument("invalid CPU NUMA mode");
     }
 }
@@ -123,42 +131,45 @@ celeg_request_status status(serve::RequestStatus source) {
 namespace {
 WeightMode cuda_weight_mode(int value) {
     switch (value) {
-        case 0: return WeightMode::Bf16;
-        case 1: return WeightMode::Int8;
-        case 2: return WeightMode::Int4;
+        case CELEG_WEIGHT_MODE_BF16: return WeightMode::Bf16;
+        case CELEG_WEIGHT_MODE_INT8: return WeightMode::Int8;
+        case CELEG_WEIGHT_MODE_INT4: return WeightMode::Int4;
+        case CELEG_WEIGHT_MODE_NATIVE_GGUF: return WeightMode::NativeGguf;
         default: throw std::invalid_argument("invalid CUDA weight mode");
     }
 }
 
 KvCacheMode cuda_kv_cache_mode(int value) {
     switch (value) {
-        case 0: return KvCacheMode::Bf16;
-        case 1: return KvCacheMode::Int8;
+        case CELEG_CUDA_KV_CACHE_BF16: return KvCacheMode::Bf16;
+        case CELEG_CUDA_KV_CACHE_INT8: return KvCacheMode::Int8;
         default: throw std::invalid_argument("invalid CUDA KV cache mode");
     }
 }
 
 GemmBackend cuda_gemm_backend(int value) {
     switch (value) {
-        case 0: return GemmBackend::Cublas;
-        case 1: return GemmBackend::CublasLt;
+        case CELEG_CUDA_GEMM_CUBLAS: return GemmBackend::Cublas;
+        case CELEG_CUDA_GEMM_CUBLASLT: return GemmBackend::CublasLt;
         default: throw std::invalid_argument("invalid CUDA GEMM backend");
     }
 }
 
 AttentionMode cuda_attention_mode(int value) {
     switch (value) {
-        case 0: return AttentionMode::Single;
-        case 1: return AttentionMode::Segmented;
-        case 2: return AttentionMode::Auto;
+        case CELEG_CUDA_ATTENTION_SINGLE: return AttentionMode::Single;
+        case CELEG_CUDA_ATTENTION_SEGMENTED: return AttentionMode::Segmented;
+        case CELEG_CUDA_ATTENTION_AUTO: return AttentionMode::Auto;
         default: throw std::invalid_argument("invalid CUDA attention mode");
     }
 }
 
 SchedulerPolicy cuda_scheduler_policy(int value) {
     switch (value) {
-        case 0: return SchedulerPolicy::GuaranteedNoEvict;
-        case 1: return SchedulerPolicy::MaxUtilization;
+        case CELEG_CUDA_SCHEDULER_GUARANTEED_NO_EVICT:
+            return SchedulerPolicy::GuaranteedNoEvict;
+        case CELEG_CUDA_SCHEDULER_MAX_UTILIZATION:
+            return SchedulerPolicy::MaxUtilization;
         default: throw std::invalid_argument("invalid CUDA scheduler policy");
     }
 }

@@ -25,10 +25,21 @@ void require_bytes(const HostTensorView& tensor, std::size_t expected,
     }
 }
 
+std::size_t checked_byte_count(std::size_t count, std::size_t element_size,
+                               std::string_view name) {
+    if (count > std::numeric_limits<std::size_t>::max() / element_size) {
+        throw std::runtime_error("tensor byte count overflows for " + error_name(name));
+    }
+    return count * element_size;
+}
+
 }
 
 std::size_t tensor_element_count(std::span<const std::int64_t> shape,
                                  std::string_view context) {
+    if (shape.empty()) {
+        throw std::runtime_error("invalid tensor shape for " + error_name(context));
+    }
     std::size_t count = 1;
     for (const std::int64_t dimension : shape) {
         if (dimension <= 0 || count > std::numeric_limits<std::size_t>::max() /
@@ -66,12 +77,12 @@ std::vector<float> decode_tensor_f32(const HostTensorView& tensor,
     const std::size_t count = tensor_element_count(expected, name);
     std::vector<float> result(count);
     if (tensor.dtype == TensorDType::F32) {
-        require_bytes(tensor, count * sizeof(float), name);
+        require_bytes(tensor, checked_byte_count(count, sizeof(float), name), name);
         std::memcpy(result.data(), tensor.data, tensor.bytes);
         return result;
     }
     if (tensor.dtype == TensorDType::BF16 || tensor.dtype == TensorDType::F16) {
-        require_bytes(tensor, count * sizeof(std::uint16_t), name);
+        require_bytes(tensor, checked_byte_count(count, sizeof(std::uint16_t), name), name);
         for (std::size_t index = 0; index < count; ++index) {
             std::uint16_t bits = 0;
             std::memcpy(&bits, tensor.data + index * sizeof(bits), sizeof(bits));

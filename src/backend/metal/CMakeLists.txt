@@ -14,6 +14,7 @@ set(CELEG_METAL_MODEL_SOURCES
     src/backend/metal/model/runtime/pipelines.mm
     src/backend/metal/model/runtime/recurrent.mm
     src/backend/metal/model/runtime/resources.mm
+    src/backend/metal/model/runtime/linear_bindings.cpp
     src/backend/metal/model/runtime/runtime.mm
     src/backend/metal/model/runtime/state.mm
 )

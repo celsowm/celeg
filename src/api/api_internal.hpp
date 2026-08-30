@@ -19,8 +19,10 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <span>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 
 struct celeg_model {
     celeg_backend backend = CELEG_BACKEND_CPU;
@@ -68,6 +70,23 @@ celeg_status protect(Handle* handle, Function&& function) noexcept {
 }
 
 void require_size(uint32_t actual, size_t expected, const char* name);
+
+template <typename T>
+const T& decode_abi_struct(std::span<const std::byte> bytes,
+                           std::string_view backend) {
+    if (bytes.size() < sizeof(T)) {
+        throw std::invalid_argument(std::string(backend) + " options are truncated");
+    }
+    const auto* source = reinterpret_cast<const T*>(bytes.data());
+    if (source->struct_size < sizeof(T) || source->struct_size > bytes.size()) {
+        throw std::invalid_argument(std::string(backend) +
+                                    " options have an invalid struct size");
+    }
+    return *source;
+}
+
+void validate_backend_request(const celeg::BackendCreateRequest& request,
+                             celeg::BackendId expected);
 
 celeg::GenerationConfig generation(const celeg_generation_options& source);
 celeg::CpuModelOptions cpu_options(const celeg_cpu_model_config& source);

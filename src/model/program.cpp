@@ -261,6 +261,29 @@ void CompiledLatentStateLayout::validate() const {
     }
 }
 
+void CompiledAttentionExecution::validate() const {
+    if (rotary_width < 0) {
+        throw std::invalid_argument("compiled attention has a negative rotary width");
+    }
+    if (kind == AttentionExecutionKind::Standard && has_decoupled_rope) {
+        throw std::invalid_argument(
+            "standard compiled attention cannot have decoupled RoPE");
+    }
+    if (kind != AttentionExecutionKind::Standard && has_decoupled_rope && !has_rope) {
+        throw std::invalid_argument(
+            "latent compiled attention has decoupled RoPE without position encoding");
+    }
+    if (kind != AttentionExecutionKind::Standard && has_decoupled_rope &&
+        rope_pairing != RopePairingKind::SplitHalf) {
+        throw std::invalid_argument(
+            "latent compiled attention requires split-half RoPE pairing");
+    }
+    if (kind == AttentionExecutionKind::FactorizedLatent && !has_key_value) {
+        throw std::invalid_argument(
+            "factorized latent attention must own key/value projections");
+    }
+}
+
 bool CompiledModelProgram::has_moe() const {
     return std::any_of(layers.begin(), layers.end(), [](const auto& layer) {
         return std::holds_alternative<MoeLayerProgram>(layer.feed_forward);
@@ -300,6 +323,7 @@ void CompiledModelProgram::validate() const {
         }
         if (const auto* attention = std::get_if<CompiledAttentionProgram>(&layer.mixer)) {
             validate_attention_state_layout(attention->state_layout);
+            attention->execution.validate();
         }
         validate_feed_forward(layer.feed_forward);
         if (!std::isfinite(layer.residual.multiplier)) {

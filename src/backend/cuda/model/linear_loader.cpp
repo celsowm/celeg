@@ -4,17 +4,17 @@
 #include "celeg/backend/cuda/kernels/gguf.cuh"
 #include "celeg/checkpoint/gguf_blocks.hpp"
 #include "celeg/checkpoint/tensor_names.hpp"
+#include "celeg/checkpoint/tensor_codec.hpp"
 #include "celeg/checkpoint/packed/int8.hpp"
 #include "celeg/checkpoint/packed/int4.hpp"
 #include "celeg/checkpoint/packed/fp8.hpp"
 #include "celeg/checkpoint/packed/nvfp4.hpp"
-#include "weight_loader_internal.hpp"
 #include "linear_storage_internal.hpp"
+#include "linear_materialization.hpp"
 
 #include <cstddef>
 #include <algorithm>
 #include <cuda_bf16.h>
-#include <cuda_fp16.h>
 #include <cuda_runtime.h>
 #include <cstring>
 #include <filesystem>
@@ -24,6 +24,18 @@
 #include <vector>
 
 namespace celeg {
+
+const LinearWeight* WeightLoader::commit_linear(std::string_view name,
+                                                DeviceWeight&& weight,
+                                                int rows, int cols) {
+    if (rows <= 0 || cols <= 0 || weight.shape != std::vector<int64_t>{rows, cols}) {
+        throw std::runtime_error("final linear weight shape mismatch: " + std::string(name));
+    }
+    cuda_loader_detail::finish_linear_binding(weight, rows, cols);
+    auto [it, inserted] = weights_->tensors.emplace(std::string(name), std::move(weight));
+    if (!inserted) throw std::runtime_error("duplicate linear weight: " + std::string(name));
+    return &it->second.linear;
+}
 
 const LinearWeight* WeightLoader::load_linear_weight(
     const IWeightRepository& repo,
@@ -37,18 +49,17 @@ const LinearWeight* WeightLoader::load_linear_weight(
         return &cached->second.linear;
     }
     const WeightMode weight_mode = resolve_weight_mode(name);
-    if (has_packed_int8_matrix(repo, name)) {
-        const PackedInt8Matrix packed = load_packed_int8_matrix(repo, name, expected);
+    const auto source = classify_linear_source(repo, name, expected);
+    const LinearSource* classified_source = source ? &source.value() : nullptr;
+    if (const auto* packed_source = std::get_if<PackedInt8Source>(classified_source)) {
+        const PackedInt8Matrix& packed = packed_source->matrix;
         DeviceWeight weight;
         weight.shape = expected;
         cuda_loader_detail::bind_int8_storage(weight, packed.values, packed.scales);
-        cuda_loader_detail::finish_linear_binding(weight, packed.rows, packed.cols);
-        auto [it, inserted] = weights_->tensors.emplace(name, std::move(weight));
-        if (!inserted) throw std::runtime_error("duplicate linear weight: " + name);
-        return &it->second.linear;
+        return commit_linear(name, std::move(weight), packed.rows, packed.cols);
     }
-    if (has_packed_int4_matrix(repo, name)) {
-        const PackedInt4Matrix packed = load_packed_int4_matrix(repo, name, expected);
+    if (const auto* packed_source = std::get_if<PackedInt4Source>(classified_source)) {
+        const PackedInt4Matrix& packed = packed_source->matrix;
         const std::vector<float> values = dequantize_packed_int4(packed);
         std::vector<__nv_bfloat16> dense(values.size());
         for (size_t i = 0; i < values.size(); ++i) {
@@ -68,10 +79,7 @@ const LinearWeight* WeightLoader::load_linear_weight(
         } else {
             weight.linear.storage = Bf16LinearStorage{weight.bf16_storage.data()};
         }
-        cuda_loader_detail::finish_linear_binding(weight, packed.rows, packed.cols);
-        auto [it, inserted] = weights_->tensors.emplace(name, std::move(weight));
-        if (!inserted) throw std::runtime_error("duplicate linear weight: " + name);
-        return &it->second.linear;
+        return commit_linear(name, std::move(weight), packed.rows, packed.cols);
     }
     // Compressed-tensors on-disk quantized formats (FP8 W8A8, NVFP4 W4A4):
     // self-describing from the sidecar tensors the checkpoint actually
@@ -81,30 +89,24 @@ const LinearWeight* WeightLoader::load_linear_weight(
     // NVFP4-for-others split) resolves correctly with no per-tensor-name
     // rules in this loader. See docs/QWEN3_5_NVFP4_FP8_SUPPORT_PLAN.md
     // Phase 5.
-    if (has_packed_fp8_matrix(repo, name)) {
-        const PackedFp8Matrix packed = load_packed_fp8_matrix(repo, name, expected);
+    if (const auto* packed_source = std::get_if<PackedFp8Source>(classified_source)) {
+        const PackedFp8Matrix& packed = packed_source->matrix;
         DeviceWeight weight;
         weight.shape = expected;
         cuda_loader_detail::bind_fp8_storage(weight, packed.values, packed.scales);
-        cuda_loader_detail::finish_linear_binding(weight, packed.rows, packed.cols);
-        auto [it, inserted] = weights_->tensors.emplace(name, std::move(weight));
-        if (!inserted) throw std::runtime_error("duplicate linear weight: " + name);
-        return &it->second.linear;
+        return commit_linear(name, std::move(weight), packed.rows, packed.cols);
     }
-    if (has_packed_nvfp4_matrix(repo, name)) {
-        const PackedNvfp4Matrix packed = load_packed_nvfp4_matrix(repo, name, expected);
+    if (const auto* packed_source = std::get_if<PackedNvfp4Source>(classified_source)) {
+        const PackedNvfp4Matrix& packed = packed_source->matrix;
         DeviceWeight weight;
         weight.shape = expected;
         cuda_loader_detail::bind_nvfp4_storage(weight, packed.packed, packed.block_scales,
                                                packed.global_scale, packed.input_global_scale);
-        cuda_loader_detail::finish_linear_binding(weight, packed.rows, packed.cols);
-        auto [it, inserted] = weights_->tensors.emplace(name, std::move(weight));
-        if (!inserted) throw std::runtime_error("duplicate linear weight: " + name);
-        return &it->second.linear;
+        return commit_linear(name, std::move(weight), packed.rows, packed.cols);
     }
 
     const HostTensorView tensor = repo.tensor(name);
-    if (tensor.shape != expected || tensor.shape.size() != 2) {
+    if (!tensor_shape_matches(tensor.shape, expected) || expected.size() != 2) {
         throw std::runtime_error("unexpected linear tensor: " + name);
     }
     const int rows = static_cast<int>(tensor.shape[0]);
@@ -154,10 +156,7 @@ const LinearWeight* WeightLoader::load_linear_weight(
             } else {
                 weight.linear.storage = Bf16LinearStorage{weight.bf16_storage.data()};
             }
-            cuda_loader_detail::finish_linear_binding(weight, rows, cols);
-            auto [it, inserted] = weights_->tensors.emplace(name, std::move(weight));
-            if (!inserted) throw std::runtime_error("duplicate linear weight: " + name);
-            return &it->second.linear;
+            return commit_linear(name, std::move(weight), rows, cols);
         }
 
         if (weight_mode == WeightMode::NativeGguf) {
@@ -173,11 +172,7 @@ const LinearWeight* WeightLoader::load_linear_weight(
             segment.row_bytes = row_bytes;
             weight.gguf_segment_storage.push_back(std::move(raw_blocks));
             weight.linear.storage = GgufLinearStorage{{segment}};
-            cuda_loader_detail::finish_linear_binding(weight, rows, cols);
-            auto [it, inserted] =
-                weights_->tensors.emplace(name, std::move(weight));
-            if (!inserted) throw std::runtime_error("duplicate linear weight: " + name);
-            return &it->second.linear;
+            return commit_linear(name, std::move(weight), rows, cols);
         }
 
         DeviceBuffer<uint8_t> raw_blocks(tensor.bytes);
@@ -200,45 +195,24 @@ const LinearWeight* WeightLoader::load_linear_weight(
                 weight, reinterpret_cast<const std::byte*>(host_bf16.data()),
                 static_cast<size_t>(rows), static_cast<size_t>(cols),
                 weight_mode, weight.bf16_storage.data());
-            cuda_loader_detail::finish_linear_binding(weight, rows, cols);
-            auto [it, inserted] =
-                weights_->tensors.emplace(name, std::move(weight));
-            if (!inserted) throw std::runtime_error("duplicate linear weight: " + name);
-            return &it->second.linear;
+            return commit_linear(name, std::move(weight), rows, cols);
         }
 
         weight.linear.storage = Bf16LinearStorage{weight.bf16_storage.data()};
-        cuda_loader_detail::finish_linear_binding(weight, rows, cols);
-        auto [it, inserted] =
-            weights_->tensors.emplace(name, std::move(weight));
-        if (!inserted) throw std::runtime_error("duplicate linear weight: " + name);
-        return &it->second.linear;
+        return commit_linear(name, std::move(weight), rows, cols);
     }
 
     if (tensor.dtype != TensorDType::BF16 && tensor.dtype != TensorDType::F16 &&
         tensor.dtype != TensorDType::F32) {
         throw std::runtime_error("unexpected linear tensor dtype: " + name);
     }
-    const size_t count = cuda_loader_detail::checked_element_count(tensor.shape);
-    const size_t element_bytes = tensor.dtype == TensorDType::F32
-        ? sizeof(float)
-        : (tensor.dtype == TensorDType::F16 ? sizeof(__half) : sizeof(__nv_bfloat16));
-    if (tensor.bytes != count * element_bytes) {
-        throw std::runtime_error("invalid linear tensor byte count: " + name);
-    }
+    const size_t count = tensor_element_count(tensor.shape, name);
 
     std::vector<__nv_bfloat16> dense;
     if (tensor.dtype == TensorDType::F16 || tensor.dtype == TensorDType::F32) {
+        const std::vector<float> decoded = decode_tensor_f32(tensor, expected, name);
         dense.resize(count);
-        if (tensor.dtype == TensorDType::F16) {
-            const __half* src = reinterpret_cast<const __half*>(tensor.data);
-            for (size_t i = 0; i < count; ++i) {
-                dense[i] = __float2bfloat16(__half2float(src[i]));
-            }
-        } else {
-            const float* src = reinterpret_cast<const float*>(tensor.data);
-            for (size_t i = 0; i < count; ++i) dense[i] = __float2bfloat16(src[i]);
-        }
+        for (size_t i = 0; i < count; ++i) dense[i] = __float2bfloat16(decoded[i]);
     }
     const std::byte* dense_data = tensor.dtype == TensorDType::BF16
         ? tensor.data
@@ -255,11 +229,7 @@ const LinearWeight* WeightLoader::load_linear_weight(
                             cudaMemcpyHostToDevice));
         weight.linear.storage = Bf16LinearStorage{weight.bf16_storage.data()};
     }
-    cuda_loader_detail::finish_linear_binding(weight, rows, cols);
-
-    auto [it, inserted] = weights_->tensors.emplace(name, std::move(weight));
-    if (!inserted) throw std::runtime_error("duplicate linear weight: " + name);
-    return &it->second.linear;
+    return commit_linear(name, std::move(weight), rows, cols);
 }
 
 const LinearWeight* WeightLoader::load_concat_linear_weight(
@@ -289,11 +259,8 @@ const LinearWeight* WeightLoader::load_concat_linear_weight(
         DeviceWeight weight;
         weight.shape = {rows, cols};
         cuda_loader_detail::bind_int8_storage(weight, values, scales);
-        cuda_loader_detail::finish_linear_binding(
-            weight, static_cast<int>(rows), static_cast<int>(cols));
-        auto [it, inserted] = weights_->tensors.emplace(synthetic_name, std::move(weight));
-        if (!inserted) throw std::runtime_error("duplicate concat weight: " + synthetic_name);
-        return &it->second.linear;
+        return commit_linear(synthetic_name, std::move(weight),
+                             static_cast<int>(rows), static_cast<int>(cols));
     }
     if (std::all_of(parts.begin(), parts.end(), [&](const auto& part) {
             return has_packed_fp8_matrix(repo, part.first);
@@ -316,11 +283,8 @@ const LinearWeight* WeightLoader::load_concat_linear_weight(
         DeviceWeight weight;
         weight.shape = {rows, cols};
         cuda_loader_detail::bind_fp8_storage(weight, values, scales);
-        cuda_loader_detail::finish_linear_binding(
-            weight, static_cast<int>(rows), static_cast<int>(cols));
-        auto [it, inserted] = weights_->tensors.emplace(synthetic_name, std::move(weight));
-        if (!inserted) throw std::runtime_error("duplicate concat weight: " + synthetic_name);
-        return &it->second.linear;
+        return commit_linear(synthetic_name, std::move(weight),
+                             static_cast<int>(rows), static_cast<int>(cols));
     }
     if (std::all_of(parts.begin(), parts.end(), [&](const auto& part) {
             return has_packed_nvfp4_matrix(repo, part.first);
@@ -358,11 +322,8 @@ const LinearWeight* WeightLoader::load_concat_linear_weight(
         weight.shape = {rows, cols};
         cuda_loader_detail::bind_nvfp4_storage(weight, packed_values, block_scales,
                                                *global_scale, *input_global_scale);
-        cuda_loader_detail::finish_linear_binding(
-            weight, static_cast<int>(rows), static_cast<int>(cols));
-        auto [it, inserted] = weights_->tensors.emplace(synthetic_name, std::move(weight));
-        if (!inserted) throw std::runtime_error("duplicate concat weight: " + synthetic_name);
-        return &it->second.linear;
+        return commit_linear(synthetic_name, std::move(weight),
+                             static_cast<int>(rows), static_cast<int>(cols));
     }
     int64_t common_width = -1;
     int64_t total_rows = 0;
@@ -373,7 +334,7 @@ const LinearWeight* WeightLoader::load_concat_linear_weight(
     converted_dense.reserve(parts.size());
     for (const auto& [name, expected] : parts) {
         const HostTensorView tensor = repo.tensor(name);
-        if (tensor.shape != expected || tensor.shape.size() != 2) {
+        if (!tensor_shape_matches(tensor.shape, expected) || expected.size() != 2) {
             throw std::runtime_error("unexpected concatenated tensor: " + name);
         }
         if (common_width < 0) common_width = tensor.shape[1];
@@ -389,26 +350,14 @@ const LinearWeight* WeightLoader::load_concat_linear_weight(
             tensor.dtype != TensorDType::F32) {
             throw std::runtime_error("unexpected concat tensor dtype: " + name);
         }
-        const size_t count = cuda_loader_detail::checked_element_count(tensor.shape);
-        const size_t element_bytes = tensor.dtype == TensorDType::F32
-            ? sizeof(float)
-            : (tensor.dtype == TensorDType::F16 ? sizeof(__half) : sizeof(__nv_bfloat16));
-        if (tensor.bytes != count * element_bytes) {
-            throw std::runtime_error("invalid concatenated tensor bytes: " + name);
-        }
+        const size_t count = tensor_element_count(tensor.shape, name);
         if (tensor.dtype != TensorDType::BF16) {
             converted_dense.emplace_back(count);
             auto& converted = converted_dense.back();
-            if (tensor.dtype == TensorDType::F16) {
-                const __half* source = reinterpret_cast<const __half*>(tensor.data);
-                for (size_t i = 0; i < count; ++i) {
-                    converted[i] = __float2bfloat16(__half2float(source[i]));
-                }
-            } else {
-                const float* source = reinterpret_cast<const float*>(tensor.data);
-                for (size_t i = 0; i < count; ++i) {
-                    converted[i] = __float2bfloat16(source[i]);
-                }
+            const std::vector<float> decoded = decode_tensor_f32(
+                tensor, expected, name);
+            for (size_t i = 0; i < count; ++i) {
+                converted[i] = __float2bfloat16(decoded[i]);
             }
             HostTensorView converted_view = tensor;
             converted_view.dtype = TensorDType::BF16;
@@ -473,12 +422,9 @@ const LinearWeight* WeightLoader::load_concat_linear_weight(
             } else {
                 weight.linear.storage = Bf16LinearStorage{weight.bf16_storage.data()};
             }
-            cuda_loader_detail::finish_linear_binding(
-                weight, static_cast<int>(total_rows), static_cast<int>(common_width));
-            auto [it, inserted] =
-                weights_->tensors.emplace(synthetic_name, std::move(weight));
-            if (!inserted) throw std::runtime_error("duplicate linear weight: " + synthetic_name);
-            return &it->second.linear;
+            return commit_linear(synthetic_name, std::move(weight),
+                                 static_cast<int>(total_rows),
+                                 static_cast<int>(common_width));
         }
 
         if (weight_mode == WeightMode::NativeGguf) {
@@ -510,12 +456,9 @@ const LinearWeight* WeightLoader::load_concat_linear_weight(
                 segments.push_back(segment);
                 row_offset += static_cast<int>(v.shape[0]);
             }
-            cuda_loader_detail::finish_linear_binding(
-                weight, static_cast<int>(total_rows), static_cast<int>(common_width));
-            auto [it, inserted] =
-                weights_->tensors.emplace(synthetic_name, std::move(weight));
-            if (!inserted) throw std::runtime_error("duplicate linear weight: " + synthetic_name);
-            return &it->second.linear;
+            return commit_linear(synthetic_name, std::move(weight),
+                                 static_cast<int>(total_rows),
+                                 static_cast<int>(common_width));
         }
 
         DeviceWeight weight;
@@ -555,21 +498,15 @@ const LinearWeight* WeightLoader::load_concat_linear_weight(
                 weight, reinterpret_cast<const std::byte*>(host_bf16.data()),
                 static_cast<size_t>(total_rows), static_cast<size_t>(common_width),
                 weight_mode, weight.bf16_storage.data());
-            cuda_loader_detail::finish_linear_binding(
-                weight, static_cast<int>(total_rows), static_cast<int>(common_width));
-            auto [it, inserted] =
-                weights_->tensors.emplace(synthetic_name, std::move(weight));
-            if (!inserted) throw std::runtime_error("duplicate linear weight: " + synthetic_name);
-            return &it->second.linear;
+            return commit_linear(synthetic_name, std::move(weight),
+                                 static_cast<int>(total_rows),
+                                 static_cast<int>(common_width));
         }
 
         weight.linear.storage = Bf16LinearStorage{weight.bf16_storage.data()};
-        cuda_loader_detail::finish_linear_binding(
-            weight, static_cast<int>(total_rows), static_cast<int>(common_width));
-        auto [it, inserted] =
-            weights_->tensors.emplace(synthetic_name, std::move(weight));
-        if (!inserted) throw std::runtime_error("duplicate linear weight: " + synthetic_name);
-        return &it->second.linear;
+        return commit_linear(synthetic_name, std::move(weight),
+                             static_cast<int>(total_rows),
+                             static_cast<int>(common_width));
     }
 
     DeviceWeight weight;
@@ -606,7 +543,7 @@ const LinearWeight* WeightLoader::load_concat_linear_weight(
         __nv_bfloat16* dest = weight.bf16_storage.data();
         size_t offset = 0;
         for (const auto& view : views) {
-            const size_t count = cuda_loader_detail::checked_element_count(view.shape);
+            const size_t count = tensor_element_count(view.shape, synthetic_name);
             CELEG_CUDA(cudaMemcpy(dest + offset, view.data,
                                 count * sizeof(__nv_bfloat16),
                                 cudaMemcpyHostToDevice));
@@ -614,12 +551,9 @@ const LinearWeight* WeightLoader::load_concat_linear_weight(
         }
         weight.linear.storage = Bf16LinearStorage{weight.bf16_storage.data()};
     }
-    cuda_loader_detail::finish_linear_binding(
-        weight, static_cast<int>(total_rows), static_cast<int>(common_width));
-
-    auto [it, inserted] = weights_->tensors.emplace(synthetic_name, std::move(weight));
-    if (!inserted) throw std::runtime_error("duplicate linear weight: " + synthetic_name);
-    return &it->second.linear;
+    return commit_linear(synthetic_name, std::move(weight),
+                         static_cast<int>(total_rows),
+                         static_cast<int>(common_width));
 }
 
 }
