@@ -43,9 +43,6 @@ struct CudaCompiledModel {
     static constexpr int kPrefillAttnChunkTokens = kAttentionPrefillChunkTokens;
     static constexpr int kMaxGemmAttentionRows = kAttentionMaxGemmRows;
 
-    using SpeculativeLayerSnapshot = CudaSpeculativeLayerState;
-    using SpeculativeStateSnapshot = CudaSpeculativeState;
-
     CudaModelResources resources_;
     CudaWeightCache& weight_cache_;
     std::shared_ptr<const RuntimeContext> runtime_;
