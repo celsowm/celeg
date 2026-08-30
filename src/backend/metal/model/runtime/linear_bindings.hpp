@@ -2,7 +2,6 @@
 
 #include "celeg/quantization/ggml.hpp"
 
-#include <cstdint>
 #include <optional>
 
 namespace celeg::metal_model_detail {
@@ -21,11 +20,12 @@ enum class MetalLinearStorage {
 struct MetalLinearBinding {
     GgmlType source = GgmlType::Unknown;
     MetalLinearStorage storage = MetalLinearStorage::Float32;
-    std::uint32_t block_size = 0;
 
     bool supports_width(int cols) const noexcept {
-        return cols > 0 && block_size != 0 &&
-               cols % static_cast<int>(block_size) == 0;
+        if (cols <= 0) return false;
+        const GgmlTypeTrait trait = ggml_type_trait(source);
+        return trait.block_size != 0 &&
+               cols % static_cast<int>(trait.block_size) == 0;
     }
 };
 
