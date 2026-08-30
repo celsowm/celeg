@@ -25,8 +25,6 @@ void CudaWeightSetup::load(CudaCompiledModel& model,
                            const std::string& model_path,
                            const detail::ModelBootstrap& bootstrap,
                            LayerLoader load_layers) {
-    CudaManagedWeightAllocationScope managed_scope(
-        model.resources_.options().managed_weights);
     model.resources_.weights_ = model.weight_cache_.acquire(
         model_path, model.resources_.options().weight_mode,
         model.resources_.options().expert_offload.fingerprint() +
