@@ -6,6 +6,8 @@ foreach(test_name IN ITEMS
     cpu_quantization_test
     cpu_kernels_test
     cpu_linear_kernels_test
+    cpu_segmented_linear_test
+    cpu_elementwise_kernels_test
     cpu_recurrent_kernels_test
     cpu_gguf_kernels_test
     cpu_kv_cache_test
