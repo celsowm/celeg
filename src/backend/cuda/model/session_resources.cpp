@@ -13,7 +13,7 @@ void CudaCompiledModel::reset(bool allocate_local_kv) {
     mtp_candidate_ready_ = false;
     mtp_candidate_used_ = false;
     ++storage_generation_;
-    allocate_local_kv = allocate_local_kv && resources_.options_.allocate_local_kv_cache;
+    allocate_local_kv = allocate_local_kv && resources_.options().allocate_local_kv_cache;
     if (allocate_local_kv && !local_kv_cache_available_) {
         for (Layer& layer : resources_.layers_) {
             AttentionLayer* attention = as_attention(layer);
@@ -24,7 +24,7 @@ void CudaCompiledModel::reset(bool allocate_local_kv) {
                     !std::holds_alternative<SharedKvConsumer>(layout.kv_sharing);
                 if (!owns_latent_state) continue;
                 const auto& latent = *layout.latent_state();
-                if (resources_.options_.kv_cache_mode == KvCacheMode::Int8) {
+                if (resources_.options().kv_cache_mode == KvCacheMode::Int8) {
                     throw std::invalid_argument(
                         "CUDA latent attention requires BF16 local state storage");
                 }
@@ -45,7 +45,7 @@ void CudaCompiledModel::reset(bool allocate_local_kv) {
                 static_cast<size_t>(layout.key_value_width());
             const size_t scale_elements = static_cast<size_t>(max_context_) *
                 static_cast<size_t>(layout.key_value_heads);
-            if (resources_.options_.kv_cache_mode == KvCacheMode::Int8) {
+            if (resources_.options().kv_cache_mode == KvCacheMode::Int8) {
                 attention->state = OrdinaryInt8KvState{};
                 auto& ordinary_state = std::get<OrdinaryInt8KvState>(attention->state);
                 ordinary_state.key_cache.reset(cache_elements);
@@ -67,7 +67,7 @@ void CudaCompiledModel::reset(bool allocate_local_kv) {
                 static_cast<size_t>(layout.key_value_width());
             const size_t scale_elements = static_cast<size_t>(max_context_) *
                 static_cast<size_t>(layout.key_value_heads);
-            if (resources_.options_.kv_cache_mode == KvCacheMode::Int8) {
+            if (resources_.options().kv_cache_mode == KvCacheMode::Int8) {
                 attention->state = OrdinaryInt8KvState{};
                 auto& ordinary_state = std::get<OrdinaryInt8KvState>(attention->state);
                 ordinary_state.key_cache.reset(cache_elements);
