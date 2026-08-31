@@ -2,6 +2,8 @@
 
 #include "celeg/model/graph.hpp"
 
+#include <array>
+#include <cstdint>
 #include <cuda_bf16.h>
 #include <cuda_runtime.h>
 
@@ -12,6 +14,9 @@ enum class CudaQkPositionMode {
     DeviceScalar,
     MultiAxisDevice,
 };
+
+struct CudaCompiledModel;
+struct AttentionLayer;
 
 struct CudaAttentionQkPreparation {
     const AttentionSpec* layout = nullptr;
@@ -43,5 +48,13 @@ struct CudaLatentQkPreparation {
 
 void prepare_cuda_attention_qk(const CudaAttentionQkPreparation& preparation);
 void prepare_cuda_latent_attention_qk(const CudaLatentQkPreparation& preparation);
+
+void prepare_cuda_token_attention_qk(
+    CudaCompiledModel& model,
+    AttentionLayer& attention,
+    __nv_bfloat16* query,
+    __nv_bfloat16* key,
+    bool paged,
+    const std::array<int32_t, 3>* rope_position);
 
 }
