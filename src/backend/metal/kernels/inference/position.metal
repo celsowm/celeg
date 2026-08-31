@@ -151,6 +151,7 @@ kernel void celeg_qk_norm_mrope_store_kv(
     constant uint& page_tokens [[buffer(17)]],
     uint head [[thread_position_in_grid]]) {
     const uint pairs = head_dim / 2;
+    if (sections[0] + sections[1] + sections[2] != pairs) return;
     if (head < query_heads) {
         const size_t base = static_cast<size_t>(head) * head_dim;
         float sum = 0.0f;
