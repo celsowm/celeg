@@ -3,12 +3,11 @@
 #include "attention_latent_dispatch.hpp"
 #include "attention_layer_support.hpp"
 #include "attention_projection.hpp"
+#include "attention_qk_prepare.hpp"
 #include "residual_fusion.hpp"
 #include "backend/cuda/phase_profile.hpp"
 #include "kernels/kernels.cuh"
 #include "kernels/attention_output.hpp"
-#include "kernels/rope_pairing.hpp"
-#include "backend/cuda/weight_layout.hpp"
 
 #include <stdexcept>
 
@@ -51,12 +50,14 @@ void CudaCompiledModel::enqueue_decode_factorized_latent_attention(
     project_cuda_factorized_latent_attention_qkv(*this, *attention);
     decode_phase_profile().end(DecodePhase::Projection, stream_.get());
 
-    launch_qk_norm_rope_positions(
-        workspace_.latent_query_rope_.data(), workspace_.latent_key_rope_.data(),
-        nullptr, nullptr, 1, layout.query_heads, 1, latent.rope_head_dim,
-        position_device_.data(), static_cast<float>(layout.rope_position()->theta),
-        1.0f, qk_norm_epsilon, false, layout.rope_position()->pairing,
-        lower_cuda_rope_scaling(*layout.rope_position()), stream_.get());
+    prepare_cuda_factorized_latent_attention_qk({
+        .layout = &layout,
+        .query_rope = workspace_.latent_query_rope_.data(),
+        .key_rope = workspace_.latent_key_rope_.data(),
+        .norm_epsilon = qk_norm_epsilon,
+        .rows = 1,
+        .device_position = position_device_.data(),
+        .stream = stream_.get()});
     store_cuda_latent_kv_contiguous(*this, *attention, owner);
     dispatch_cuda_latent_attention_contiguous(*this, *attention, owner);
     launch_factorized_latent_value({
