@@ -1,5 +1,6 @@
 #include "detail/compiled_model.hpp"
 #include "attention_decode_dispatch.hpp"
+#include "attention_layer_support.hpp"
 #include "backend/cuda/attention_norm.hpp"
 #include "kernels/kernels.cuh"
 #include "backend/cuda/paged_kv.hpp"
@@ -51,12 +52,8 @@ void CudaCompiledModel::store_and_attend_token_contiguous(
         .position_mode = CudaDecodePositionMode::HostScalar,
         .block_sparse = block_sparse,
         .query = q,
-        .bf16_kv = {.keys = owner.key_cache_bf16(),
-                    .values = owner.value_cache_bf16()},
-        .int8_kv = {.keys = owner.key_cache_int8_ptr(),
-                    .values = owner.value_cache_int8_ptr(),
-                    .key_scales = owner.key_cache_scales_ptr(),
-                    .value_scales = owner.value_cache_scales_ptr()},
+        .bf16_kv = cuda_bf16_kv_view(owner),
+        .int8_kv = cuda_int8_kv_view(owner),
         .out = workspace_.op_output_.data(),
         .geometry = make_cuda_gqa_geometry(layout, owner_layout),
         .extent = block_sparse
@@ -270,14 +267,10 @@ void CudaCompiledModel::run_token_latent_attention_paged(
             resources_.program_.final_norm.epsilon, false,
             lower_cuda_rope_scaling(*rope), rope->pairing, stream_.get());
     }
-    const int cache_model_layer = attention.kv_owner_layer >= 0
-        ? attention.kv_owner_layer : layer_index;
-    const int slot = paged_kv.attention_slot(cache_model_layer);
+    const CudaAttentionOwner resolved_owner = resolve_cuda_attention_owner(
+        attention, layer_index, resources_.layers_);
+    const int slot = paged_kv.attention_slot(resolved_owner.model_layer);
     if (slot < 0) throw std::logic_error("latent attention has no page slot");
-    AttentionLayer* owner = attention.kv_owner_layer >= 0
-        ? as_attention(resources_.layers_.at(static_cast<size_t>(cache_model_layer)))
-        : &attention;
-    if (!owner) throw std::logic_error("CUDA latent KV owner is not attention");
     if (attention.latent_key && attention.latent_value) {
         launch_store_latent_paged_batch(
             workspace_.latent_key_.data(), workspace_.latent_value_.data(),
@@ -340,25 +333,23 @@ void CudaCompiledModel::run_token_attention(
         return;
     }
 
-    AttentionLayer* owner = &attention;
-    if (attention.kv_owner_layer >= 0) {
-        owner = as_attention(resources_.layers_.at(
-            static_cast<size_t>(attention.kv_owner_layer)));
-        if (!owner) throw std::logic_error("CUDA shared KV owner is not attention");
-    }
-    const AttentionSpec& owner_layout = owner->layout;
+    const CudaAttentionOwner resolved_owner = resolve_cuda_attention_owner(
+        attention, layer_index, resources_.layers_);
+    AttentionLayer& owner = *resolved_owner.layer;
+    const AttentionSpec& owner_layout = owner.layout;
 
-    __nv_bfloat16* q = workspace_.qkv_output_.data();
-    const int query_projection_width = attention.query->rows;
+    const CudaQkvProjectionView qkv = make_cuda_qkv_projection_view(
+        attention, workspace_.qkv_output_.data());
+    __nv_bfloat16* q = qkv.query;
+    __nv_bfloat16* k = qkv.key;
+    __nv_bfloat16* v = qkv.value;
     const bool output_gate = layout.output_gate.has_value();
     const bool gate_packed = output_gate && layout.output_gate->packed_with_query;
-    __nv_bfloat16* k = q + query_projection_width;
-    __nv_bfloat16* v = k + layout.key_value_width();
     {
         auto native_fanout = native_fanout_scope(
             workspace_.normed_.data(), 1, resources_.program_.hidden);
         linear(workspace_.normed_.data(), *attention.query, q,
-               1, query_projection_width, resources_.program_.hidden);
+               1, qkv.query_projection_width, resources_.program_.hidden);
         if (attention.key && attention.value) {
             linear(workspace_.normed_.data(), *attention.key, k,
                    1, layout.key_value_width(), resources_.program_.hidden);
@@ -412,13 +403,11 @@ void CudaCompiledModel::run_token_attention(
 
     const AttentionCapability plan = token_attention_plan(attention, owner_layout, kv);
     if (kv.paged()) {
-        const int cache_model_layer = attention.kv_owner_layer >= 0
-            ? attention.kv_owner_layer : layer_index;
-        const int slot = kv.paged_kv->attention_slot(cache_model_layer);
+        const int slot = kv.paged_kv->attention_slot(resolved_owner.model_layer);
         if (slot < 0) throw std::logic_error("attention layer has no page slot");
         store_and_attend_token_paged(attention, owner_layout, plan, slot, q, k, v, kv);
     } else {
-        store_and_attend_token_contiguous(attention, *owner, plan, q, k, v);
+        store_and_attend_token_contiguous(attention, owner, plan, q, k, v);
     }
 
     if (output_gate) {
