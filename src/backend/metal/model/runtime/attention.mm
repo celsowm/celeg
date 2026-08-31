@@ -1,6 +1,7 @@
 #include "detail.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 
 namespace celeg {
@@ -33,9 +34,11 @@ bool split_half_rope(const CompiledAttentionProgram& attention) {
 
 void MetalModel::Impl::encode_attention(
     id<MTLComputeCommandEncoder> encoder, Layer& layer,
-    const CompiledAttentionProgram& attention) {
+    const CompiledAttentionProgram& attention,
+    const std::array<int32_t, 3>* rope_position) {
     const AlibiBiasSpec* alibi = attention_alibi(attention);
     const RelativePositionBiasSpec* relative = attention_relative_bias(attention);
+    const MultiAxisRopeSpec* multi = attention.semantics.multi_axis_position();
     if (alibi && !layer.alibi_slopes) {
         layer.alibi_slopes = buffer(alibi->slopes);
     }
@@ -66,19 +69,40 @@ void MetalModel::Impl::encode_attention(
     set_bytes(encoder, &query_heads, sizeof(query_heads), 7);
     set_bytes(encoder, &key_heads, sizeof(key_heads), 8);
     set_bytes(encoder, &head_dim, sizeof(head_dim), 9);
-    set_bytes(encoder, &position_value, sizeof(position_value), 10);
-    set_bytes(encoder, &layer.rope_theta, sizeof(layer.rope_theta), 11);
-    set_bytes(encoder, &query_scale, sizeof(query_scale), 12);
-    set_bytes(encoder, &layer.query_norm_epsilon,
-              sizeof(layer.query_norm_epsilon), 13);
-    set_bytes(encoder, &layer.key_norm_epsilon,
-              sizeof(layer.key_norm_epsilon), 14);
-    set_bytes(encoder, &page_tokens, sizeof(page_tokens), 15);
-    dispatch(encoder,
-             split_half_rope(attention)
-                 ? "celeg_qk_norm_rope_store_kv_split"
-                 : "celeg_qk_norm_rope_store_kv",
-             std::max(query_heads, key_heads));
+    if (multi) {
+        const std::array<int32_t, 3>& resolved_position =
+            rope_position ? *rope_position : next_rope_position;
+        const std::array<uint32_t, 3> sections{
+            static_cast<uint32_t>(multi->sections[0]),
+            static_cast<uint32_t>(multi->sections[1]),
+            static_cast<uint32_t>(multi->sections[2])};
+        set_bytes(encoder, &position_value, sizeof(position_value), 10);
+        set_bytes(encoder, resolved_position.data(), sizeof(resolved_position), 11);
+        set_bytes(encoder, sections.data(), sizeof(sections), 12);
+        set_bytes(encoder, &layer.rope_theta, sizeof(layer.rope_theta), 13);
+        set_bytes(encoder, &query_scale, sizeof(query_scale), 14);
+        set_bytes(encoder, &layer.query_norm_epsilon,
+                  sizeof(layer.query_norm_epsilon), 15);
+        set_bytes(encoder, &layer.key_norm_epsilon,
+                  sizeof(layer.key_norm_epsilon), 16);
+        set_bytes(encoder, &page_tokens, sizeof(page_tokens), 17);
+        dispatch(encoder, "celeg_qk_norm_mrope_store_kv",
+                 std::max(query_heads, key_heads));
+    } else {
+        set_bytes(encoder, &position_value, sizeof(position_value), 10);
+        set_bytes(encoder, &layer.rope_theta, sizeof(layer.rope_theta), 11);
+        set_bytes(encoder, &query_scale, sizeof(query_scale), 12);
+        set_bytes(encoder, &layer.query_norm_epsilon,
+                  sizeof(layer.query_norm_epsilon), 13);
+        set_bytes(encoder, &layer.key_norm_epsilon,
+                  sizeof(layer.key_norm_epsilon), 14);
+        set_bytes(encoder, &page_tokens, sizeof(page_tokens), 15);
+        dispatch(encoder,
+                 split_half_rope(attention)
+                     ? "celeg_qk_norm_rope_store_kv_split"
+                     : "celeg_qk_norm_rope_store_kv",
+                 std::max(query_heads, key_heads));
+    }
 
     const float attention_scale = 1.0f /
         std::sqrt(static_cast<float>(layer.head_dim));
