@@ -11,6 +11,11 @@ enum class CudaDecodePositionMode {
     DeviceCounter,
 };
 
+struct CudaDecodeAttentionPolicy {
+    AttentionCapability plan{};
+    const BlockSparsePattern* block_sparse = nullptr;
+};
+
 struct CudaContiguousDecodeDispatch {
     AttentionCapability plan{};
     CudaDecodePositionMode position_mode = CudaDecodePositionMode::HostScalar;
@@ -25,6 +30,16 @@ struct CudaContiguousDecodeDispatch {
     const float* alibi_slopes = nullptr;
     cudaStream_t stream = nullptr;
 };
+
+CudaDecodeAttentionPolicy plan_cuda_decode_attention(
+    const AttentionSpec& layout,
+    KvCacheMode kv_format,
+    AttentionKvLayout kv_layout,
+    AttentionPositionSource position_source,
+    bool fast_attention,
+    bool segmented_attention,
+    bool has_alibi,
+    int owner_head_dim);
 
 GqaGeometry make_cuda_gqa_geometry(
     const AttentionSpec& layout,
