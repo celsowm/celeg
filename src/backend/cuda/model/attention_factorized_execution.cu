@@ -1,4 +1,6 @@
 #include "detail/compiled_model.hpp"
+#include "attention_kv_store.hpp"
+#include "attention_latent_dispatch.hpp"
 #include "attention_layer_support.hpp"
 #include "residual_fusion.hpp"
 #include "backend/cuda/attention_norm.hpp"
@@ -94,27 +96,8 @@ void CudaCompiledModel::enqueue_decode_factorized_latent_attention(
         position_device_.data(), static_cast<float>(layout.rope_position()->theta),
         1.0f, qk_norm_epsilon, false, layout.rope_position()->pairing,
         lower_cuda_rope_scaling(*layout.rope_position()), stream_.get());
-    launch_store_latent_device(
-        workspace_.latent_key_.data(), workspace_.latent_value_.data(),
-        workspace_.latent_key_rope_.data(), owner.latent_key_cache_ptr(),
-        owner.latent_value_cache_ptr(), owner.latent_key_rope_cache_ptr(),
-        position_device_.data(), latent.latent_rank, latent.rope_head_dim,
-        stream_.get());
-    launch_latent_attention_device({
-        .query = {.content = workspace_.latent_query_content_.data(),
-                  .rope = workspace_.latent_query_rope_.data()},
-        .kv = {.keys = owner.latent_key_cache_ptr(),
-               .values = owner.latent_value_cache_ptr(),
-               .key_rope = owner.latent_key_rope_cache_ptr()},
-        .out = workspace_.op_output_.data(),
-        .extent = {.position = position_device_.data()},
-        .alibi_slopes = attention->alibi_slopes.data(),
-        .geometry = {.query_heads = layout.query_heads,
-                     .latent_rank = latent.latent_rank,
-                     .rotary_width = latent.rope_head_dim,
-                     .score_scale = layout.query_scale,
-                     .sliding_window = layout.sliding_window_size()},
-        .stream = stream_.get()});
+    store_cuda_latent_kv_contiguous(*this, *attention, owner);
+    dispatch_cuda_latent_attention_contiguous(*this, *attention, owner);
     launch_factorized_latent_value({
         .latent_output = workspace_.op_output_.data(),
         .expansion = latent_expansion,
