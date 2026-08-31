@@ -6,7 +6,6 @@ void run_projected_latent_attention(
     CudaCompiledModel& model,
     AttentionLayer& attention,
     AttentionLayer& owner,
-    LayerCommon& common_layer,
     const CompiledLayerProgram& semantics,
     int rows) {
     require_cuda_projected_latent_bindings(attention);
