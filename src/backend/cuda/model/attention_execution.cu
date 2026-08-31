@@ -40,26 +40,12 @@ void CudaCompiledModel::enqueue_decode_standard_attention(
         throw std::logic_error("standard CUDA attention has a non-standard descriptor");
     }
 
-    const CudaQkvProjectionView qkv = make_cuda_qkv_projection_view(
-        *attention, workspace_.qkv_output_.data());
+    decode_phase_profile().begin(stream_.get());
+    const CudaQkvProjectionView qkv = project_standard_attention_qkv(*attention);
     __nv_bfloat16* q = qkv.query;
     __nv_bfloat16* k = qkv.key;
     __nv_bfloat16* v = qkv.value;
     const bool output_gate = layout.output_gate.has_value();
-
-    decode_phase_profile().begin(stream_.get());
-    {
-        auto native_fanout = native_fanout_scope(
-            workspace_.normed_.data(), 1, resources_.program_.hidden);
-        linear(workspace_.normed_.data(), *attention->query, q,
-               1, qkv.query_projection_width, resources_.program_.hidden);
-        if (attention->key && attention->value) {
-            linear(workspace_.normed_.data(), *attention->key, k,
-                   1, layout.key_value_width(), resources_.program_.hidden);
-            linear(workspace_.normed_.data(), *attention->value, v,
-                   1, layout.key_value_width(), resources_.program_.hidden);
-        }
-    }
     decode_phase_profile().end(DecodePhase::Projection, stream_.get());
 
     decode_phase_profile().begin(stream_.get());
