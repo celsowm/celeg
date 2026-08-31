@@ -1,13 +1,12 @@
 #include "detail/compiled_model.hpp"
 #include "attention_contiguous_dispatch.hpp"
 #include "attention_kv_store.hpp"
-#include "attention_latent_dispatch.hpp"
 #include "attention_layer_support.hpp"
 #include "attention_output_gate.hpp"
 #include "attention_projection.hpp"
 #include "attention_qk_prepare.hpp"
+#include "attention_token_latent.hpp"
 #include "attention_token_qk.hpp"
-#include "backend/cuda/paged_kv.hpp"
 
 #include <stdexcept>
 
@@ -31,16 +30,9 @@ void CudaCompiledModel::store_and_attend_token_paged(
 void CudaCompiledModel::run_token_latent_attention_paged(
     AttentionLayer& attention, const CompiledLayerProgram& semantics,
     int layer_index, const TokenKvPolicy& kv) {
+    require_cuda_token_latent_attention_paged(*this, attention);
     const AttentionSpec& layout = attention.layout;
-    PhysicalPagedKvCache& paged_kv = *kv.paged_kv;
-    if (resources_.options().kv_cache_mode == KvCacheMode::Int8) {
-        throw std::invalid_argument(
-            "CUDA latent attention requires BF16 paged state storage");
-    }
-    if (layout.output_gate.has_value() || layout.multi_axis_position()) {
-        throw std::invalid_argument(
-            "CUDA latent attention does not support query gates or M-RoPE yet");
-    }
+
     project_cuda_latent_attention_qkv(*this, attention);
     prepare_cuda_latent_attention_qk({
         .layout = &layout,
@@ -51,15 +43,7 @@ void CudaCompiledModel::run_token_latent_attention_paged(
         .position_mode = CudaQkPositionMode::HostScalar,
         .host_position = session_.position_,
         .stream = stream_.get()});
-    const CudaAttentionOwner resolved_owner = resolve_cuda_attention_owner(
-        attention, layer_index, resources_.layers_);
-    const int slot = paged_kv.attention_slot(resolved_owner.model_layer);
-    store_cuda_latent_kv_paged(
-        *this, attention, paged_kv, slot,
-        kv.device_page_table, kv.page_table_stride);
-    dispatch_cuda_latent_attention_paged(
-        *this, attention, paged_kv, slot,
-        kv.device_page_table, kv.page_table_stride);
+    execute_cuda_token_latent_attention_paged(*this, attention, layer_index, kv);
     project_latent_attention_output(attention, semantics);
 }
 
