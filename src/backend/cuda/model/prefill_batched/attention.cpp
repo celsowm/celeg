@@ -24,18 +24,17 @@ AttentionLayer& resolve_attention_owner(
 void run_attention(
     CudaCompiledModel& model,
     AttentionLayer& attention,
-    LayerCommon& common_layer,
     const CompiledLayerProgram& semantics,
     int rows) {
     AttentionLayer& owner = resolve_attention_owner(model, attention);
     if (attention.layout.uses_latent_state()) {
         run_latent_attention(
-            model, attention, owner, common_layer, semantics, rows);
+            model, attention, owner, semantics, rows);
         return;
     }
 
     run_regular_attention(
-        model, attention, owner, common_layer, semantics, rows);
+        model, attention, owner, semantics, rows);
 }
 
 }
