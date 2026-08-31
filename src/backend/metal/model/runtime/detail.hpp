@@ -10,6 +10,7 @@
 
 #import <Metal/Metal.h>
 
+#include <array>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -192,6 +193,7 @@ struct MetalModel::Impl {
     GenerationConfig generation;
     uint64_t rng_state = 1;
     int position = 0;
+    std::array<int32_t, 3> next_rope_position{0, 0, 0};
     bool ready = false;
     RuntimeMetrics metrics;
     MetalExecutionMetrics execution_metrics;
@@ -284,7 +286,8 @@ struct MetalModel::Impl {
     void encode_mamba2(id<MTLComputeCommandEncoder> encoder, Layer& layer);
     void encode_mamba2_layer(id<MTLComputeCommandEncoder> encoder, Layer& layer);
     void encode_attention(id<MTLComputeCommandEncoder> encoder, Layer& layer,
-                          const CompiledAttentionProgram& attention);
+                          const CompiledAttentionProgram& attention,
+                          const std::array<int32_t, 3>* rope_position = nullptr);
     void encode_attention_batch(id<MTLComputeCommandEncoder> encoder,
                                 Layer& layer,
                                 const CompiledAttentionProgram& attention,
@@ -300,9 +303,11 @@ struct MetalModel::Impl {
     bool supports_prefill_batch() const;
 
     void encode_token(id<MTLCommandBuffer>& command_buffer,
-                      id<MTLComputeCommandEncoder>& encoder, int32_t token);
+                      id<MTLComputeCommandEncoder>& encoder, int32_t token,
+                      const std::array<int32_t, 3>* rope_position = nullptr);
     void apply_logits_transforms();
-    void run_token(int32_t token);
+    void run_token(int32_t token,
+                   const std::array<int32_t, 3>* rope_position = nullptr);
     void reset();
     static std::vector<float> copy_buffer(id<MTLBuffer> source, size_t elements);
     MetalSessionSnapshot export_snapshot() const;
