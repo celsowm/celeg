@@ -2,8 +2,8 @@
 #include "attention_kv_store.hpp"
 #include "attention_latent_dispatch.hpp"
 #include "attention_layer_support.hpp"
+#include "attention_projection.hpp"
 #include "residual_fusion.hpp"
-#include "backend/cuda/attention_norm.hpp"
 #include "backend/cuda/phase_profile.hpp"
 #include "kernels/kernels.cuh"
 #include "kernels/attention_output.hpp"
@@ -46,50 +46,11 @@ void CudaCompiledModel::enqueue_decode_factorized_latent_attention(
         require_cuda_factorized_latent_bindings(*attention);
     const auto& latent = *layout.latent_state();
     const auto* factorized = latent.factorized_projection();
+
     decode_phase_profile().begin(stream_.get());
-    linear(workspace_.normed_.data(), *attention->latent_query_projection,
-           workspace_.latent_projection_.data(), 1, factorized->query_rank,
-           resources_.program_.hidden);
-    launch_rmsnorm(workspace_.latent_projection_.data(), attention->latent_query_norm,
-                   workspace_.latent_projection_.data(), 1, factorized->query_rank,
-                   factorized->query_latent_norm.epsilon, stream_.get());
-    linear(workspace_.latent_projection_.data(), *attention->latent_query_expansion,
-           workspace_.qkv_output_.data(), 1,
-           layout.query_heads * (latent.nope_head_dim + latent.rope_head_dim),
-           factorized->query_rank);
-    launch_factorized_latent_query({
-        .query_projection = workspace_.qkv_output_.data(),
-        .expansion = latent_expansion,
-        .query_content = workspace_.latent_query_content_.data(),
-        .rows = 1,
-        .query_heads = layout.query_heads,
-        .query_nope = latent.nope_head_dim,
-        .query_rope_dim = latent.rope_head_dim,
-        .latent_rank = latent.latent_rank,
-        .stream = stream_.get()});
-    launch_factorized_latent_rope({
-        .query_projection = workspace_.qkv_output_.data(),
-        .query_rope = workspace_.latent_query_rope_.data(),
-        .rows = 1,
-        .query_heads = layout.query_heads,
-        .query_nope = latent.nope_head_dim,
-        .query_rope_dim = latent.rope_head_dim,
-        .stream = stream_.get()});
-    linear(workspace_.normed_.data(), *attention->latent_key_projection,
-           workspace_.qkv_output_.data(), 1,
-           latent.latent_rank + latent.rope_head_dim, resources_.program_.hidden);
-    launch_rmsnorm(workspace_.qkv_output_.data(), attention->latent_key_norm,
-                   workspace_.latent_key_.data(), 1, latent.latent_rank,
-                   factorized->key_latent_norm.epsilon, stream_.get());
-    CELEG_CUDA(cudaMemcpyAsync(workspace_.latent_value_.data(),
-        workspace_.latent_key_.data(),
-        static_cast<std::size_t>(latent.latent_rank) * sizeof(__nv_bfloat16),
-        cudaMemcpyDeviceToDevice, stream_.get()));
-    CELEG_CUDA(cudaMemcpyAsync(workspace_.latent_key_rope_.data(),
-        workspace_.qkv_output_.data() + latent.latent_rank,
-        static_cast<std::size_t>(latent.rope_head_dim) * sizeof(__nv_bfloat16),
-        cudaMemcpyDeviceToDevice, stream_.get()));
+    project_cuda_factorized_latent_attention_qkv(*this, *attention);
     decode_phase_profile().end(DecodePhase::Projection, stream_.get());
+
     launch_qk_norm_rope_positions(
         workspace_.latent_query_rope_.data(), workspace_.latent_key_rope_.data(),
         nullptr, nullptr, 1, layout.query_heads, 1, latent.rope_head_dim,
