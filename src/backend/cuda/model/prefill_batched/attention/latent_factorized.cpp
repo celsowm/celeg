@@ -1,6 +1,7 @@
 #include "../../attention_kv_store.hpp"
 #include "../../attention_latent_dispatch.hpp"
 #include "../../attention_layer_support.hpp"
+#include "../../attention_projection.hpp"
 #include "../../residual_fusion.hpp"
 
 namespace celeg::prefill_detail {
@@ -22,59 +23,7 @@ void run_factorized_latent_attention(
     const int hidden = model.resources_.program_.hidden;
 
     prof.begin(model.stream_.get());
-    {
-        auto native_fanout = model.native_fanout_scope(
-            workspace.prefill_normed_.data(), rows, hidden);
-        model.linear(
-            workspace.prefill_normed_.data(), *attention.latent_query_projection,
-            workspace.prefill_latent_projection_.data(), rows, factorized.query_rank, hidden);
-        launch_rmsnorm(
-            workspace.prefill_latent_projection_.data(), attention.latent_query_norm,
-            workspace.prefill_latent_projection_.data(), rows, factorized.query_rank,
-            factorized.query_latent_norm.epsilon, model.stream_.get());
-        model.linear(
-            workspace.prefill_latent_projection_.data(), *attention.latent_query_expansion,
-            workspace.prefill_qkv_.data(), rows,
-            layout.query_heads * (latent.nope_head_dim + latent.rope_head_dim),
-            factorized.query_rank);
-        launch_factorized_latent_query({
-            .query_projection = workspace.prefill_qkv_.data(),
-            .expansion = latent_expansion,
-            .query_content = workspace.prefill_latent_query_content_.data(),
-            .rows = rows,
-            .query_heads = layout.query_heads,
-            .query_nope = latent.nope_head_dim,
-            .query_rope_dim = latent.rope_head_dim,
-            .latent_rank = latent.latent_rank,
-            .stream = model.stream_.get()});
-        launch_factorized_latent_rope({
-            .query_projection = workspace.prefill_qkv_.data(),
-            .query_rope = workspace.prefill_latent_query_rope_.data(),
-            .rows = rows,
-            .query_heads = layout.query_heads,
-            .query_nope = latent.nope_head_dim,
-            .query_rope_dim = latent.rope_head_dim,
-            .stream = model.stream_.get()});
-        model.linear(
-            workspace.prefill_normed_.data(), *attention.latent_key_projection,
-            workspace.prefill_qkv_.data(), rows,
-            latent.latent_rank + latent.rope_head_dim, hidden);
-        launch_rmsnorm(
-            workspace.prefill_qkv_.data(), attention.latent_key_norm,
-            workspace.prefill_latent_key_.data(), rows, latent.latent_rank,
-            factorized.key_latent_norm.epsilon, model.stream_.get());
-        CELEG_CUDA(cudaMemcpyAsync(
-            workspace.prefill_latent_value_.data(), workspace.prefill_latent_key_.data(),
-            static_cast<size_t>(rows) * latent.latent_rank * sizeof(__nv_bfloat16),
-            cudaMemcpyDeviceToDevice, model.stream_.get()));
-        CELEG_CUDA(cudaMemcpy2DAsync(
-            workspace.prefill_latent_key_rope_.data(),
-            static_cast<size_t>(latent.rope_head_dim) * sizeof(__nv_bfloat16),
-            workspace.prefill_qkv_.data() + latent.latent_rank,
-            static_cast<size_t>(latent.latent_rank + latent.rope_head_dim) * sizeof(__nv_bfloat16),
-            static_cast<size_t>(latent.rope_head_dim) * sizeof(__nv_bfloat16),
-            static_cast<size_t>(rows), cudaMemcpyDeviceToDevice, model.stream_.get()));
-    }
+    project_cuda_prefill_factorized_latent_attention_qkv(model, attention, rows);
     prof.end(PrefillPhase::QkvProj, model.stream_.get());
 
     prof.begin(model.stream_.get());
