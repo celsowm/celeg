@@ -1,10 +1,10 @@
+#include "../../attention_output_gate.hpp"
 #include "../../attention_projection.hpp"
 #include "backend/cuda/attention_norm.hpp"
 
 namespace celeg::prefill_detail {
 
 void require_regular_attention_bindings(const AttentionLayer& attention) {
-    const AttentionSpec& layout = attention.layout;
     if (!attention.query || !attention.out) {
         throw std::logic_error(
             "CUDA prefill attention has incomplete query/output bindings");
@@ -12,12 +12,6 @@ void require_regular_attention_bindings(const AttentionLayer& attention) {
     if ((attention.key == nullptr) != (attention.value == nullptr)) {
         throw std::logic_error(
             "CUDA prefill attention must bind key/value together");
-    }
-    if (layout.output_gate.has_value() &&
-        !layout.output_gate->packed_with_query &&
-        !attention.gate) {
-        throw std::logic_error(
-            "CUDA prefill attention is missing its output gate binding");
     }
 }
 
@@ -33,28 +27,13 @@ void run_regular_attention(
     auto& prof = prefill_phase_profile();
     const AttentionSpec& layout = attention.layout;
     const AttentionSpec& owner_layout = owner.layout;
-    const int hidden = model.resources_.program_.hidden;
-    const bool output_gate = layout.output_gate.has_value();
-    const bool gate_packed = output_gate && layout.output_gate->packed_with_query;
 
     prof.begin(model.stream_.get());
     project_cuda_prefill_standard_attention_qkv(model, attention, rows);
     prof.end(PrefillPhase::QkvProj, model.stream_.get());
 
     prof.begin(model.stream_.get());
-    if (output_gate) {
-        if (gate_packed) {
-            launch_extract_attention_output_gate(
-                workspace.prefill_qkv_.data(), workspace.prefill_q_.data(),
-                workspace.prefill_attention_gate_.data(),
-                rows, layout.query_width(), layout.head_dim, model.stream_.get());
-        } else {
-            model.linear(
-                workspace.prefill_normed_.data(), *attention.gate,
-                workspace.prefill_attention_gate_.data(),
-                rows, layout.query_width(), hidden);
-        }
-    }
+    prepare_cuda_prefill_attention_gate(model, attention, rows);
     const float qk_epsilon = layout.query_norm
         ? layout.query_norm->epsilon
         : (layout.key_norm
@@ -91,12 +70,7 @@ void run_regular_attention(
     store_and_attend(model, attention, owner, plan, rows);
     prof.end(PrefillPhase::Attention, model.stream_.get());
 
-    if (output_gate) {
-        launch_sigmoid_multiply(
-            workspace.prefill_op_output_.data(),
-            workspace.prefill_attention_gate_.data(),
-            rows * layout.query_width(), model.stream_.get());
-    }
+    apply_cuda_prefill_attention_gate(model, attention, rows);
 
     prof.begin(model.stream_.get());
     project_cuda_prefill_standard_attention_output(
