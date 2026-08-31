@@ -68,21 +68,8 @@ void CudaCompiledModel::enqueue_decode_standard_attention(
         session_.active_segmented_attention_,
         attention->alibi_slopes.data() != nullptr,
         owner_layout.head_dim);
-    const bool int8_kv = attention_policy.plan.kv_format == KvCacheMode::Int8;
-
-    if (attention->key && attention->value) {
-        if (int8_kv) {
-            launch_store_kv_int8_device(
-                k, v, owner.key_cache_int8_ptr(), owner.value_cache_int8_ptr(),
-                owner.key_cache_scales_ptr(), owner.value_cache_scales_ptr(),
-                position_device_.data(), owner_layout.key_value_heads,
-                owner_layout.head_dim, stream_.get());
-        } else {
-            launch_store_kv_device(
-                k, v, owner.key_cache_bf16(), owner.value_cache_bf16(),
-                position_device_.data(), owner_layout.key_value_width(), stream_.get());
-        }
-    }
+    store_standard_attention_kv_contiguous(
+        *attention, owner, attention_policy.plan, k, v);
 
     dispatch_cuda_contiguous_decode_attention({
         .plan = attention_policy.plan,
