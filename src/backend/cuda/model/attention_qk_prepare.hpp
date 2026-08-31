@@ -52,9 +52,20 @@ struct CudaLatentQkPreparation {
     cudaStream_t stream = nullptr;
 };
 
+struct CudaPrefillLatentQkPreparation {
+    const AttentionSpec* layout = nullptr;
+    __nv_bfloat16* query_rope = nullptr;
+    __nv_bfloat16* key_rope = nullptr;
+    float norm_epsilon = 0.0f;
+    int rows = 0;
+    cudaStream_t stream = nullptr;
+};
+
 void prepare_cuda_attention_qk(const CudaAttentionQkPreparation& preparation);
 void prepare_cuda_prefill_attention_qk(
     const CudaPrefillAttentionQkPreparation& preparation);
 void prepare_cuda_latent_attention_qk(const CudaLatentQkPreparation& preparation);
+void prepare_cuda_prefill_latent_attention_qk(
+    const CudaPrefillLatentQkPreparation& preparation);
 
 }
