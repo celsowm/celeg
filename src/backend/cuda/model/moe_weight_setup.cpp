@@ -6,6 +6,7 @@
 #include "celeg/checkpoint/packed/int4.hpp"
 #include "backend/cuda/moe.hpp"
 #include "backend/cuda/moe/expert_source.hpp"
+#include "expert_residency_setup.hpp"
 
 #include <algorithm>
 #include <memory>
@@ -154,40 +155,12 @@ void bind_cuda_moe_feed_forward(CudaCompiledModel& model,
             }
             CELEG_CUDA(cudaStreamSynchronize(controller->transfer_stream->get()));
             controller->inflight_transfers.clear();
-            moe_weights.storage = OffloadedExpertWeights{
-                controller->cache->gate_up_ptrs(), controller->cache->down_ptrs()};
-            resources.weights_->expert_controllers[static_cast<size_t>(layer_index)] =
-                std::move(controller);
-            workspace.expert_caches_[static_cast<size_t>(layer_index)] =
-                resources.weights_->expert_controllers[static_cast<size_t>(layer_index)]
-                    ->cache.get();
+            moe_weights.storage = install_cuda_expert_controller(
+                model, layer_index, std::move(controller));
         } else {
-            WeightLoader::HostExpertLayer host_layer =
-                resources.weight_loader_->load_moe_experts_host(
-                    repo, expert_names, expert_count, intermediate,
-                    resources.program_.hidden, workspace.host_expert_store_,
-                    resources.options().expert_offload.host_mode);
-            auto controller = std::make_unique<ResidencyController>(
-                expert_count, workspace.expert_offload_plan_.experts_per_layer,
-                host_layer.gate_up_bytes, host_layer.down_bytes,
-                resources.options().expert_offload.policy);
-            controller->cache->set_host_sources(host_layer.gate_up_host_dev,
-                                                host_layer.down_host_dev);
-
-            std::vector<int> seed(static_cast<size_t>(
-                workspace.expert_offload_plan_.experts_per_layer));
-            for (int slot = 0; slot < static_cast<int>(seed.size()); ++slot) {
-                seed[static_cast<size_t>(slot)] = slot;
-            }
-            controller->cache->seed(seed, controller->transfer_stream->get());
-            CELEG_CUDA(cudaStreamSynchronize(controller->transfer_stream->get()));
-            moe_weights.storage = OffloadedExpertWeights{
-                controller->cache->gate_up_ptrs(), controller->cache->down_ptrs()};
-            resources.weights_->expert_controllers[static_cast<size_t>(layer_index)] =
-                std::move(controller);
-            workspace.expert_caches_[static_cast<size_t>(layer_index)] =
-                resources.weights_->expert_controllers[static_cast<size_t>(layer_index)]
-                    ->cache.get();
+            moe_weights.storage = bind_cuda_host_expert_residency(
+                model, repo, expert_names, layer_index,
+                expert_count, intermediate);
         }
     } else {
         if (expert_names.packed()) {
