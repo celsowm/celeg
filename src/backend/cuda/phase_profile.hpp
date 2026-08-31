@@ -72,6 +72,33 @@ private:
     cudaEvent_t end_{};
 };
 
+template <typename Phase, size_t PhaseCount>
+void report_phase_profile(
+    const CudaPhaseAccumulator<Phase, PhaseCount>& accumulator,
+    const char* title,
+    const char* unit,
+    const std::array<const char*, PhaseCount>& names,
+    const char* no_steps_message) {
+    if (!accumulator.enabled() || accumulator.steps() == 0) {
+        if (accumulator.enabled()) {
+            std::fprintf(stderr, "%s", no_steps_message);
+        }
+        return;
+    }
+
+    const auto& totals = accumulator.totals();
+    const double total = accumulator.total();
+    const double steps = static_cast<double>(accumulator.steps());
+
+    std::fprintf(stderr, "\n=== %s (%lld steps) ===\n", title, accumulator.steps());
+    for (size_t i = 0; i < names.size(); ++i) {
+        std::fprintf(stderr, "  %-10s %8.4f %s  %5.1f%%\n", names[i],
+                     totals[i] / steps, unit,
+                     total > 0.0 ? 100.0 * totals[i] / total : 0.0);
+    }
+    std::fprintf(stderr, "  %-10s %8.4f %s\n", "TOTAL", total / steps, unit);
+}
+
 }  // namespace detail
 
 enum class DecodePhase : int {
@@ -108,36 +135,21 @@ public:
     }
 
     void report() const {
-        if (!enabled() || accumulator_.steps() == 0) {
-            if (enabled()) {
-                std::fprintf(stderr,
-                             "[phase-profile] no steps recorded -- decode is CUDA-graph "
-                             "captured; re-run with --no-cuda-graph\n");
-            }
-            return;
-        }
-
         static constexpr std::array<const char*,
                                     static_cast<size_t>(DecodePhase::kCount)>
             kNames{"sampling", "embed", "rmsnorm", "qkv+proj", "rope+kv",
                    "attention", "attn_out", "conv", "mlp", "logits", "other"};
-        const auto& totals = accumulator_.totals();
-        const double total = accumulator_.total();
-        const double steps = static_cast<double>(accumulator_.steps());
-
-        std::fprintf(stderr, "\n=== decode phase profile (%lld steps) ===\n",
-                     accumulator_.steps());
-        for (size_t i = 0; i < kNames.size(); ++i) {
-            std::fprintf(stderr, "  %-10s %8.4f ms/token  %5.1f%%\n", kNames[i],
-                         totals[i] / steps,
-                         total > 0.0 ? 100.0 * totals[i] / total : 0.0);
+        detail::report_phase_profile(
+            accumulator_, "decode phase profile", "ms/token", kNames,
+            "[phase-profile] no steps recorded -- decode is CUDA-graph captured; "
+            "re-run with --no-cuda-graph\n");
+        if (enabled() && accumulator_.steps() != 0) {
+            std::fprintf(stderr,
+                         "  (phase sum excludes tiny inter-region work such as the position\n"
+                         "   increment; the residual-add and conv block are now attributed.\n"
+                         "   Percentages are of the phase sum, not the end-to-end benchmark\n"
+                         "   ms/token, so they sum to ~100%%)\n");
         }
-        std::fprintf(stderr, "  %-10s %8.4f ms/token\n", "TOTAL", total / steps);
-        std::fprintf(stderr,
-                     "  (phase sum excludes tiny inter-region work such as the position\n"
-                     "   increment; the residual-add and conv block are now attributed.\n"
-                     "   Percentages are of the phase sum, not the end-to-end benchmark\n"
-                     "   ms/token, so they sum to ~100%%)\n");
     }
 
 private:
@@ -181,29 +193,13 @@ public:
     }
 
     void report() const {
-        if (!enabled() || accumulator_.steps() == 0) {
-            if (enabled()) {
-                std::fprintf(stderr, "[prefill-profile] no prefill steps recorded\n");
-            }
-            return;
-        }
-
         static constexpr std::array<const char*,
                                     static_cast<size_t>(PrefillPhase::kCount)>
             kNames{"embed", "rmsnorm", "qkv+proj", "rope+kv", "attention",
                    "attn_out", "conv", "mlp", "logits", "other"};
-        const auto& totals = accumulator_.totals();
-        const double total = accumulator_.total();
-        const double steps = static_cast<double>(accumulator_.steps());
-
-        std::fprintf(stderr, "\n=== prefill phase profile (%lld steps) ===\n",
-                     accumulator_.steps());
-        for (size_t i = 0; i < kNames.size(); ++i) {
-            std::fprintf(stderr, "  %-10s %8.4f ms/step  %5.1f%%\n", kNames[i],
-                         totals[i] / steps,
-                         total > 0.0 ? 100.0 * totals[i] / total : 0.0);
-        }
-        std::fprintf(stderr, "  %-10s %8.4f ms/step\n", "TOTAL", total / steps);
+        detail::report_phase_profile(
+            accumulator_, "prefill phase profile", "ms/step", kNames,
+            "[prefill-profile] no prefill steps recorded\n");
     }
 
 private:
