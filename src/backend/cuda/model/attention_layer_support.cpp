@@ -19,6 +19,21 @@ CudaAttentionOwner resolve_cuda_attention_owner(
     return {.layer = owner, .model_layer = model_layer};
 }
 
+CudaQkvProjectionView make_cuda_qkv_projection_view(
+    AttentionLayer& attention,
+    __nv_bfloat16* storage) {
+    if (!storage || !attention.query) {
+        throw std::logic_error("CUDA attention QKV projection storage is unavailable");
+    }
+    const int query_projection_width = attention.query->rows;
+    __nv_bfloat16* key = storage + query_projection_width;
+    return {
+        .query = storage,
+        .key = key,
+        .value = key + attention.layout.key_value_width(),
+        .query_projection_width = query_projection_width};
+}
+
 Bf16KvView cuda_bf16_kv_view(AttentionLayer& owner) {
     return {
         .keys = owner.key_cache_bf16(),
