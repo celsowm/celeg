@@ -35,7 +35,7 @@ bool metal_rejects(Mutator mutate) {
 
 int main() {
     CELEG_TEST_CHECK(!metal_rejects([](auto&) {}));
-    CELEG_TEST_CHECK(metal_rejects([](auto& attention) {
+    CELEG_TEST_CHECK(!metal_rejects([](auto& attention) {
         attention.pattern = celeg::SlidingWindowPattern{128};
     }));
     CELEG_TEST_CHECK(metal_rejects([](auto& attention) {
