@@ -39,6 +39,7 @@ set(CELEG_CUDA_BACKEND_SOURCES
     src/backend/cuda/model/execution.cu
     src/backend/cuda/model/attention_decode_dispatch.cu
     src/backend/cuda/model/attention_latent_dispatch.cpp
+    src/backend/cuda/model/attention_paged_dispatch.cpp
     src/backend/cuda/model/attention_layer_support.cpp
     src/backend/cuda/model/attention_projection.cpp
     src/backend/cuda/model/attention_kv_store.cpp
