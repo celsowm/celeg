@@ -5,7 +5,7 @@
 namespace celeg {
 
 void CudaCompiledModel::enqueue_decode_attention(
-    Layer& layer, LayerCommon& common_layer, int layer_index) {
+    Layer& layer, int layer_index) {
     const CompiledLayerProgram& semantics = resources_.program_.layers.at(
         static_cast<std::size_t>(layer_index));
     const auto* attention = std::get_if<CompiledAttentionProgram>(&semantics.mixer);
