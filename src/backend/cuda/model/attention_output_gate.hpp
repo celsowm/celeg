@@ -13,4 +13,9 @@ __nv_bfloat16* prepare_cuda_token_attention_gate(
 void apply_cuda_token_attention_gate(
     CudaCompiledModel& model, AttentionLayer& attention);
 
+void prepare_cuda_prefill_attention_gate(
+    CudaCompiledModel& model, AttentionLayer& attention, int rows);
+void apply_cuda_prefill_attention_gate(
+    CudaCompiledModel& model, AttentionLayer& attention, int rows);
+
 }
