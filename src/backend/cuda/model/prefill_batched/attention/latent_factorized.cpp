@@ -1,3 +1,5 @@
+#include "../../residual_fusion.hpp"
+
 namespace celeg::prefill_detail {
 
 void require_factorized_latent_bindings(const AttentionLayer& attention) {
@@ -152,9 +154,8 @@ void run_factorized_latent_attention(
             workspace.prefill_attention_gate_.data(),
             rows * layout.latent_output_width(), model.stream_.get());
     }
-    const bool fuse_residual = model.resources_.options().fused_residuals &&
-        !semantics.mixer_norm.after.has_value() &&
-        !std::holds_alternative<std::monostate>(semantics.feed_forward);
+    const bool fuse_residual = cuda_can_fuse_mixer_residual(
+        model.resources_.options().fused_residuals, semantics);
     model.linear(
         workspace.prefill_latent_decompressed_.data(), *attention.out,
         workspace.prefill_hidden_.data(), rows, hidden,
