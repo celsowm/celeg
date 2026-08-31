@@ -11,3 +11,4 @@
 #include "inference/projection.metal"
 #include "inference/batch.metal"
 #include "inference/pair.metal"
+#include "inference/relative_bias.metal"
