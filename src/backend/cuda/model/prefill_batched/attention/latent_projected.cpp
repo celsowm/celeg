@@ -1,4 +1,5 @@
 #include "../../attention_projection.hpp"
+#include "../../attention_qk_prepare.hpp"
 
 namespace celeg::prefill_detail {
 
@@ -18,20 +19,14 @@ void run_projected_latent_attention(
     prof.end(PrefillPhase::QkvProj, model.stream_.get());
 
     prof.begin(model.stream_.get());
-    if (const auto* rope = layout.rope_position();
-        rope && attention.latent_key_rope && latent.decoupled_rope &&
-        latent.rope_head_dim != 0) {
-        launch_dynamic_qk_norm_rope_prefill(
-            workspace.prefill_latent_query_rope_.data(),
-            attention.latent_key
-                ? workspace.prefill_latent_key_rope_.data()
-                : nullptr,
-            nullptr, nullptr,
-            rows, layout.query_heads, 1, latent.rope_head_dim,
-            static_cast<float>(rope->theta), 1.0f,
-            model.resources_.program_.final_norm.epsilon, false,
-            lower_cuda_rope_scaling(*rope), rope->pairing, model.stream_.get());
-    }
+    prepare_cuda_prefill_latent_attention_qk({
+        .layout = &layout,
+        .query_rope = workspace.prefill_latent_query_rope_.data(),
+        .key_rope = attention.latent_key
+            ? workspace.prefill_latent_key_rope_.data() : nullptr,
+        .norm_epsilon = model.resources_.program_.final_norm.epsilon,
+        .rows = rows,
+        .stream = model.stream_.get()});
     prof.end(PrefillPhase::RopeKv, model.stream_.get());
 
     prof.begin(model.stream_.get());
