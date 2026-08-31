@@ -4,6 +4,7 @@
 #include "celeg/model/runtime_types.hpp"
 #include "celeg/runtime/context.hpp"
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -16,6 +17,7 @@ class MetalModel;
 
 struct MetalSessionSnapshot {
     int position = 0;
+    std::array<int32_t, 3> next_rope_position{0, 0, 0};
     bool ready = false;
     GenerationConfig generation;
     uint64_t rng_state = 1;
@@ -34,8 +36,12 @@ class MetalInferenceSession {
 public:
     void reset();
     void prefill(const std::vector<int32_t>& tokens);
+    void prefill(const std::vector<int32_t>& tokens,
+                 const PromptEmbedding& embeddings);
     int32_t decode();
     void eval_token(int32_t token);
+    void eval_token(int32_t token,
+                    const std::array<int32_t, 3>& rope_position);
     void set_generation_config(GenerationConfig generation);
     std::vector<float> copy_logits() const;
     int position() const;
@@ -75,8 +81,12 @@ private:
     friend class MetalInferenceSession;
     void reset_session();
     void prefill_session(const std::vector<int32_t>& tokens);
+    void prefill_session(const std::vector<int32_t>& tokens,
+                         const PromptEmbedding& embeddings);
     int32_t decode_session();
     void eval_token_session(int32_t token);
+    void eval_token_session(int32_t token,
+                            const std::array<int32_t, 3>& rope_position);
     void set_session_generation(GenerationConfig generation);
     std::vector<float> session_logits() const;
     int session_position() const;
