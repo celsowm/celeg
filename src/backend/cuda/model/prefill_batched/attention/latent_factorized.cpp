@@ -1,3 +1,5 @@
+#include "../../attention_kv_store.hpp"
+#include "../../attention_latent_dispatch.hpp"
 #include "../../residual_fusion.hpp"
 
 namespace celeg::prefill_detail {
@@ -106,27 +108,8 @@ void run_factorized_latent_attention(
     prof.end(PrefillPhase::RopeKv, model.stream_.get());
 
     prof.begin(model.stream_.get());
-    launch_store_latent_prefill(
-        workspace.prefill_latent_key_.data(), workspace.prefill_latent_value_.data(),
-        workspace.prefill_latent_key_rope_.data(),
-        owner.latent_key_cache_ptr(), owner.latent_value_cache_ptr(),
-        owner.latent_key_rope_cache_ptr(), rows, latent.latent_rank,
-        latent.rope_head_dim, model.stream_.get());
-    launch_latent_attention_prefill({
-        .query = {.content = workspace.prefill_latent_query_content_.data(),
-                  .rope = workspace.prefill_latent_query_rope_.data()},
-        .kv = {.keys = owner.latent_key_cache_ptr(),
-               .values = owner.latent_value_cache_ptr(),
-               .key_rope = owner.latent_key_rope_cache_ptr()},
-        .out = workspace.prefill_op_output_.data(),
-        .extent = {.rows = rows},
-        .alibi_slopes = attention.alibi_slopes.data(),
-        .geometry = {.query_heads = layout.query_heads,
-                     .latent_rank = latent.latent_rank,
-                     .rotary_width = latent.rope_head_dim,
-                     .score_scale = layout.query_scale,
-                     .sliding_window = layout.sliding_window_size()},
-        .stream = model.stream_.get()});
+    store_cuda_latent_kv_prefill(model, attention, owner, rows);
+    dispatch_cuda_latent_attention_prefill(model, attention, owner, rows);
     prof.end(PrefillPhase::Attention, model.stream_.get());
 
     prof.begin(model.stream_.get());
