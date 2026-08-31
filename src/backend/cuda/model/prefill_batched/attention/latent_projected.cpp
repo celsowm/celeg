@@ -18,37 +18,7 @@ void run_projected_latent_attention(
     const int hidden = model.resources_.program_.hidden;
 
     prof.begin(model.stream_.get());
-    {
-        auto native_fanout = model.native_fanout_scope(
-            workspace.prefill_normed_.data(), rows, hidden);
-        model.linear(
-            workspace.prefill_normed_.data(), *attention.latent_query,
-            workspace.prefill_latent_query_content_.data(),
-            rows, layout.latent_query_content_width(), hidden);
-        if (layout.latent_query_rope_width() != 0) {
-            model.linear(
-                workspace.prefill_normed_.data(), *attention.latent_query_rope,
-                workspace.prefill_latent_query_rope_.data(),
-                rows, layout.latent_query_rope_width(), hidden);
-        }
-        if (attention.latent_key) {
-            model.linear(
-                workspace.prefill_normed_.data(), *attention.latent_key,
-                workspace.prefill_latent_key_.data(),
-                rows, latent.latent_rank, hidden);
-            model.linear(
-                workspace.prefill_normed_.data(), *attention.latent_value,
-                workspace.prefill_latent_value_.data(),
-                rows, latent.latent_rank, hidden);
-            if (attention.latent_key_rope && latent.decoupled_rope &&
-                latent.rope_head_dim != 0) {
-                model.linear(
-                    workspace.prefill_normed_.data(), *attention.latent_key_rope,
-                    workspace.prefill_latent_key_rope_.data(),
-                    rows, latent.rope_head_dim, hidden);
-            }
-        }
-    }
+    project_cuda_prefill_latent_attention_qkv(model, attention, rows);
     prof.end(PrefillPhase::QkvProj, model.stream_.get());
 
     prof.begin(model.stream_.get());
