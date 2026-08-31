@@ -188,4 +188,35 @@ void prepare_cuda_latent_attention_qk(
     throw std::logic_error("unknown CUDA latent QK position mode");
 }
 
+void prepare_cuda_prefill_latent_attention_qk(
+    const CudaPrefillLatentQkPreparation& preparation) {
+    if (!preparation.layout || !preparation.query_rope || preparation.rows <= 0) {
+        throw std::logic_error(
+            "CUDA projected latent prefill QK preparation is incomplete");
+    }
+
+    const AttentionSpec& layout = *preparation.layout;
+    const auto& latent = *layout.latent_state();
+    const auto* rope = layout.rope_position();
+    if (!rope || !latent.decoupled_rope || latent.rope_head_dim == 0) {
+        return;
+    }
+
+    launch_dynamic_qk_norm_rope_prefill(
+        preparation.query_rope,
+        preparation.key_rope,
+        nullptr, nullptr,
+        preparation.rows,
+        layout.query_heads,
+        1,
+        latent.rope_head_dim,
+        static_cast<float>(rope->theta),
+        1.0f,
+        preparation.norm_epsilon,
+        false,
+        lower_cuda_rope_scaling(*rope),
+        rope->pairing,
+        preparation.stream);
+}
+
 }
