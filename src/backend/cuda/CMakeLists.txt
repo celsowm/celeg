@@ -37,6 +37,7 @@ set(CELEG_CUDA_BACKEND_SOURCES
     src/backend/cuda/model/per_layer_execution.cu
     src/backend/cuda/model/dense_mlp_execution.cu
     src/backend/cuda/model/execution.cu
+    src/backend/cuda/model/attention_decode_dispatch.cu
     src/backend/cuda/model/attention_execution.cu
     src/backend/cuda/model/attention_dispatch.cu
     src/backend/cuda/model/attention_latent_execution.cu
