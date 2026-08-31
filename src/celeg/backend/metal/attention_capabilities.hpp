@@ -15,7 +15,7 @@ inline constexpr AttentionBackendCapabilities metal_attention_capabilities() {
         .block_sparse = false,
         .dynamic_sparse = false,
         .external_memory = false,
-        .alibi = false,
+        .alibi = true,
         .relative_position_bias = false,
         .no_position = false,
         .rope = true,
