@@ -2,6 +2,7 @@
 #include "../../attention_latent_dispatch.hpp"
 #include "../../attention_layer_support.hpp"
 #include "../../attention_projection.hpp"
+#include "../../attention_qk_prepare.hpp"
 #include "../../residual_fusion.hpp"
 
 namespace celeg::prefill_detail {
@@ -27,15 +28,14 @@ void run_factorized_latent_attention(
     prof.end(PrefillPhase::QkvProj, model.stream_.get());
 
     prof.begin(model.stream_.get());
-    if (const auto* rope = layout.rope_position()) {
-        launch_qk_norm_rope_positions(
-            workspace.prefill_latent_query_rope_.data(),
-            workspace.prefill_latent_key_rope_.data(), nullptr, nullptr,
-            rows, layout.query_heads, 1, latent.rope_head_dim, nullptr,
-            static_cast<float>(rope->theta), 1.0f,
-            model.resources_.program_.final_norm.epsilon, false,
-            rope->pairing, lower_cuda_rope_scaling(*rope), model.stream_.get());
-    }
+    prepare_cuda_factorized_latent_attention_qk({
+        .layout = &layout,
+        .query_rope = workspace.prefill_latent_query_rope_.data(),
+        .key_rope = workspace.prefill_latent_key_rope_.data(),
+        .norm_epsilon = model.resources_.program_.final_norm.epsilon,
+        .rows = rows,
+        .device_position = nullptr,
+        .stream = model.stream_.get()});
     prof.end(PrefillPhase::RopeKv, model.stream_.get());
 
     prof.begin(model.stream_.get());
