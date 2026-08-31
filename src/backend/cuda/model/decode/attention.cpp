@@ -3,11 +3,11 @@
 #include "attention_kv_store.hpp"
 #include "attention_latent_dispatch.hpp"
 #include "attention_layer_support.hpp"
+#include "attention_output_gate.hpp"
 #include "attention_projection.hpp"
 #include "attention_qk_prepare.hpp"
-#include "kernels/kernels.cuh"
+#include "attention_token_qk.hpp"
 #include "backend/cuda/paged_kv.hpp"
-#include "backend/cuda/weight_layout.hpp"
 #include "backend/cuda/moe.hpp"
 
 #include <stdexcept>
@@ -136,7 +136,6 @@ void CudaCompiledModel::run_token_latent_attention_paged(
 void CudaCompiledModel::run_token_attention(
     AttentionLayer& attention, const CompiledLayerProgram& semantics,
     int layer_index, const TokenKvPolicy& kv) {
-    const AttentionSpec& layout = attention.layout;
     const auto* compiled_attention =
         std::get_if<CompiledAttentionProgram>(&semantics.mixer);
     if (!compiled_attention) {
@@ -158,51 +157,12 @@ void CudaCompiledModel::run_token_attention(
     const AttentionSpec& owner_layout = owner.layout;
 
     const CudaQkvProjectionView qkv = project_standard_attention_qkv(attention);
-    __nv_bfloat16* q = qkv.query;
+    __nv_bfloat16* q = prepare_cuda_token_attention_gate(*this, attention, qkv.query);
     __nv_bfloat16* k = qkv.key;
     __nv_bfloat16* v = qkv.value;
-    const bool output_gate = layout.output_gate.has_value();
-    const bool gate_packed = output_gate && layout.output_gate->packed_with_query;
 
-    if (gate_packed) {
-        launch_extract_attention_output_gate(
-            q, workspace_.q_.data(), workspace_.attention_gate_.data(),
-            1, layout.query_width(), layout.head_dim, stream_.get());
-        q = workspace_.q_.data();
-    }
-
-    const float qk_epsilon = layout.query_norm
-        ? layout.query_norm->epsilon
-        : (layout.key_norm ? layout.key_norm->epsilon : resources_.program_.final_norm.epsilon);
-    const auto* multi = kv.paged() ? nullptr : layout.multi_axis_position();
-    if (layout.rope_position() && multi) {
-        const auto& position =
-            kv.rope_position ? *kv.rope_position : session_.next_rope_position_;
-        CELEG_CUDA(cudaMemcpyAsync(mrope_position_device_.data(), position.data(),
-                                   sizeof(position), cudaMemcpyHostToDevice,
-                                   stream_.get()));
-    }
-
-    CudaAttentionQkPreparation qk_preparation{
-        .layout = &layout,
-        .query = q,
-        .key = attention.key ? k : nullptr,
-        .query_norm = attention.q_norm,
-        .key_norm = attention.k_norm,
-        .norm_epsilon = qk_epsilon,
-        .position_mode = multi
-            ? CudaQkPositionMode::MultiAxisDevice
-            : CudaQkPositionMode::HostScalar,
-        .host_position = session_.position_,
-        .device_position = multi ? mrope_position_device_.data() : nullptr,
-        .stream = stream_.get()};
-    if (multi) {
-        qk_preparation.mrope_section0 = multi->sections[0];
-        qk_preparation.mrope_section1 = multi->sections[1];
-        qk_preparation.mrope_section2 = multi->sections[2];
-        qk_preparation.mrope_interleaved = multi->interleaved;
-    }
-    prepare_cuda_attention_qk(qk_preparation);
+    prepare_cuda_token_attention_qk(
+        *this, attention, q, k, kv.paged(), kv.rope_position);
 
     const AttentionCapability plan = token_attention_plan(attention, owner_layout, kv);
     if (kv.paged()) {
@@ -213,16 +173,7 @@ void CudaCompiledModel::run_token_attention(
         store_and_attend_token_contiguous(attention, owner, plan, q, k, v);
     }
 
-    if (output_gate) {
-        const __nv_bfloat16* gate = workspace_.attention_gate_.data();
-        if (!gate_packed) {
-            linear(workspace_.normed_.data(), *attention.gate,
-                   workspace_.attention_gate_.data(), 1,
-                   layout.query_width(), resources_.program_.hidden);
-        }
-        launch_sigmoid_multiply(workspace_.op_output_.data(), gate,
-                                layout.query_width(), stream_.get());
-    }
+    apply_cuda_token_attention_gate(*this, attention);
     project_standard_attention_output(attention, semantics);
 }
 
