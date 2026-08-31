@@ -112,16 +112,20 @@ std::unique_ptr<IWeightLayout> make_weight_layout(
     const void* table,
     const float* scales) {
     switch (weight_mode) {
+        case WeightMode::Bf16:
+            return std::make_unique<Bf16WeightLayout>(
+                static_cast<const __nv_bfloat16*>(table), scales);
         case WeightMode::Int8:
             return std::make_unique<Int8WeightLayout>(
                 static_cast<const int8_t*>(table), scales);
         case WeightMode::Int4:
             return std::make_unique<Int4WeightLayout>(
                 static_cast<const uint8_t*>(table), scales);
-        default:
-            return std::make_unique<Bf16WeightLayout>(
-                static_cast<const __nv_bfloat16*>(table), scales);
+        case WeightMode::NativeGguf:
+            throw std::invalid_argument(
+                "native GGUF embeddings require make_gguf_weight_layout");
     }
+    throw std::invalid_argument("unknown CUDA weight layout mode");
 }
 
 std::unique_ptr<IWeightLayout> make_gguf_weight_layout(
