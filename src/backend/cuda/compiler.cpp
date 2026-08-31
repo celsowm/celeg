@@ -19,24 +19,35 @@ CompiledModelProgram CudaModelCompiler::compile(const ResolvedModel& model) cons
         const bool bidirectional =
             std::holds_alternative<BidirectionalPattern>(attention.pattern);
         const auto* prefix_lm = std::get_if<PrefixLmPattern>(&attention.pattern);
-        if (!attention.has_causal_pattern() && !bidirectional && !prefix_lm) {
+        const auto* block_sparse =
+            std::get_if<BlockSparsePattern>(&attention.pattern);
+        if (!attention.has_causal_pattern() && !bidirectional &&
+            !prefix_lm && !block_sparse) {
             throw std::invalid_argument(
-                "CUDA lowering currently supports causal, bidirectional, or prefix-LM attention patterns");
+                "CUDA lowering currently supports causal, bidirectional, prefix-LM, or block-sparse attention patterns");
         }
         if (prefix_lm && prefix_lm->prefix_length <= 0) {
             throw std::invalid_argument(
                 "CUDA prefix-LM attention requires a positive prefix length");
         }
-        const bool noncausal_dense_pattern = bidirectional || prefix_lm != nullptr;
-        if (noncausal_dense_pattern &&
+        if (block_sparse &&
+            (block_sparse->block_size <= 0 ||
+             block_sparse->local_blocks <= 0 ||
+             block_sparse->global_blocks < 0)) {
+            throw std::invalid_argument(
+                "CUDA block-sparse attention requires positive block/local sizes and non-negative global blocks");
+        }
+        const bool constrained_standard_pattern =
+            bidirectional || prefix_lm != nullptr || block_sparse != nullptr;
+        if (constrained_standard_pattern &&
             !std::holds_alternative<NoAttentionBiasSpec>(attention.bias)) {
             throw std::invalid_argument(
-                "CUDA bidirectional and prefix-LM attention currently support no attention bias");
+                "CUDA bidirectional, prefix-LM, and block-sparse attention currently support no attention bias");
         }
-        if (noncausal_dense_pattern &&
+        if (constrained_standard_pattern &&
             compiled->execution.kind != AttentionExecutionKind::Standard) {
             throw std::invalid_argument(
-                "CUDA bidirectional and prefix-LM attention currently support standard attention only");
+                "CUDA bidirectional, prefix-LM, and block-sparse attention currently support standard attention only");
         }
         if (!attention.rope_position() &&
             !std::holds_alternative<NoPositionEncodingSpec>(attention.position)) {
