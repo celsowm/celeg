@@ -1,4 +1,5 @@
 #include "detail/compiled_model.hpp"
+#include "backend/cuda/paged_kv.hpp"
 #include "kernels/kernels.cuh"
 
 #include <stdexcept>
@@ -43,6 +44,31 @@ void CudaCompiledModel::store_standard_attention_kv_contiguous(
     }
 
     throw std::logic_error("unsupported CUDA attention KV position source");
+}
+
+void CudaCompiledModel::store_standard_attention_kv_paged(
+    const AttentionSpec& owner_layout, const AttentionCapability& plan,
+    int slot, __nv_bfloat16* k, __nv_bfloat16* v,
+    const TokenKvPolicy& kv) {
+    PhysicalPagedKvCache& paged_kv = *kv.paged_kv;
+    if (plan.kv_format == KvCacheMode::Int8) {
+        launch_store_kv_int8_paged_batch(
+            k, v, paged_kv.key_int8(), paged_kv.value_int8(),
+            paged_kv.key_scales(), paged_kv.value_scales(),
+            kv.device_page_table, kv.page_table_stride, position_device_.data(),
+            1, slot, paged_kv.page_tokens(), paged_kv.page_vector_elements(),
+            paged_kv.layer_vector_offset(slot), paged_kv.page_scale_elements(),
+            paged_kv.layer_scale_offset(slot), owner_layout.key_value_heads,
+            owner_layout.head_dim, stream_.get());
+        return;
+    }
+
+    launch_store_kv_paged_batch(
+        k, v, paged_kv.key_bf16(), paged_kv.value_bf16(),
+        kv.device_page_table, kv.page_table_stride, position_device_.data(),
+        1, slot, paged_kv.page_tokens(), paged_kv.page_vector_elements(),
+        paged_kv.layer_vector_offset(slot), owner_layout.key_value_heads,
+        owner_layout.head_dim, stream_.get());
 }
 
 }
