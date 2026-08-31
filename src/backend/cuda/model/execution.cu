@@ -73,7 +73,7 @@ void CudaCompiledModel::enqueue_decode_forward() {
         }
         decode_phase_profile().end(DecodePhase::Norm, stream_.get());
         if (as_attention(layer)) {
-            enqueue_decode_attention(layer, common_layer, layer_idx);
+            enqueue_decode_attention(layer, layer_idx);
         } else {
             enqueue_decode_non_attention_mixer(layer, layer_idx);
         }
