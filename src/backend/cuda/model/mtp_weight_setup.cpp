@@ -11,6 +11,7 @@
 #include "backend/cuda/moe/expert_source.hpp"
 #include "attention_state_setup.hpp"
 #include "expert_residency_setup.hpp"
+#include "layer_weight_setup.hpp"
 #include "moe_weight_setup.hpp"
 
 #include <memory>
@@ -159,21 +160,17 @@ void load_mtp_weights(CudaCompiledModel& model, const IWeightRepository& repo) {
             }
             common_layer.feed_forward = moe;
         } else {
-            if (!dense_program) {
+            if (!dense_program || dense_program->intermediate_size <= 0) {
                 throw std::runtime_error("MTP requires a compiled dense FFN width");
             }
-            const int inter = dense_program->intermediate_size;
-            if (inter <= 0) {
-                throw std::runtime_error("MTP requires a compiled dense FFN width");
-            }
-            const LinearWeight* w13 = resources.weight_loader_->load_concat_linear_weight(
-                repo, prefix + ".mlp.w13.weight",
-                {{prefix + ".mlp.gate_proj.weight", {inter, resources.program_.hidden}},
-                 {prefix + ".mlp.up_proj.weight", {inter, resources.program_.hidden}}});
-            const LinearWeight* w2 = resources.weight_loader_->load_linear_weight(
-                repo, prefix + ".mlp.down_proj.weight",
-                {resources.program_.hidden, inter});
-            common_layer.feed_forward = DenseFfnWeights{w13, w2};
+            common_layer.feed_forward = bind_cuda_dense_ffn(
+                model, repo,
+                CudaDenseFfnNames{
+                    prefix + ".mlp.w13.weight",
+                    prefix + ".mlp.gate_proj.weight",
+                    prefix + ".mlp.up_proj.weight",
+                    prefix + ".mlp.down_proj.weight"},
+                dense_program->intermediate_size);
         }
 
         AttentionLayer attention;
