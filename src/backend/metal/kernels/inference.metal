@@ -12,3 +12,4 @@
 #include "inference/batch.metal"
 #include "inference/pair.metal"
 #include "inference/relative_bias.metal"
+#include "inference/position.metal"
