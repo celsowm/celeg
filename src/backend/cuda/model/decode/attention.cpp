@@ -112,16 +112,15 @@ void CudaCompiledModel::run_token_latent_attention_paged(
     }
     const auto& latent = *layout.latent_state();
     project_cuda_latent_attention_qkv(*this, attention);
-    if (const auto* rope = layout.rope_position();
-        rope && attention.latent_key_rope && latent.decoupled_rope &&
-        latent.rope_head_dim != 0) {
-        launch_dynamic_qk_norm_rope(
-            workspace_.latent_query_rope_.data(), workspace_.latent_key_rope_.data(),
-            nullptr, nullptr, layout.query_heads, 1, latent.rope_head_dim,
-            session_.position_, static_cast<float>(rope->theta), 1.0f,
-            resources_.program_.final_norm.epsilon, false,
-            lower_cuda_rope_scaling(*rope), rope->pairing, stream_.get());
-    }
+    prepare_cuda_latent_attention_qk({
+        .layout = &layout,
+        .query_rope = workspace_.latent_query_rope_.data(),
+        .key_rope = attention.latent_key_rope
+            ? workspace_.latent_key_rope_.data() : nullptr,
+        .fallback_norm_epsilon = resources_.program_.final_norm.epsilon,
+        .position_mode = CudaQkPositionMode::HostScalar,
+        .host_position = session_.position_,
+        .stream = stream_.get()});
     const CudaAttentionOwner resolved_owner = resolve_cuda_attention_owner(
         attention, layer_index, resources_.layers_);
     const int slot = paged_kv.attention_slot(resolved_owner.model_layer);
