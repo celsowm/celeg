@@ -89,6 +89,7 @@ void CudaCompiledModel::enqueue_decode_standard_attention(
                          cuda_query_prescale(layout), stream_.get());
             decode_phase_profile().end(DecodePhase::RopeKv, stream_.get());
             decode_phase_profile().begin(stream_.get());
+            const auto* block_sparse = std::get_if<BlockSparsePattern>(&layout.pattern);
             AttentionRequest attention_request;
             attention_request.kv_format = resources_.options().kv_cache_mode;
             attention_request.operation = AttentionOperation::Decode;
@@ -96,8 +97,10 @@ void CudaCompiledModel::enqueue_decode_standard_attention(
             attention_request.position_source = AttentionPositionSource::DeviceCounter;
             attention_request.bias = attention->alibi_slopes.data()
                 ? AttentionPositionBias::Alibi : AttentionPositionBias::None;
-            attention_request.fast_attention = resources_.options().fast_attention;
-            attention_request.segmented_attention = session_.active_segmented_attention_;
+            attention_request.fast_attention =
+                resources_.options().fast_attention && block_sparse == nullptr;
+            attention_request.segmented_attention =
+                session_.active_segmented_attention_ && block_sparse == nullptr;
             attention_request.head_dim = owner_layout.head_dim;
             const AttentionCapability attention_plan =
                 require_attention_capability(attention_request);
@@ -197,7 +200,29 @@ void CudaCompiledModel::enqueue_decode_standard_attention(
                 }
                 break;
             case AttentionAlgorithm::Strict:
-                if (int8_kv) {
+                if (block_sparse) {
+                    const GqaBlockSparsePattern pattern{
+                        .block_size = block_sparse->block_size,
+                        .local_blocks = block_sparse->local_blocks,
+                        .global_blocks = block_sparse->global_blocks};
+                    if (int8_kv) {
+                        launch_gqa_decode_block_sparse_int8_device({
+                            .query = q,
+                            .kv = int8_kv_view,
+                            .out = workspace_.op_output_.data(),
+                            .geometry = attention_geometry,
+                            .extent = attention_extent,
+                            .stream = stream_.get()}, pattern);
+                    } else {
+                        launch_gqa_decode_block_sparse_device({
+                            .query = q,
+                            .kv = bf16_kv,
+                            .out = workspace_.op_output_.data(),
+                            .geometry = attention_geometry,
+                            .extent = attention_extent,
+                            .stream = stream_.get()}, pattern);
+                    }
+                } else if (int8_kv) {
                     launch_gqa_decode_strict_int8_device({
                         .query = q,
                         .kv = int8_kv_view,
