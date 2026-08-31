@@ -50,6 +50,12 @@ void CudaCompiledModel::enqueue_decode_factorized_latent_attention(
         !attention->latent_expansion || !attention->gate) {
         throw std::logic_error("factorized CUDA attention has incomplete bindings");
     }
+    const auto* latent_expansion =
+        std::get_if<Bf16LinearStorage>(&attention->latent_expansion->storage);
+    if (!latent_expansion || !latent_expansion->data) {
+        throw std::logic_error(
+            "factorized CUDA attention requires BF16 latent expansion storage");
+    }
     decode_phase_profile().begin(stream_.get());
     linear(workspace_.normed_.data(), *attention->latent_query_projection,
            workspace_.latent_projection_.data(), 1, factorized->query_rank,
@@ -63,7 +69,7 @@ void CudaCompiledModel::enqueue_decode_factorized_latent_attention(
            factorized->query_rank);
     launch_factorized_latent_query({
         .query_projection = workspace_.qkv_output_.data(),
-        .expansion = std::get<Bf16LinearStorage>(attention->latent_expansion->storage).data,
+        .expansion = latent_expansion->data,
         .query_content = workspace_.latent_query_content_.data(),
         .rows = 1,
         .query_heads = layout.query_heads,
@@ -123,7 +129,7 @@ void CudaCompiledModel::enqueue_decode_factorized_latent_attention(
         .stream = stream_.get()});
     launch_factorized_latent_value({
         .latent_output = workspace_.op_output_.data(),
-        .expansion = std::get<Bf16LinearStorage>(attention->latent_expansion->storage).data,
+        .expansion = latent_expansion->data,
         .value_output = workspace_.latent_decompressed_.data(),
         .rows = 1,
         .query_heads = layout.query_heads,
