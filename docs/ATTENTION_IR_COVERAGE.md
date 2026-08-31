@@ -31,9 +31,9 @@ The largest remaining semantic gaps are:
 1. external-memory / cross-attention lifecycle and execution;
 2. CUDA relative-position bias tables;
 3. formal backend/mode coverage for non-decoder-oriented patterns, especially bidirectional and Prefix-LM;
-4. extending Metal beyond its now-explicit causal + RoPE + standard-attention contract.
+4. extending Metal beyond its now-explicit causal/sliding + RoPE + standard-attention contract.
 
-Metal is no longer treated as unaudited by default. Its runtime currently binds ordinary Q/K/V attention to causal RoPE kernels and does not carry arbitrary attention pattern, bias, multi-axis, or latent semantics into the runtime layer. Unsupported combinations are therefore rejected during model initialization rather than being silently executed as causal attention.
+Metal is no longer treated as unaudited by default. Its runtime now has explicit full-causal and sliding-window paths over ordinary Q/K/V attention, while unsupported pattern, bias, multi-axis, sharing, transform, and latent semantics are rejected during model initialization rather than being silently executed as causal attention.
 
 ## IR surface
 
@@ -86,7 +86,7 @@ The table below is deliberately conservative. `?` means "prove it" rather than "
 | Capability | Reference/model | CPU | CUDA | Metal |
 |---|---:|---:|---:|---:|
 | Full causal | ✓ | ✓ | ✓ | ✓ |
-| Sliding window | ✓ | ✓ | ✓ | ✗ |
+| Sliding window | ✓ | ✓ | ✓ | ✓ |
 | Bidirectional | ✓ | ✓ | △ | ✗ |
 | Prefix-LM | ✓ | ✓ | △ | ✗ |
 | BlockSparse | ✓ | ✓ | △ | ✗ |
@@ -141,24 +141,30 @@ This is stronger evidence than merely finding the variants in the IR, but execut
 
 Metal has an explicit backend capability contract consumed during model initialization.
 
-The current runtime supports the deliberately narrow attention surface that is actually transported into `MetalModel::Impl::Layer` and consumed by its kernels:
+The runtime now supports:
 
-- full causal pattern;
-- ordinary KV state;
+- full causal attention;
+- sliding-window attention in token/decode and batched prefill paths;
+- ordinary private KV state;
 - RoPE;
 - standard attention execution;
 - Q/K normalization;
-- BF16 runtime attention storage.
+- BF16 attention state semantics.
 
-The following semantics are explicitly rejected before device/pipeline setup rather than silently degrading to causal attention:
+Sliding-window execution uses the compiled `SlidingWindowPattern::window` directly rather than copying it into `MetalModel::Impl::Layer`. Separate normal and cooperative kernels exist for both token/decode and batched prefill; each query reads keys starting at `max(0, sequence_length - window)`.
 
-- sliding-window, bidirectional, Prefix-LM, BlockSparse, and DynamicSparse patterns;
+The following semantics are explicitly rejected before device/pipeline setup rather than silently degrading to another attention mode:
+
+- bidirectional, Prefix-LM, BlockSparse, and DynamicSparse patterns;
 - ALiBi and relative-position bias;
 - no-position and M-RoPE modes;
 - external-memory sources;
+- shared KV publisher/consumer modes;
+- non-BF16 KV state semantics;
+- output gates and output transforms;
 - latent and factorized-latent execution.
 
-This turns the previous Metal `?` cells into explicit capability outcomes without claiming kernels that do not exist.
+This turns the Metal coverage into explicit capability outcomes without claiming kernels that do not exist.
 
 ## What "AttentionSpec 100% implemented" must mean
 
@@ -292,19 +298,18 @@ Acceptance criteria:
 
 Metal now has an audited baseline rather than an unknown matrix.
 
-Extend it only by carrying each semantic fact into `Impl::Layer`, binding it explicitly, and testing the corresponding kernel behavior.
+Extend it only by carrying each semantic fact through execution explicitly and testing the corresponding kernel behavior.
 
 Suggested order:
 
-1. sliding window;
-2. true layout/paging capability declaration;
-3. ALiBi;
-4. relative bias;
-5. M-RoPE;
-6. shared KV;
-7. sparse patterns;
-8. latent attention;
-9. external memory after the backend-neutral lifecycle exists.
+1. true layout/paging capability declaration;
+2. ALiBi;
+3. relative bias;
+4. M-RoPE;
+5. shared KV;
+6. sparse patterns;
+7. latent attention;
+8. external memory after the backend-neutral lifecycle exists.
 
 Every newly supported cell must move from `✗`/`△` to `✓` only with a named implementation path and test.
 
