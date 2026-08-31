@@ -1,4 +1,5 @@
 #include "detail/compiled_model.hpp"
+#include "attention_contiguous_dispatch.hpp"
 #include "attention_decode_dispatch.hpp"
 #include "attention_kv_store.hpp"
 #include "attention_latent_dispatch.hpp"
@@ -31,24 +32,8 @@ AttentionCapability CudaCompiledModel::token_attention_plan(
 void CudaCompiledModel::store_and_attend_token_contiguous(
     AttentionLayer& attention, AttentionLayer& owner, const AttentionCapability& plan,
     __nv_bfloat16* q, __nv_bfloat16* k, __nv_bfloat16* v) {
-    const AttentionSpec& layout = attention.layout;
-    const AttentionSpec& owner_layout = owner.layout;
     store_standard_attention_kv_contiguous(attention, owner, plan, k, v);
-
-    const auto* block_sparse = std::get_if<BlockSparsePattern>(&layout.pattern);
-    dispatch_cuda_contiguous_decode_attention({
-        .plan = plan,
-        .position_mode = CudaDecodePositionMode::HostScalar,
-        .block_sparse = block_sparse,
-        .query = q,
-        .bf16_kv = cuda_bf16_kv_view(owner),
-        .int8_kv = cuda_int8_kv_view(owner),
-        .out = workspace_.op_output_.data(),
-        .geometry = make_cuda_gqa_geometry(layout, owner_layout),
-        .extent = block_sparse
-            ? AttentionExtent{.position = position_device_.data()}
-            : AttentionExtent{.seq_len = session_.position_ + 1},
-        .stream = stream_.get()});
+    dispatch_cuda_standard_attention_contiguous(*this, attention, owner, plan, q);
 }
 
 void CudaCompiledModel::store_and_attend_token_paged(
