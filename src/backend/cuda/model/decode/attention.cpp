@@ -67,15 +67,9 @@ void CudaCompiledModel::store_and_attend_token_paged(
     const AttentionCapability& plan, int slot, __nv_bfloat16* q, __nv_bfloat16* k,
     __nv_bfloat16* v, const TokenKvPolicy& kv) {
     const AttentionSpec& layout = attention.layout;
-    const auto* sparse = std::get_if<BlockSparsePattern>(&layout.pattern);
-    const GqaBlockSparsePattern sparse_pattern = sparse
-        ? lower_cuda_block_sparse_pattern(*sparse)
-        : GqaBlockSparsePattern{};
     PhysicalPagedKvCache& paged_kv = *kv.paged_kv;
     const uint32_t* device_page_table = kv.device_page_table;
     const int page_table_stride = kv.page_table_stride;
-
-    const GqaGeometry geometry = make_cuda_gqa_geometry(layout, owner_layout);
     const PagedKvIndex index{
         .page_tables = device_page_table,
         .page_table_stride = page_table_stride,
@@ -83,27 +77,12 @@ void CudaCompiledModel::store_and_attend_token_paged(
         .page_tokens = paged_kv.page_tokens(),
         .page_vector_elements = paged_kv.page_vector_elements(),
         .layer_vector_offset = paged_kv.layer_vector_offset(slot)};
-    const auto segmentation = [&] {
-        const int chunks = (session_.position_ + 1 +
-            resources_.options().attention_chunk_tokens - 1) /
-            resources_.options().attention_chunk_tokens;
-        return AttentionSegmentation{
-            .chunk_tokens = resources_.options().attention_chunk_tokens,
-            .chunks = chunks,
-            .partial_max = workspace_.attention_partial_max_.data(),
-            .partial_denom = workspace_.attention_partial_denom_.data(),
-            .partial_accum = workspace_.attention_partial_accum_.data()};
-    };
+    const PagedKvScaleIndex scale_index{
+        .page_scale_elements = paged_kv.page_scale_elements(),
+        .layer_scale_offset = paged_kv.layer_scale_offset(slot)};
+    const bool int8_kv = plan.kv_format == KvCacheMode::Int8;
 
-    if (resources_.options().kv_cache_mode == KvCacheMode::Int8) {
-        const PagedKvScaleIndex scale_index{
-            .page_scale_elements = paged_kv.page_scale_elements(),
-            .layer_scale_offset = paged_kv.layer_scale_offset(slot)};
-        const Int8KvPoolView pool{
-            .keys = paged_kv.key_int8(),
-            .values = paged_kv.value_int8(),
-            .key_scales = paged_kv.key_scales(),
-            .value_scales = paged_kv.value_scales()};
+    if (int8_kv) {
         launch_store_kv_int8_paged_batch(
             k, v, paged_kv.key_int8(), paged_kv.value_int8(),
             paged_kv.key_scales(), paged_kv.value_scales(),
@@ -112,109 +91,42 @@ void CudaCompiledModel::store_and_attend_token_paged(
             paged_kv.page_vector_elements(), paged_kv.layer_vector_offset(slot),
             paged_kv.page_scale_elements(), paged_kv.layer_scale_offset(slot),
             owner_layout.key_value_heads, owner_layout.head_dim, stream_.get());
-        if (sparse) {
-            launch_gqa_decode_block_sparse_int8_paged({
-                .query = q,
-                .kv = pool,
-                .index = index,
-                .scale_index = scale_index,
-                .out = workspace_.op_output_.data(),
-                .positions = position_device_.data(),
-                .rows = 1,
-                .geometry = geometry,
-                .stream = stream_.get()}, sparse_pattern);
-        } else if (plan.algorithm == AttentionAlgorithm::Alibi) {
-            launch_gqa_decode_alibi_int8_paged_batch({
-                .query = q,
-                .kv = pool,
-                .index = index,
-                .scale_index = scale_index,
-                .out = workspace_.op_output_.data(),
-                .positions = position_device_.data(),
-                .rows = 1,
-                .geometry = geometry,
-                .alibi_slopes = attention.alibi_slopes.data(),
-                .stream = stream_.get()});
-        } else if (plan.algorithm == AttentionAlgorithm::Segmented) {
-            launch_gqa_decode_int8_paged_segmented_batch({
-                .query = q,
-                .kv = pool,
-                .index = index,
-                .scale_index = scale_index,
-                .out = workspace_.op_output_.data(),
-                .positions = position_device_.data(),
-                .rows = 1,
-                .geometry = geometry,
-                .segmentation = segmentation(),
-                .stream = stream_.get()});
-        } else {
-            launch_gqa_decode_int8_paged_batch({
-                .query = q,
-                .kv = pool,
-                .index = index,
-                .scale_index = scale_index,
-                .out = workspace_.op_output_.data(),
-                .positions = position_device_.data(),
-                .rows = 1,
-                .geometry = geometry,
-                .fast = plan.algorithm == AttentionAlgorithm::Online,
-                .stream = stream_.get()});
-        }
     } else {
-        const Bf16KvPoolView pool{
-            .keys = paged_kv.key_bf16(),
-            .values = paged_kv.value_bf16()};
         launch_store_kv_paged_batch(
             k, v, paged_kv.key_bf16(), paged_kv.value_bf16(),
             device_page_table, page_table_stride, position_device_.data(),
             1, slot, paged_kv.page_tokens(),
             paged_kv.page_vector_elements(), paged_kv.layer_vector_offset(slot),
             owner_layout.key_value_heads, owner_layout.head_dim, stream_.get());
-        if (sparse) {
-            launch_gqa_decode_block_sparse_paged({
-                .query = q,
-                .kv = pool,
-                .index = index,
-                .out = workspace_.op_output_.data(),
-                .positions = position_device_.data(),
-                .rows = 1,
-                .geometry = geometry,
-                .stream = stream_.get()}, sparse_pattern);
-        } else if (plan.algorithm == AttentionAlgorithm::Alibi) {
-            launch_gqa_decode_alibi_paged_batch({
-                .query = q,
-                .kv = pool,
-                .index = index,
-                .out = workspace_.op_output_.data(),
-                .positions = position_device_.data(),
-                .rows = 1,
-                .geometry = geometry,
-                .alibi_slopes = attention.alibi_slopes.data(),
-                .stream = stream_.get()});
-        } else if (plan.algorithm == AttentionAlgorithm::Segmented) {
-            launch_gqa_decode_paged_segmented_batch({
-                .query = q,
-                .kv = pool,
-                .index = index,
-                .out = workspace_.op_output_.data(),
-                .positions = position_device_.data(),
-                .rows = 1,
-                .geometry = geometry,
-                .segmentation = segmentation(),
-                .stream = stream_.get()});
-        } else {
-            launch_gqa_decode_paged_batch({
-                .query = q,
-                .kv = pool,
-                .index = index,
-                .out = workspace_.op_output_.data(),
-                .positions = position_device_.data(),
-                .rows = 1,
-                .geometry = geometry,
-                .fast = plan.algorithm == AttentionAlgorithm::Online,
-                .stream = stream_.get()});
-        }
     }
+
+    const int chunks = (session_.position_ + 1 +
+        resources_.options().attention_chunk_tokens - 1) /
+        resources_.options().attention_chunk_tokens;
+    dispatch_cuda_paged_decode_attention({
+        .plan = plan,
+        .block_sparse = std::get_if<BlockSparsePattern>(&layout.pattern),
+        .query = q,
+        .bf16_kv = {.keys = paged_kv.key_bf16(),
+                    .values = paged_kv.value_bf16()},
+        .int8_kv = {.keys = paged_kv.key_int8(),
+                    .values = paged_kv.value_int8(),
+                    .key_scales = paged_kv.key_scales(),
+                    .value_scales = paged_kv.value_scales()},
+        .index = index,
+        .scale_index = scale_index,
+        .out = workspace_.op_output_.data(),
+        .positions = position_device_.data(),
+        .rows = 1,
+        .geometry = make_cuda_gqa_geometry(layout, owner_layout),
+        .segmentation = {
+            .chunk_tokens = resources_.options().attention_chunk_tokens,
+            .chunks = chunks,
+            .partial_max = workspace_.attention_partial_max_.data(),
+            .partial_denom = workspace_.attention_partial_denom_.data(),
+            .partial_accum = workspace_.attention_partial_accum_.data()},
+        .alibi_slopes = attention.alibi_slopes.data(),
+        .stream = stream_.get()});
 }
 
 void CudaCompiledModel::run_token_latent_attention_paged(
