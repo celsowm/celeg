@@ -82,12 +82,9 @@ void check_block_sparse_prefill(celeg::CudaStream& stream) {
     celeg::DeviceBuffer<__nv_bfloat16> dkeys(keys.size());
     celeg::DeviceBuffer<__nv_bfloat16> dvalues(values.size());
     celeg::DeviceBuffer<__nv_bfloat16> output(values.size());
-    CELEG_CUDA(cudaMemcpy(dquery.data(), query.data(), dquery.bytes(),
-                          cudaMemcpyHostToDevice));
-    CELEG_CUDA(cudaMemcpy(dkeys.data(), keys.data(), dkeys.bytes(),
-                          cudaMemcpyHostToDevice));
-    CELEG_CUDA(cudaMemcpy(dvalues.data(), values.data(), dvalues.bytes(),
-                          cudaMemcpyHostToDevice));
+    CELEG_CUDA(cudaMemcpy(dquery.data(), query.data(), dquery.bytes(), cudaMemcpyHostToDevice));
+    CELEG_CUDA(cudaMemcpy(dkeys.data(), keys.data(), dkeys.bytes(), cudaMemcpyHostToDevice));
+    CELEG_CUDA(cudaMemcpy(dvalues.data(), values.data(), dvalues.bytes(), cudaMemcpyHostToDevice));
 
     celeg::launch_gqa_prefill_block_sparse({
         .query = dquery.data(),
@@ -109,8 +106,7 @@ void check_block_sparse_prefill(celeg::CudaStream& stream) {
                               (1.0f + 2.0f + 16.0f + 32.0f) / 4.0f) < 0.05f);
 
     const float dense_row5 = (1.0f + 2.0f + 4.0f + 8.0f + 16.0f + 32.0f) / 6.0f;
-    CELEG_TEST_CHECK(std::abs(celeg::cuda_test::to_float(host[5 * 2]) -
-                              dense_row5) > 1.0f);
+    CELEG_TEST_CHECK(std::abs(celeg::cuda_test::to_float(host[5 * 2]) - dense_row5) > 1.0f);
 }
 
 void check_block_sparse_decode(celeg::CudaStream& stream) {
@@ -120,9 +116,7 @@ void check_block_sparse_decode(celeg::CudaStream& stream) {
     std::vector<__nv_bfloat16> keys(rows * 2, celeg::cuda_test::to_bf16(0.0f));
     const std::array<float, rows> scalar_values{1.0f, 2.0f, 4.0f, 8.0f, 16.0f, 32.0f};
     std::vector<__nv_bfloat16> values(rows * 2, celeg::cuda_test::to_bf16(0.0f));
-    for (int row = 0; row < rows; ++row) {
-        values[row * 2] = celeg::cuda_test::to_bf16(scalar_values[row]);
-    }
+    for (int row = 0; row < rows; ++row) values[row * 2] = celeg::cuda_test::to_bf16(scalar_values[row]);
     const int32_t position = 5;
 
     celeg::DeviceBuffer<__nv_bfloat16> dquery(query.size());
@@ -130,14 +124,10 @@ void check_block_sparse_decode(celeg::CudaStream& stream) {
     celeg::DeviceBuffer<__nv_bfloat16> dvalues(values.size());
     celeg::DeviceBuffer<__nv_bfloat16> output(query.size());
     celeg::DeviceBuffer<int32_t> dposition(1);
-    CELEG_CUDA(cudaMemcpy(dquery.data(), query.data(), dquery.bytes(),
-                          cudaMemcpyHostToDevice));
-    CELEG_CUDA(cudaMemcpy(dkeys.data(), keys.data(), dkeys.bytes(),
-                          cudaMemcpyHostToDevice));
-    CELEG_CUDA(cudaMemcpy(dvalues.data(), values.data(), dvalues.bytes(),
-                          cudaMemcpyHostToDevice));
-    CELEG_CUDA(cudaMemcpy(dposition.data(), &position, sizeof(position),
-                          cudaMemcpyHostToDevice));
+    CELEG_CUDA(cudaMemcpy(dquery.data(), query.data(), dquery.bytes(), cudaMemcpyHostToDevice));
+    CELEG_CUDA(cudaMemcpy(dkeys.data(), keys.data(), dkeys.bytes(), cudaMemcpyHostToDevice));
+    CELEG_CUDA(cudaMemcpy(dvalues.data(), values.data(), dvalues.bytes(), cudaMemcpyHostToDevice));
+    CELEG_CUDA(cudaMemcpy(dposition.data(), &position, sizeof(position), cudaMemcpyHostToDevice));
 
     celeg::launch_gqa_decode_block_sparse_device({
         .query = dquery.data(),
@@ -149,14 +139,58 @@ void check_block_sparse_decode(celeg::CudaStream& stream) {
         {.block_size = 2, .local_blocks = 1, .global_blocks = 1});
 
     std::array<__nv_bfloat16, 2> host{};
-    CELEG_CUDA(cudaMemcpyAsync(host.data(), output.data(), output.bytes(),
-                               cudaMemcpyDeviceToHost, stream.get()));
+    CELEG_CUDA(cudaMemcpyAsync(host.data(), output.data(), output.bytes(), cudaMemcpyDeviceToHost, stream.get()));
     CELEG_CUDA(cudaStreamSynchronize(stream.get()));
 
     const float expected = (1.0f + 2.0f + 16.0f + 32.0f) / 4.0f;
     CELEG_TEST_CHECK(std::abs(celeg::cuda_test::to_float(host[0]) - expected) < 0.05f);
     const float dense = (1.0f + 2.0f + 4.0f + 8.0f + 16.0f + 32.0f) / 6.0f;
     CELEG_TEST_CHECK(std::abs(celeg::cuda_test::to_float(host[0]) - dense) > 1.0f);
+}
+
+void check_block_sparse_paged_decode(celeg::CudaStream& stream) {
+    constexpr int rows = 6;
+    constexpr int page_tokens = 2;
+    constexpr size_t page_vector_elements = 4;
+    std::array<__nv_bfloat16, 2> query{
+        celeg::cuda_test::to_bf16(0.0f), celeg::cuda_test::to_bf16(0.0f)};
+    std::vector<__nv_bfloat16> keys(rows * 2, celeg::cuda_test::to_bf16(0.0f));
+    const std::array<float, rows> scalar_values{1.0f, 2.0f, 4.0f, 8.0f, 16.0f, 32.0f};
+    std::vector<__nv_bfloat16> values(rows * 2, celeg::cuda_test::to_bf16(0.0f));
+    for (int row = 0; row < rows; ++row) values[row * 2] = celeg::cuda_test::to_bf16(scalar_values[row]);
+    const std::array<uint32_t, 3> page_table{0, 1, 2};
+    const int32_t position = 5;
+
+    celeg::DeviceBuffer<__nv_bfloat16> dquery(query.size());
+    celeg::DeviceBuffer<__nv_bfloat16> dkeys(keys.size());
+    celeg::DeviceBuffer<__nv_bfloat16> dvalues(values.size());
+    celeg::DeviceBuffer<__nv_bfloat16> output(query.size());
+    celeg::DeviceBuffer<uint32_t> dpages(page_table.size());
+    celeg::DeviceBuffer<int32_t> dposition(1);
+    CELEG_CUDA(cudaMemcpy(dquery.data(), query.data(), dquery.bytes(), cudaMemcpyHostToDevice));
+    CELEG_CUDA(cudaMemcpy(dkeys.data(), keys.data(), dkeys.bytes(), cudaMemcpyHostToDevice));
+    CELEG_CUDA(cudaMemcpy(dvalues.data(), values.data(), dvalues.bytes(), cudaMemcpyHostToDevice));
+    CELEG_CUDA(cudaMemcpy(dpages.data(), page_table.data(), dpages.bytes(), cudaMemcpyHostToDevice));
+    CELEG_CUDA(cudaMemcpy(dposition.data(), &position, sizeof(position), cudaMemcpyHostToDevice));
+
+    celeg::launch_gqa_decode_block_sparse_paged({
+        .query = dquery.data(),
+        .kv = {.keys = dkeys.data(), .values = dvalues.data()},
+        .index = {.page_tables = dpages.data(), .page_table_stride = 3,
+                  .attention_slot = 0, .page_tokens = page_tokens,
+                  .page_vector_elements = page_vector_elements, .layer_vector_offset = 0},
+        .out = output.data(),
+        .positions = dposition.data(),
+        .rows = 1,
+        .geometry = {.q_heads = 1, .kv_heads = 1, .head_dim = 2},
+        .stream = stream.get()},
+        {.block_size = 2, .local_blocks = 1, .global_blocks = 1});
+
+    std::array<__nv_bfloat16, 2> host{};
+    CELEG_CUDA(cudaMemcpyAsync(host.data(), output.data(), output.bytes(), cudaMemcpyDeviceToHost, stream.get()));
+    CELEG_CUDA(cudaStreamSynchronize(stream.get()));
+    const float expected = (1.0f + 2.0f + 16.0f + 32.0f) / 4.0f;
+    CELEG_TEST_CHECK(std::abs(celeg::cuda_test::to_float(host[0]) - expected) < 0.05f);
 }
 
 }
@@ -166,5 +200,6 @@ int main() {
     celeg::CudaStream stream;
     check_block_sparse_prefill(stream);
     check_block_sparse_decode(stream);
+    check_block_sparse_paged_decode(stream);
     return 0;
 }
