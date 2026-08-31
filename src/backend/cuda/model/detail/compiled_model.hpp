@@ -201,6 +201,10 @@ struct CudaCompiledModel {
                                            const AttentionCapability& plan,
                                            __nv_bfloat16* q, __nv_bfloat16* k,
                                            __nv_bfloat16* v);
+    void dispatch_standard_attention_paged(
+        AttentionLayer& attention, const AttentionSpec& owner_layout,
+        const AttentionCapability& plan, int slot, __nv_bfloat16* q,
+        const TokenKvPolicy& kv);
     void store_and_attend_token_paged(AttentionLayer& attention,
                                       const AttentionSpec& owner_layout,
                                       const AttentionCapability& plan, int slot,
