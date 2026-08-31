@@ -1,5 +1,6 @@
 #include "detail/compiled_model.hpp"
 #include "attention_layer_support.hpp"
+#include "attention_projection.hpp"
 #include "backend/cuda/attention_norm.hpp"
 #include "backend/cuda/phase_profile.hpp"
 #include "kernels/kernels.cuh"
@@ -41,28 +42,7 @@ void CudaCompiledModel::enqueue_decode_latent_attention(
             "CUDA latent attention does not support query gates or M-RoPE yet");
     }
     decode_phase_profile().begin(stream_.get());
-    linear(workspace_.normed_.data(), *attention->latent_query,
-           workspace_.latent_query_content_.data(), 1,
-           layout.latent_query_content_width(), resources_.program_.hidden);
-    if (layout.latent_query_rope_width() != 0) {
-        linear(workspace_.normed_.data(), *attention->latent_query_rope,
-               workspace_.latent_query_rope_.data(), 1,
-               layout.latent_query_rope_width(), resources_.program_.hidden);
-    }
-    if (attention->latent_key && attention->latent_value) {
-        linear(workspace_.normed_.data(), *attention->latent_key,
-               workspace_.latent_key_.data(), 1, latent.latent_rank,
-               resources_.program_.hidden);
-        linear(workspace_.normed_.data(), *attention->latent_value,
-               workspace_.latent_value_.data(), 1, latent.latent_rank,
-               resources_.program_.hidden);
-        if (attention->latent_key_rope && execution.has_decoupled_rope &&
-            execution.rotary_width != 0) {
-            linear(workspace_.normed_.data(), *attention->latent_key_rope,
-                   workspace_.latent_key_rope_.data(), 1,
-                   latent.rope_head_dim, resources_.program_.hidden);
-        }
-    }
+    project_cuda_latent_attention_qkv(*this, *attention);
     decode_phase_profile().end(DecodePhase::Projection, stream_.get());
     decode_phase_profile().begin(stream_.get());
     if (const auto* rope = layout.rope_position();
