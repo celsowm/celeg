@@ -29,6 +29,7 @@ void MetalModel::Impl::encode_token(id<MTLCommandBuffer>& command_buffer,
 
         for (size_t layer_index = 0; layer_index < layers.size(); ++layer_index) {
             Layer& layer = layers[layer_index];
+            const CompiledLayerProgram& program_layer = program.layers[layer_index];
             encode_rmsnorm_save(encoder, hidden, residual, layer.operator_norm, normed,
                            hidden_width, model.graph.final_norm.epsilon);
 
@@ -43,14 +44,15 @@ void MetalModel::Impl::encode_token(id<MTLCommandBuffer>& command_buffer,
                     encode_mamba2_layer(encoder, layer);
                     break;
                 case Layer::MixerKind::Attention:
-                    encode_attention(encoder, layer);
+                    encode_attention(
+                        encoder, layer,
+                        std::get<CompiledAttentionProgram>(program_layer.mixer));
                     break;
             }
 
             const uint32_t count = hidden_width;
             const float mixer_multiplier = 1.0f;
-            if (std::holds_alternative<std::monostate>(
-                    program.layers[layer_index].feed_forward)) {
+            if (std::holds_alternative<std::monostate>(program_layer.feed_forward)) {
                 set_buffer(encoder, hidden, 0);
                 set_buffer(encoder, residual, 1);
                 set_buffer(encoder, hidden, 2);
@@ -100,9 +102,12 @@ bool MetalModel::Impl::supports_prefill_batch() const {
             return false;
         }
         if (const auto* attention = std::get_if<CompiledAttentionProgram>(&layer.mixer)) {
+            const bool supported_pattern =
+                std::holds_alternative<FullCausalPattern>(attention->semantics.pattern) ||
+                std::holds_alternative<SlidingWindowPattern>(attention->semantics.pattern);
             if (!std::holds_alternative<OrdinaryKvStateSpec>(attention->semantics.state) ||
                 attention->semantics.output_gate.has_value() ||
-                !std::holds_alternative<FullCausalPattern>(attention->semantics.pattern) ||
+                !supported_pattern ||
                 !std::holds_alternative<NoAttentionBiasSpec>(attention->semantics.bias) ||
                 !std::holds_alternative<NoAttentionOutputTransformSpec>(
                     attention->semantics.output_transform)) {
@@ -141,6 +146,7 @@ void MetalModel::Impl::encode_prefill_batch(
 
     for (size_t layer_index = 0; layer_index < layers.size(); ++layer_index) {
         Layer& layer = layers[layer_index];
+        const CompiledLayerProgram& program_layer = program.layers[layer_index];
         set_buffer(encoder, batch_hidden, 0);
         set_buffer(encoder, batch_residual, 1);
         set_bytes(encoder, &count, sizeof(count), 2);
@@ -153,7 +159,10 @@ void MetalModel::Impl::encode_prefill_batch(
                 encode_short_convolution_batch(encoder, layer, rows, base_position);
                 break;
             case Layer::MixerKind::Attention:
-                encode_attention_batch(encoder, layer, rows, base_position);
+                encode_attention_batch(
+                    encoder, layer,
+                    std::get<CompiledAttentionProgram>(program_layer.mixer),
+                    rows, base_position);
                 break;
             case Layer::MixerKind::GatedDelta:
             case Layer::MixerKind::Mamba2:
@@ -162,8 +171,7 @@ void MetalModel::Impl::encode_prefill_batch(
         const float mixer_multiplier = 1.0f;
         encode_residual_batch(encoder, batch_hidden, batch_residual, batch_hidden,
                               count, mixer_multiplier);
-        if (std::holds_alternative<std::monostate>(
-                program.layers[layer_index].feed_forward)) {
+        if (std::holds_alternative<std::monostate>(program_layer.feed_forward)) {
             continue;
         }
         encode_rmsnorm_batch(encoder, batch_hidden, layer.ffn_norm, batch_normed,
