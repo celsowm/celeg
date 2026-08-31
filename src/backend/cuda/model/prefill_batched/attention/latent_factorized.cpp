@@ -3,7 +3,6 @@
 #include "../../attention_layer_support.hpp"
 #include "../../attention_projection.hpp"
 #include "../../attention_qk_prepare.hpp"
-#include "../../residual_fusion.hpp"
 
 namespace celeg::prefill_detail {
 
@@ -13,15 +12,11 @@ void run_factorized_latent_attention(
     AttentionLayer& owner,
     const CompiledLayerProgram& semantics,
     int rows) {
-    const __nv_bfloat16* latent_expansion =
-        require_cuda_factorized_latent_bindings(attention);
+    require_cuda_factorized_latent_bindings(attention);
 
     auto& workspace = model.workspace_;
     auto& prof = prefill_phase_profile();
     const AttentionSpec& layout = attention.layout;
-    const auto& latent = *layout.latent_state();
-    const auto& factorized = *latent.factorized_projection();
-    const int hidden = model.resources_.program_.hidden;
 
     prof.begin(model.stream_.get());
     project_cuda_prefill_factorized_latent_attention_qkv(model, attention, rows);
@@ -44,39 +39,8 @@ void run_factorized_latent_attention(
     prof.end(PrefillPhase::Attention, model.stream_.get());
 
     prof.begin(model.stream_.get());
-    launch_factorized_latent_value({
-        .latent_output = workspace.prefill_op_output_.data(),
-        .expansion = latent_expansion,
-        .value_output = workspace.prefill_latent_decompressed_.data(),
-        .rows = rows,
-        .query_heads = layout.query_heads,
-        .query_nope = latent.nope_head_dim,
-        .value_dim = factorized.value_head_dim,
-        .latent_rank = latent.latent_rank,
-        .stream = model.stream_.get()});
-    model.linear(
-        workspace.prefill_normed_.data(), *attention.gate,
-        workspace.prefill_attention_gate_.data(), rows, layout.output_gate_width(), hidden);
-    if (layout.output_gate->granularity == AttentionGateGranularity::HeadWise) {
-        launch_sigmoid_multiply_headwise(
-            workspace.prefill_latent_decompressed_.data(),
-            workspace.prefill_attention_gate_.data(), rows, layout.query_heads,
-            factorized.value_head_dim, model.stream_.get());
-    } else {
-        launch_sigmoid_multiply(
-            workspace.prefill_latent_decompressed_.data(),
-            workspace.prefill_attention_gate_.data(),
-            rows * layout.latent_output_width(), model.stream_.get());
-    }
-    const bool fuse_residual = cuda_can_fuse_mixer_residual(
-        model.resources_.options().fused_residuals, semantics);
-    model.linear(
-        workspace.prefill_latent_decompressed_.data(), *attention.out,
-        workspace.prefill_hidden_.data(), rows, hidden,
-        layout.latent_output_width(), fuse_residual ? 1.0f : 0.0f);
-    launch_scale(
-        workspace.prefill_hidden_.data(), rows * hidden,
-        semantics.residual.multiplier, model.stream_.get());
+    project_cuda_prefill_factorized_latent_attention_output(
+        model, attention, semantics, rows);
     prof.end(PrefillPhase::AttnOut, model.stream_.get());
 }
 
