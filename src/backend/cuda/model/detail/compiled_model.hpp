@@ -178,6 +178,8 @@ struct CudaCompiledModel {
     CudaQkvProjectionView project_standard_attention_qkv(AttentionLayer& attention);
     void project_standard_attention_output(
         AttentionLayer& attention, const CompiledLayerProgram& semantics);
+    void project_latent_attention_output(
+        AttentionLayer& attention, const CompiledLayerProgram& semantics);
     void store_standard_attention_kv_contiguous(
         AttentionLayer& attention, AttentionLayer& owner,
         const AttentionCapability& plan, __nv_bfloat16* k, __nv_bfloat16* v);
@@ -216,8 +218,7 @@ struct CudaCompiledModel {
     void enqueue_decode_forward();
     void enqueue_decode_attention(Layer& layer, LayerCommon& common_layer, int layer_index);
     void enqueue_decode_standard_attention(Layer& layer, int layer_index);
-    void enqueue_decode_latent_attention(Layer& layer, LayerCommon& common_layer,
-                                         int layer_index);
+    void enqueue_decode_latent_attention(Layer& layer, int layer_index);
     void enqueue_decode_factorized_latent_attention(Layer& layer,
                                                     LayerCommon& common_layer,
                                                     int layer_index);
