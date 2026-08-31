@@ -1,5 +1,6 @@
 #include "detail/compiled_model.hpp"
 #include "attention_layer_support.hpp"
+#include "attention_projection.hpp"
 #include "kernels/kernels.cuh"
 
 namespace celeg {
@@ -20,6 +21,41 @@ CudaQkvProjectionView CudaCompiledModel::project_standard_attention_qkv(
                1, layout.key_value_width(), resources_.program_.hidden);
     }
     return qkv;
+}
+
+void project_cuda_latent_attention_qkv(
+    CudaCompiledModel& model, AttentionLayer& attention) {
+    const AttentionSpec& layout = attention.layout;
+    const auto& latent = *layout.latent_state();
+    auto native_fanout = model.native_fanout_scope(
+        model.workspace_.normed_.data(), 1, model.resources_.program_.hidden);
+    model.linear(
+        model.workspace_.normed_.data(), *attention.latent_query,
+        model.workspace_.latent_query_content_.data(), 1,
+        layout.latent_query_content_width(), model.resources_.program_.hidden);
+    if (layout.latent_query_rope_width() != 0) {
+        model.linear(
+            model.workspace_.normed_.data(), *attention.latent_query_rope,
+            model.workspace_.latent_query_rope_.data(), 1,
+            layout.latent_query_rope_width(), model.resources_.program_.hidden);
+    }
+    if (attention.latent_key && attention.latent_value) {
+        model.linear(
+            model.workspace_.normed_.data(), *attention.latent_key,
+            model.workspace_.latent_key_.data(), 1, latent.latent_rank,
+            model.resources_.program_.hidden);
+        model.linear(
+            model.workspace_.normed_.data(), *attention.latent_value,
+            model.workspace_.latent_value_.data(), 1, latent.latent_rank,
+            model.resources_.program_.hidden);
+        if (attention.latent_key_rope && latent.decoupled_rope &&
+            latent.rope_head_dim != 0) {
+            model.linear(
+                model.workspace_.normed_.data(), *attention.latent_key_rope,
+                model.workspace_.latent_key_rope_.data(), 1,
+                latent.rope_head_dim, model.resources_.program_.hidden);
+        }
+    }
 }
 
 void CudaCompiledModel::project_standard_attention_output(
