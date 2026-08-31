@@ -46,6 +46,7 @@ set(CELEG_CUDA_BACKEND_SOURCES
     src/backend/cuda/model/attention_kv_store.cpp
     src/backend/cuda/model/attention_output_gate.cpp
     src/backend/cuda/model/attention_qk_prepare.cu
+    src/backend/cuda/model/attention_token_latent.cpp
     src/backend/cuda/model/attention_token_plan.cpp
     src/backend/cuda/model/attention_token_qk.cu
     src/backend/cuda/model/attention_execution.cu
