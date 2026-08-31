@@ -1,22 +1,9 @@
 #include "../../attention_kv_store.hpp"
 #include "../../attention_latent_dispatch.hpp"
+#include "../../attention_layer_support.hpp"
 #include "../../residual_fusion.hpp"
 
 namespace celeg::prefill_detail {
-
-void require_factorized_latent_bindings(const AttentionLayer& attention) {
-    if (!attention.latent_query_projection ||
-        !attention.latent_query_expansion ||
-        !attention.latent_query_norm ||
-        !attention.latent_key_projection ||
-        !attention.latent_key_norm ||
-        !attention.latent_expansion ||
-        !attention.gate ||
-        !attention.out) {
-        throw std::logic_error(
-            "CUDA factorized latent prefill has incomplete weight bindings");
-    }
-}
 
 void run_factorized_latent_attention(
     CudaCompiledModel& model,
@@ -24,7 +11,8 @@ void run_factorized_latent_attention(
     AttentionLayer& owner,
     const CompiledLayerProgram& semantics,
     int rows) {
-    require_factorized_latent_bindings(attention);
+    const __nv_bfloat16* latent_expansion =
+        require_cuda_factorized_latent_bindings(attention);
 
     auto& workspace = model.workspace_;
     auto& prof = prefill_phase_profile();
@@ -32,12 +20,6 @@ void run_factorized_latent_attention(
     const auto& latent = *layout.latent_state();
     const auto& factorized = *latent.factorized_projection();
     const int hidden = model.resources_.program_.hidden;
-    const auto* latent_expansion =
-        std::get_if<Bf16LinearStorage>(&attention.latent_expansion->storage);
-    if (!latent_expansion || !latent_expansion->data) {
-        throw std::logic_error(
-            "CUDA factorized latent prefill requires BF16 latent expansion storage");
-    }
 
     prof.begin(model.stream_.get());
     {
@@ -57,7 +39,7 @@ void run_factorized_latent_attention(
             factorized.query_rank);
         launch_factorized_latent_query({
             .query_projection = workspace.prefill_qkv_.data(),
-            .expansion = latent_expansion->data,
+            .expansion = latent_expansion,
             .query_content = workspace.prefill_latent_query_content_.data(),
             .rows = rows,
             .query_heads = layout.query_heads,
@@ -115,7 +97,7 @@ void run_factorized_latent_attention(
     prof.begin(model.stream_.get());
     launch_factorized_latent_value({
         .latent_output = workspace.prefill_op_output_.data(),
-        .expansion = latent_expansion->data,
+        .expansion = latent_expansion,
         .value_output = workspace.prefill_latent_decompressed_.data(),
         .rows = rows,
         .query_heads = layout.query_heads,
