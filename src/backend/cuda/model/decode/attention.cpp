@@ -1,5 +1,6 @@
 #include "detail/compiled_model.hpp"
 #include "attention_decode_dispatch.hpp"
+#include "attention_kv_store.hpp"
 #include "attention_layer_support.hpp"
 #include "attention_projection.hpp"
 #include "attention_qk_prepare.hpp"
@@ -125,17 +126,9 @@ void CudaCompiledModel::run_token_latent_attention_paged(
         attention, layer_index, resources_.layers_);
     const int slot = paged_kv.attention_slot(resolved_owner.model_layer);
     if (slot < 0) throw std::logic_error("latent attention has no page slot");
-    if (attention.latent_key && attention.latent_value) {
-        launch_store_latent_paged_batch(
-            workspace_.latent_key_.data(), workspace_.latent_value_.data(),
-            attention.latent_key_rope && latent.decoupled_rope && latent.rope_head_dim != 0
-                ? workspace_.latent_key_rope_.data() : nullptr,
-            paged_kv.key_bf16(), paged_kv.value_bf16(), kv.device_page_table,
-            kv.page_table_stride, position_device_.data(), 1, slot,
-            paged_kv.page_tokens(), paged_kv.page_vector_elements(),
-            paged_kv.layer_vector_offset(slot), latent.latent_rank,
-            latent.decoupled_rope ? latent.rope_head_dim : 0, stream_.get());
-    }
+    store_cuda_latent_kv_paged(
+        *this, attention, paged_kv, slot,
+        kv.device_page_table, kv.page_table_stride);
     launch_latent_attention_paged_batch({
         .query = {.content = workspace_.latent_query_content_.data(),
                   .rope = layout.latent_query_rope_width() != 0
