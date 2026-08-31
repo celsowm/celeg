@@ -153,12 +153,11 @@ int main() {
     std::get<celeg::AttentionSpec>(sparse_pattern.graph.layers[0].mixer).pattern =
         celeg::BlockSparsePattern{16, 2, 1};
     const auto sparse_cpu = celeg::CpuModelCompiler{}.compile(sparse_pattern);
-    CELEG_TEST_CHECK(std::holds_alternative<celeg::BlockSparsePattern>(
-        compiled_attention(sparse_cpu.layers[0]).pattern));
-    bool cuda_sparse_rejected = false;
-    try { (void)celeg::CudaModelCompiler{}.compile(sparse_pattern); }
-    catch (const std::invalid_argument&) { cuda_sparse_rejected = true; }
-    CELEG_TEST_CHECK(cuda_sparse_rejected);
+    const auto sparse_cuda = celeg::CudaModelCompiler{}.compile(sparse_pattern);
+    for (const celeg::CompiledModelProgram* program : {&sparse_cpu, &sparse_cuda}) {
+        CELEG_TEST_CHECK(std::holds_alternative<celeg::BlockSparsePattern>(
+            compiled_attention(program->layers[0]).pattern));
+    }
 
     celeg::ResolvedModel unsupported_position = model;
     auto& alibi_attention =
