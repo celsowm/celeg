@@ -34,6 +34,26 @@ void prepare_cuda_layer_weight_resources(CudaCompiledModel& model) {
     }
 }
 
+DenseFfnWeights bind_cuda_dense_ffn(
+    CudaCompiledModel& model,
+    const IWeightRepository& repo,
+    const CudaDenseFfnNames& names,
+    int intermediate) {
+    if (intermediate <= 0) {
+        throw std::invalid_argument("CUDA dense FFN width must be positive");
+    }
+    CudaModelResources& resources = model.resources_;
+    const LinearWeight* w13 = resources.weight_loader_->load_concat_linear_weight(
+        repo, names.synthetic_w13,
+        {
+            {names.gate, {intermediate, resources.program_.hidden}},
+            {names.up, {intermediate, resources.program_.hidden}},
+        });
+    const LinearWeight* w2 = resources.weight_loader_->load_linear_weight(
+        repo, names.down, {resources.program_.hidden, intermediate});
+    return DenseFfnWeights{w13, w2};
+}
+
 LayerCommon bind_cuda_layer_common(CudaCompiledModel& model,
                                    const IWeightRepository& repo,
                                    const CompiledLayerProgram& semantics,
@@ -109,23 +129,17 @@ LayerCommon bind_cuda_layer_common(CudaCompiledModel& model,
     if (!dense || dense->intermediate_size <= 0) {
         throw std::runtime_error("compiled dense layer has no FFN width");
     }
-    const int intermediate = dense->intermediate_size;
-    const LinearWeight* w13 = resources.weight_loader_->load_concat_linear_weight(
-        repo, cuda_layer_name(layer_index, "feed_forward.w13.weight"),
-        {
-            {cuda_tensor_name(resources.model_.weight_plan.requests,
-                              TensorRole::FfnGate, layer_index),
-             {intermediate, resources.program_.hidden}},
-            {cuda_tensor_name(resources.model_.weight_plan.requests,
-                              TensorRole::FfnUp, layer_index),
-             {intermediate, resources.program_.hidden}},
-        });
-    const LinearWeight* w2 = resources.weight_loader_->load_linear_weight(
-        repo,
-        cuda_tensor_name(resources.model_.weight_plan.requests,
-                         TensorRole::FfnDown, layer_index),
-        {resources.program_.hidden, intermediate});
-    common.feed_forward = DenseFfnWeights{w13, w2};
+    common.feed_forward = bind_cuda_dense_ffn(
+        model, repo,
+        CudaDenseFfnNames{
+            cuda_layer_name(layer_index, "feed_forward.w13.weight"),
+            cuda_tensor_name(resources.model_.weight_plan.requests,
+                             TensorRole::FfnGate, layer_index),
+            cuda_tensor_name(resources.model_.weight_plan.requests,
+                             TensorRole::FfnUp, layer_index),
+            cuda_tensor_name(resources.model_.weight_plan.requests,
+                             TensorRole::FfnDown, layer_index)},
+        dense->intermediate_size);
     return common;
 }
 
