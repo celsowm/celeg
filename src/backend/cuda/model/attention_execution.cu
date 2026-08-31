@@ -1,6 +1,7 @@
 #include "detail/compiled_model.hpp"
 #include "attention_decode_dispatch.hpp"
 #include "attention_layer_support.hpp"
+#include "attention_output_gate.hpp"
 #include "attention_qk_prepare.hpp"
 #include "backend/cuda/phase_profile.hpp"
 #include "kernels/kernels.cuh"
@@ -42,7 +43,6 @@ void CudaCompiledModel::enqueue_decode_standard_attention(
     __nv_bfloat16* q = qkv.query;
     __nv_bfloat16* k = qkv.key;
     __nv_bfloat16* v = qkv.value;
-    const bool output_gate = layout.output_gate.has_value();
     decode_phase_profile().end(DecodePhase::Projection, stream_.get());
 
     decode_phase_profile().begin(stream_.get());
@@ -97,17 +97,7 @@ void CudaCompiledModel::enqueue_decode_standard_attention(
             layout.key_value_heads, layout.head_dim,
             transform->minimum_norm_squared, stream_.get());
     }
-    if (output_gate) {
-        const __nv_bfloat16* gate = q + layout.query_width();
-        if (!layout.output_gate->packed_with_query) {
-            linear(workspace_.normed_.data(), *attention->gate,
-                   workspace_.attention_gate_.data(), 1,
-                   layout.query_width(), resources_.program_.hidden);
-            gate = workspace_.attention_gate_.data();
-        }
-        launch_sigmoid_multiply(workspace_.op_output_.data(), gate,
-                                layout.query_width(), stream_.get());
-    }
+    apply_cuda_graph_attention_gate(*this, *attention, q);
     decode_phase_profile().end(DecodePhase::Attention, stream_.get());
 
     decode_phase_profile().begin(stream_.get());
