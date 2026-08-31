@@ -1,6 +1,5 @@
 #include "detail/compiled_model.hpp"
 #include "checkpoint/detail/bootstrap.hpp"
-#include "kernels/kernels.cuh"
 #include "backend/cuda/paged_kv.hpp"
 #include "backend/cuda/weight_policy.hpp"
 #include "celeg/model/weights/quantization.hpp"
@@ -12,6 +11,7 @@
 #include "backend/cuda/moe/expert_source.hpp"
 #include "attention_state_setup.hpp"
 #include "expert_residency_setup.hpp"
+#include "moe_weight_setup.hpp"
 
 #include <memory>
 #include <stdexcept>
@@ -98,21 +98,10 @@ void load_mtp_weights(CudaCompiledModel& model, const IWeightRepository& repo) {
             const MoeLayerProgram& moe_semantics = *moe_program;
             const int E = moe_semantics.router.expert_count;
             const int inter = moe_semantics.routed.mlp.intermediate_size;
-            MoeFfnWeights moe{};
-            moe.router = resources.weight_loader_->load_router_weight_named(
-                repo, prefix + ".mlp.gate.weight", E, resources.program_.hidden);
-            const auto* router_bf16 = std::get_if<Bf16LinearStorage>(&moe.router->storage);
-            if (!router_bf16 || !router_bf16->data) {
-                throw std::logic_error("CUDA MTP router requires BF16 storage");
-            }
             const int resource_layer = resources.shape().num_hidden_layers + index;
-            DeviceBuffer<float>& router_float =
-                model.workspace_.moe_router_float_[static_cast<size_t>(resource_layer)];
-            router_float.reset(static_cast<size_t>(E) * resources.program_.hidden);
-            launch_cast_bf16_to_float(
-                router_bf16->data, router_float.data(),
-                E * resources.program_.hidden, model.stream_.get());
-            moe.router_float = router_float.data();
+            MoeFfnWeights moe = bind_cuda_moe_router_weight(
+                model, repo, prefix + ".mlp.gate.weight",
+                resource_layer, E);
 
             if (moe_semantics.shared) {
                 const int shared = moe_semantics.shared->mlp.intermediate_size;
@@ -168,14 +157,8 @@ void load_mtp_weights(CudaCompiledModel& model, const IWeightRepository& repo) {
                         model, repo, expert_names, resource_layer, E, inter);
                 }
             } else {
-                const ExpertLinearWeight* gate_up =
-                    resources.weight_loader_->load_moe_gate_up(
-                        repo, expert_names, E, inter,
-                        resources.program_.hidden);
-                const ExpertLinearWeight* down =
-                    resources.weight_loader_->load_moe_down(
-                        repo, expert_names, E, inter, resources.program_.hidden);
-                moe.storage = ResidentExpertWeights{gate_up, down};
+                moe.storage = bind_cuda_resident_experts(
+                    model, repo, expert_names, E, inter);
             }
             common_layer.feed_forward = moe;
         } else {
