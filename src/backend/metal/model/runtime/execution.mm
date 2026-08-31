@@ -107,7 +107,8 @@ bool MetalModel::Impl::supports_prefill_batch() const {
                 std::holds_alternative<SlidingWindowPattern>(attention->semantics.pattern);
             const bool supported_bias =
                 std::holds_alternative<NoAttentionBiasSpec>(attention->semantics.bias) ||
-                std::holds_alternative<AlibiBiasSpec>(attention->semantics.bias);
+                std::holds_alternative<AlibiBiasSpec>(attention->semantics.bias) ||
+                std::holds_alternative<RelativePositionBiasSpec>(attention->semantics.bias);
             if (!std::holds_alternative<OrdinaryKvStateSpec>(attention->semantics.state) ||
                 attention->semantics.output_gate.has_value() ||
                 !supported_pattern || !supported_bias ||
