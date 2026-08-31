@@ -13,7 +13,6 @@
 #include <optional>
 #include <span>
 #include <string_view>
-#include <string>
 #include <variant>
 
 namespace celeg {
@@ -55,22 +54,12 @@ std::optional<LinearSource> classify_linear_source(
     std::string_view name,
     std::span<const std::int64_t> expected);
 
-struct MaterializationPlan {
-    LinearSource source;
-    WeightMode mode = WeightMode::Bf16;
-    std::string name;
-    int rows = 0;
-    int cols = 0;
-};
-
-MaterializationPlan plan_linear_materialization(
+DeviceWeight materialize_linear(
     const LinearSource& source,
     WeightMode mode,
     std::string_view name,
     int rows,
-    int cols);
-
-DeviceWeight materialize_linear(const MaterializationPlan& plan,
-                                CudaMemoryKind memory_kind);
+    int cols,
+    CudaMemoryKind memory_kind);
 
 }
