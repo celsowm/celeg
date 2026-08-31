@@ -7,6 +7,7 @@
 #include "attention_qk_prepare.hpp"
 #include "attention_token_latent.hpp"
 #include "attention_token_qk.hpp"
+#include "backend/cuda/paged_kv.hpp"
 
 #include <stdexcept>
 
