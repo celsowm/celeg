@@ -36,6 +36,22 @@ bool metal_rejects(Mutator mutate) {
 int main() {
     CELEG_TEST_CHECK(!metal_rejects([](auto&) {}));
     CELEG_TEST_CHECK(!metal_rejects([](auto& attention) {
+        auto& rope = std::get<celeg::RopePositionSpec>(attention.position);
+        rope.pairing = celeg::RopePairingKind::SplitHalf;
+    }));
+    CELEG_TEST_CHECK(!metal_rejects([](auto& attention) {
+        auto& rope = std::get<celeg::RopePositionSpec>(attention.position);
+        rope.pairing = celeg::RopePairingKind::AdjacentPairs;
+    }));
+    CELEG_TEST_CHECK(metal_rejects([](auto& attention) {
+        auto& rope = std::get<celeg::RopePositionSpec>(attention.position);
+        rope.rotary_fraction = 0.5;
+    }));
+    CELEG_TEST_CHECK(metal_rejects([](auto& attention) {
+        auto& rope = std::get<celeg::RopePositionSpec>(attention.position);
+        rope.scaling = celeg::LinearRopeScaling{2.0};
+    }));
+    CELEG_TEST_CHECK(!metal_rejects([](auto& attention) {
         attention.pattern = celeg::SlidingWindowPattern{128};
     }));
     CELEG_TEST_CHECK(!metal_rejects([](auto& attention) {
