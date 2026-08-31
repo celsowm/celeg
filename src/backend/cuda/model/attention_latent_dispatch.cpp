@@ -4,8 +4,6 @@
 #include "backend/cuda/paged_kv.hpp"
 #include "kernels/kernels.cuh"
 
-#include <stdexcept>
-
 namespace celeg {
 namespace {
 
@@ -47,9 +45,6 @@ void dispatch_cuda_latent_attention_paged(
     CudaCompiledModel& model, AttentionLayer& attention,
     PhysicalPagedKvCache& paged_kv, int slot,
     const uint32_t* device_page_table, int page_table_stride) {
-    if (slot < 0) {
-        throw std::logic_error("latent attention has no page slot");
-    }
     const AttentionSpec& layout = attention.layout;
     launch_latent_attention_paged_batch({
         .query = latent_query_view(model, layout),
