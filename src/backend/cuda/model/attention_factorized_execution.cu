@@ -40,20 +40,10 @@ void CudaCompiledModel::enqueue_decode_factorized_latent_attention(
     const CudaAttentionOwner resolved_owner = resolve_cuda_attention_owner(
         *attention, layer_index, resources_.layers_);
     AttentionLayer& owner = *resolved_owner.layer;
+    const __nv_bfloat16* latent_expansion =
+        require_cuda_factorized_latent_bindings(*attention);
     const auto& latent = *layout.latent_state();
     const auto* factorized = latent.factorized_projection();
-    if (!factorized || !attention->latent_query_projection ||
-        !attention->latent_query_expansion || !attention->latent_key_projection ||
-        !attention->latent_key_norm || !attention->latent_query_norm ||
-        !attention->latent_expansion || !attention->gate) {
-        throw std::logic_error("factorized CUDA attention has incomplete bindings");
-    }
-    const auto* latent_expansion =
-        std::get_if<Bf16LinearStorage>(&attention->latent_expansion->storage);
-    if (!latent_expansion || !latent_expansion->data) {
-        throw std::logic_error(
-            "factorized CUDA attention requires BF16 latent expansion storage");
-    }
     decode_phase_profile().begin(stream_.get());
     linear(workspace_.normed_.data(), *attention->latent_query_projection,
            workspace_.latent_projection_.data(), 1, factorized->query_rank,
@@ -67,7 +57,7 @@ void CudaCompiledModel::enqueue_decode_factorized_latent_attention(
            factorized->query_rank);
     launch_factorized_latent_query({
         .query_projection = workspace_.qkv_output_.data(),
-        .expansion = latent_expansion->data,
+        .expansion = latent_expansion,
         .query_content = workspace_.latent_query_content_.data(),
         .rows = 1,
         .query_heads = layout.query_heads,
@@ -127,7 +117,7 @@ void CudaCompiledModel::enqueue_decode_factorized_latent_attention(
         .stream = stream_.get()});
     launch_factorized_latent_value({
         .latent_output = workspace_.op_output_.data(),
-        .expansion = latent_expansion->data,
+        .expansion = latent_expansion,
         .value_output = workspace_.latent_decompressed_.data(),
         .rows = 1,
         .query_heads = layout.query_heads,
