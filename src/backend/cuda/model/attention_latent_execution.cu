@@ -1,4 +1,5 @@
 #include "detail/compiled_model.hpp"
+#include "attention_layer_support.hpp"
 #include "backend/cuda/attention_norm.hpp"
 #include "backend/cuda/phase_profile.hpp"
 #include "kernels/kernels.cuh"
@@ -13,7 +14,7 @@ namespace celeg {
 PhaseProfile& decode_phase_profile();
 
 void CudaCompiledModel::enqueue_decode_latent_attention(
-    Layer& layer, LayerCommon&, int layer_index) {
+    Layer& layer, int layer_index) {
     const CompiledLayerProgram& semantics = resources_.program_.layers.at(
         static_cast<std::size_t>(layer_index));
     const auto* compiled_attention =
@@ -31,15 +32,9 @@ void CudaCompiledModel::enqueue_decode_latent_attention(
     const AttentionSpec& layout = attention->layout;
     const float qk_norm_epsilon = layout.query_norm
         ? layout.query_norm->epsilon : resources_.program_.final_norm.epsilon;
-    const bool fuse_mixer_residual = resources_.options().fused_residuals &&
-        !semantics.mixer_norm.after.has_value() &&
-        !std::holds_alternative<std::monostate>(semantics.feed_forward);
-    AttentionLayer* owner = attention;
-    if (attention->kv_owner_layer >= 0) {
-        owner = as_attention(resources_.layers_.at(
-            static_cast<std::size_t>(attention->kv_owner_layer)));
-        if (!owner) throw std::logic_error("CUDA shared KV owner is not attention");
-    }
+    const CudaAttentionOwner resolved_owner = resolve_cuda_attention_owner(
+        *attention, layer_index, resources_.layers_);
+    AttentionLayer& owner = *resolved_owner.layer;
     const auto& latent = *layout.latent_state();
     if (layout.output_gate.has_value() || layout.multi_axis_position()) {
         throw std::invalid_argument(
@@ -93,8 +88,8 @@ void CudaCompiledModel::enqueue_decode_latent_attention(
             attention->latent_key_rope && execution.has_decoupled_rope &&
             execution.rotary_width != 0
                 ? workspace_.latent_key_rope_.data() : nullptr,
-            owner->latent_key_cache_ptr(), owner->latent_value_cache_ptr(),
-            owner->latent_key_rope_cache_ptr(), position_device_.data(),
+            owner.latent_key_cache_ptr(), owner.latent_value_cache_ptr(),
+            owner.latent_key_rope_cache_ptr(), position_device_.data(),
             latent.latent_rank,
             execution.has_decoupled_rope ? execution.rotary_width : 0,
             stream_.get());
@@ -103,9 +98,9 @@ void CudaCompiledModel::enqueue_decode_latent_attention(
         .query = {.content = workspace_.latent_query_content_.data(),
                   .rope = layout.latent_query_rope_width() != 0
                               ? workspace_.latent_query_rope_.data() : nullptr},
-        .kv = {.keys = owner->latent_key_cache_ptr(),
-               .values = owner->latent_value_cache_ptr(),
-               .key_rope = owner->latent_key_rope_cache_ptr()},
+        .kv = {.keys = owner.latent_key_cache_ptr(),
+               .values = owner.latent_value_cache_ptr(),
+               .key_rope = owner.latent_key_rope_cache_ptr()},
         .out = workspace_.op_output_.data(),
         .extent = {.position = position_device_.data()},
         .alibi_slopes = attention->alibi_slopes.data(),
@@ -118,11 +113,7 @@ void CudaCompiledModel::enqueue_decode_latent_attention(
         .stream = stream_.get()});
     decode_phase_profile().end(DecodePhase::Attention, stream_.get());
     decode_phase_profile().begin(stream_.get());
-    linear(workspace_.op_output_.data(), *attention->out,
-           workspace_.hidden_.data(), 1, resources_.program_.hidden,
-           layout.latent_query_content_width(), fuse_mixer_residual ? 1.0f : 0.0f);
-    launch_scale(workspace_.hidden_.data(), resources_.program_.hidden,
-                 semantics.residual.multiplier, stream_.get());
+    project_latent_attention_output(*attention, semantics);
     decode_phase_profile().end(DecodePhase::AttnOut, stream_.get());
 }
 
