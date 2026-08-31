@@ -176,4 +176,127 @@ void dispatch_cuda_contiguous_decode_attention(
     }
 }
 
+void dispatch_cuda_paged_decode_attention(
+    const CudaPagedDecodeDispatch& dispatch) {
+    const bool int8_kv = dispatch.plan.kv_format == KvCacheMode::Int8;
+
+    switch (dispatch.plan.algorithm) {
+    case AttentionAlgorithm::Alibi:
+        if (int8_kv) {
+            launch_gqa_decode_alibi_int8_paged_batch({
+                .query = dispatch.query,
+                .kv = dispatch.int8_kv,
+                .index = dispatch.index,
+                .scale_index = dispatch.scale_index,
+                .out = dispatch.out,
+                .positions = dispatch.positions,
+                .rows = dispatch.rows,
+                .geometry = dispatch.geometry,
+                .alibi_slopes = dispatch.alibi_slopes,
+                .stream = dispatch.stream});
+        } else {
+            launch_gqa_decode_alibi_paged_batch({
+                .query = dispatch.query,
+                .kv = dispatch.bf16_kv,
+                .index = dispatch.index,
+                .out = dispatch.out,
+                .positions = dispatch.positions,
+                .rows = dispatch.rows,
+                .geometry = dispatch.geometry,
+                .alibi_slopes = dispatch.alibi_slopes,
+                .stream = dispatch.stream});
+        }
+        return;
+
+    case AttentionAlgorithm::Segmented:
+        if (int8_kv) {
+            launch_gqa_decode_int8_paged_segmented_batch({
+                .query = dispatch.query,
+                .kv = dispatch.int8_kv,
+                .index = dispatch.index,
+                .scale_index = dispatch.scale_index,
+                .out = dispatch.out,
+                .positions = dispatch.positions,
+                .rows = dispatch.rows,
+                .geometry = dispatch.geometry,
+                .segmentation = dispatch.segmentation,
+                .stream = dispatch.stream});
+        } else {
+            launch_gqa_decode_paged_segmented_batch({
+                .query = dispatch.query,
+                .kv = dispatch.bf16_kv,
+                .index = dispatch.index,
+                .out = dispatch.out,
+                .positions = dispatch.positions,
+                .rows = dispatch.rows,
+                .geometry = dispatch.geometry,
+                .segmentation = dispatch.segmentation,
+                .stream = dispatch.stream});
+        }
+        return;
+
+    case AttentionAlgorithm::Online:
+    case AttentionAlgorithm::Strict:
+        if (dispatch.block_sparse) {
+            if (dispatch.plan.algorithm != AttentionAlgorithm::Strict) {
+                throw UnsupportedAttentionCapability(dispatch.plan);
+            }
+            const GqaBlockSparsePattern pattern =
+                lower_cuda_block_sparse_pattern(*dispatch.block_sparse);
+            if (int8_kv) {
+                launch_gqa_decode_block_sparse_int8_paged({
+                    .query = dispatch.query,
+                    .kv = dispatch.int8_kv,
+                    .index = dispatch.index,
+                    .scale_index = dispatch.scale_index,
+                    .out = dispatch.out,
+                    .positions = dispatch.positions,
+                    .rows = dispatch.rows,
+                    .geometry = dispatch.geometry,
+                    .stream = dispatch.stream}, pattern);
+            } else {
+                launch_gqa_decode_block_sparse_paged({
+                    .query = dispatch.query,
+                    .kv = dispatch.bf16_kv,
+                    .index = dispatch.index,
+                    .out = dispatch.out,
+                    .positions = dispatch.positions,
+                    .rows = dispatch.rows,
+                    .geometry = dispatch.geometry,
+                    .stream = dispatch.stream}, pattern);
+            }
+            return;
+        }
+        if (int8_kv) {
+            launch_gqa_decode_int8_paged_batch({
+                .query = dispatch.query,
+                .kv = dispatch.int8_kv,
+                .index = dispatch.index,
+                .scale_index = dispatch.scale_index,
+                .out = dispatch.out,
+                .positions = dispatch.positions,
+                .rows = dispatch.rows,
+                .geometry = dispatch.geometry,
+                .fast = dispatch.plan.algorithm == AttentionAlgorithm::Online,
+                .stream = dispatch.stream});
+        } else {
+            launch_gqa_decode_paged_batch({
+                .query = dispatch.query,
+                .kv = dispatch.bf16_kv,
+                .index = dispatch.index,
+                .out = dispatch.out,
+                .positions = dispatch.positions,
+                .rows = dispatch.rows,
+                .geometry = dispatch.geometry,
+                .fast = dispatch.plan.algorithm == AttentionAlgorithm::Online,
+                .stream = dispatch.stream});
+        }
+        return;
+
+    case AttentionAlgorithm::Flash:
+    case AttentionAlgorithm::Gemm:
+        throw UnsupportedAttentionCapability(dispatch.plan);
+    }
+}
+
 }
