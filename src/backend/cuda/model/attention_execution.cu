@@ -14,7 +14,7 @@ namespace celeg {
 PhaseProfile& decode_phase_profile();
 
 void CudaCompiledModel::enqueue_decode_standard_attention(
-    Layer& layer, LayerCommon& common_layer, int layer_index) {
+    Layer& layer, int layer_index) {
     const CompiledLayerProgram& semantics = resources_.program_.layers.at(
         static_cast<size_t>(layer_index));
     const auto* compiled_attention =
