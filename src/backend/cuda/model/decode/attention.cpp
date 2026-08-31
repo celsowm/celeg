@@ -7,11 +7,7 @@
 #include "backend/cuda/weight_layout.hpp"
 #include "backend/cuda/moe.hpp"
 
-#include <algorithm>
-#include <cmath>
-#include <cstring>
 #include <stdexcept>
-#include <vector>
 
 namespace celeg {
 
@@ -100,8 +96,8 @@ void CudaCompiledModel::store_and_attend_token_paged(
 }
 
 void CudaCompiledModel::run_token_latent_attention_paged(
-    AttentionLayer& attention, LayerCommon& common_layer,
-    const CompiledLayerProgram& semantics, int layer_index, const TokenKvPolicy& kv) {
+    AttentionLayer& attention, const CompiledLayerProgram& semantics,
+    int layer_index, const TokenKvPolicy& kv) {
     const AttentionSpec& layout = attention.layout;
     PhysicalPagedKvCache& paged_kv = *kv.paged_kv;
     if (resources_.options().kv_cache_mode == KvCacheMode::Int8) {
@@ -210,8 +206,7 @@ void CudaCompiledModel::run_token_attention(
             throw std::invalid_argument(
                 "CUDA latent attention is not implemented for contiguous host token execution");
         }
-        run_token_latent_attention_paged(attention, common_layer, semantics,
-                                         layer_index, kv);
+        run_token_latent_attention_paged(attention, semantics, layer_index, kv);
         return;
     }
 
