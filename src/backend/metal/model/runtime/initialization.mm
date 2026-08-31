@@ -1,5 +1,6 @@
 #include "detail.hpp"
 
+#include "celeg/backend/metal/attention_capabilities.hpp"
 #include "metal_inference_source.hpp"
 #include "metal_tensor_source.hpp"
 
@@ -42,6 +43,7 @@ MetalModel::MetalModel(const std::string& path, int context,
     (*impl_).model.validate();
     (*impl_).program = build_model_program((*impl_).model);
     (*impl_).program.validate();
+    validate_metal_attention_capabilities((*impl_).program);
     if ((*impl_).program.layers.empty()) throw std::runtime_error("Metal model has no layers");
     for (const CompiledLayerProgram& layer : (*impl_).program.layers) {
         if (!std::holds_alternative<ShortConvolutionSpec>(layer.mixer) &&
