@@ -40,6 +40,7 @@ set(CELEG_CUDA_BACKEND_SOURCES
     src/backend/cuda/model/attention_decode_dispatch.cu
     src/backend/cuda/model/attention_layer_support.cpp
     src/backend/cuda/model/attention_projection.cpp
+    src/backend/cuda/model/attention_kv_store.cpp
     src/backend/cuda/model/attention_qk_prepare.cu
     src/backend/cuda/model/attention_execution.cu
     src/backend/cuda/model/attention_dispatch.cu
