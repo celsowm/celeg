@@ -1,5 +1,6 @@
 #include "detail/compiled_model.hpp"
 #include "attention_decode_dispatch.hpp"
+#include "attention_layer_support.hpp"
 #include "backend/cuda/attention_norm.hpp"
 #include "backend/cuda/phase_profile.hpp"
 #include "kernels/kernels.cuh"
@@ -33,13 +34,10 @@ void CudaCompiledModel::enqueue_decode_standard_attention(
     const bool fuse_mixer_residual = resources_.options().fused_residuals &&
         !semantics.mixer_norm.after.has_value() &&
         !std::holds_alternative<std::monostate>(semantics.feed_forward);
-    AttentionLayer* owner = attention;
-    if (attention->kv_owner_layer >= 0) {
-        owner = as_attention(resources_.layers_.at(
-            static_cast<size_t>(attention->kv_owner_layer)));
-        if (!owner) throw std::logic_error("CUDA shared KV owner is not attention");
-    }
-    const AttentionSpec& owner_layout = owner->layout;
+    const CudaAttentionOwner resolved_owner = resolve_cuda_attention_owner(
+        *attention, layer_index, resources_.layers_);
+    AttentionLayer& owner = *resolved_owner.layer;
+    const AttentionSpec& owner_layout = owner.layout;
     if (execution.kind != AttentionExecutionKind::Standard) {
         throw std::logic_error("standard CUDA attention has a non-standard descriptor");
     }
@@ -107,13 +105,13 @@ void CudaCompiledModel::enqueue_decode_standard_attention(
     if (attention->key && attention->value) {
         if (int8_kv) {
             launch_store_kv_int8_device(
-                k, v, owner->key_cache_int8_ptr(), owner->value_cache_int8_ptr(),
-                owner->key_cache_scales_ptr(), owner->value_cache_scales_ptr(),
+                k, v, owner.key_cache_int8_ptr(), owner.value_cache_int8_ptr(),
+                owner.key_cache_scales_ptr(), owner.value_cache_scales_ptr(),
                 position_device_.data(), owner_layout.key_value_heads,
                 owner_layout.head_dim, stream_.get());
         } else {
             launch_store_kv_device(
-                k, v, owner->key_cache_bf16(), owner->value_cache_bf16(),
+                k, v, owner.key_cache_bf16(), owner.value_cache_bf16(),
                 position_device_.data(), owner_layout.key_value_width(), stream_.get());
         }
     }
@@ -123,12 +121,8 @@ void CudaCompiledModel::enqueue_decode_standard_attention(
         .position_mode = CudaDecodePositionMode::DeviceCounter,
         .block_sparse = attention_policy.block_sparse,
         .query = q,
-        .bf16_kv = {.keys = owner->key_cache_bf16(),
-                    .values = owner->value_cache_bf16()},
-        .int8_kv = {.keys = owner->key_cache_int8_ptr(),
-                    .values = owner->value_cache_int8_ptr(),
-                    .key_scales = owner->key_cache_scales_ptr(),
-                    .value_scales = owner->value_cache_scales_ptr()},
+        .bf16_kv = cuda_bf16_kv_view(owner),
+        .int8_kv = cuda_int8_kv_view(owner),
         .out = workspace_.op_output_.data(),
         .geometry = make_cuda_gqa_geometry(layout, owner_layout),
         .extent = {.position = position_device_.data()},
