@@ -14,6 +14,10 @@ void project_cuda_latent_attention_qkv(
     CudaCompiledModel& model, AttentionLayer& attention);
 void project_cuda_prefill_latent_attention_qkv(
     CudaCompiledModel& model, AttentionLayer& attention, int rows);
+void project_cuda_factorized_latent_attention_qkv(
+    CudaCompiledModel& model, AttentionLayer& attention);
+void project_cuda_prefill_factorized_latent_attention_qkv(
+    CudaCompiledModel& model, AttentionLayer& attention, int rows);
 
 void project_cuda_prefill_standard_attention_output(
     CudaCompiledModel& model, AttentionLayer& attention,
