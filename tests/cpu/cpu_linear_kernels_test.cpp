@@ -44,7 +44,8 @@ int main() {
     const std::vector<float> scalar = run_gemv(q4, input, celeg::CpuIsa::Scalar);
 
     const celeg::CpuCapabilities caps = celeg::detect_cpu_capabilities();
-    if (caps.avx2 && caps.fma && celeg::cpu_isa_compiled(celeg::CpuIsa::Avx2)) {
+    if (caps.supports(celeg::CpuIsa::Avx2) && caps.fma &&
+        celeg::cpu_isa_compiled(celeg::CpuIsa::Avx2)) {
         const auto avx2 = run_gemv(q4, input, celeg::CpuIsa::Avx2);
         check_close(avx2, scalar, 0.08f);
 
@@ -62,10 +63,11 @@ int main() {
             CELEG_TEST_CHECK(std::abs(value - scalar[row]) < 0.08f);
         }
     }
-    if (caps.avx_vnni && celeg::cpu_isa_compiled(celeg::CpuIsa::AvxVnni)) {
+    if (caps.supports(celeg::CpuIsa::AvxVnni) &&
+        celeg::cpu_isa_compiled(celeg::CpuIsa::AvxVnni)) {
         check_close(run_gemv(q4, input, celeg::CpuIsa::AvxVnni), scalar, 0.08f);
     }
-    if (caps.avx512f && caps.avx512_vnni &&
+    if (caps.supports(celeg::CpuIsa::Avx512Vnni) &&
         celeg::cpu_isa_compiled(celeg::CpuIsa::Avx512Vnni)) {
         check_close(run_gemv(q4, input, celeg::CpuIsa::Avx512Vnni), scalar, 0.08f);
     }
