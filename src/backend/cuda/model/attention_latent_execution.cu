@@ -1,4 +1,5 @@
 #include "detail/compiled_model.hpp"
+#include "attention_kv_store.hpp"
 #include "attention_layer_support.hpp"
 #include "attention_projection.hpp"
 #include "backend/cuda/attention_norm.hpp"
@@ -62,18 +63,7 @@ void CudaCompiledModel::enqueue_decode_latent_attention(
     }
     decode_phase_profile().end(DecodePhase::RopeKv, stream_.get());
     decode_phase_profile().begin(stream_.get());
-    if (attention->latent_key && attention->latent_value) {
-        launch_store_latent_device(
-            workspace_.latent_key_.data(), workspace_.latent_value_.data(),
-            attention->latent_key_rope && execution.has_decoupled_rope &&
-            execution.rotary_width != 0
-                ? workspace_.latent_key_rope_.data() : nullptr,
-            owner.latent_key_cache_ptr(), owner.latent_value_cache_ptr(),
-            owner.latent_key_rope_cache_ptr(), position_device_.data(),
-            latent.latent_rank,
-            execution.has_decoupled_rope ? execution.rotary_width : 0,
-            stream_.get());
-    }
+    store_cuda_latent_kv_contiguous(*this, *attention, owner);
     launch_latent_attention_device({
         .query = {.content = workspace_.latent_query_content_.data(),
                   .rope = layout.latent_query_rope_width() != 0
