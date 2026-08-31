@@ -18,7 +18,13 @@ CompiledModelProgram CpuModelCompiler::compile(const ResolvedModel& model) const
          .dynamic_sparse = true,
          .external_memory = false,
          .alibi = true,
-         .relative_position_bias = true});
+         .relative_position_bias = true,
+         .no_position = true,
+         .rope = true,
+         .multi_axis_rope = true,
+         .standard_execution = true,
+         .latent_execution = true,
+         .factorized_latent_execution = true});
     validate_moe_backend_capabilities(program, "CPU", {true, true, false, false});
     return program;
 }
