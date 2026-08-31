@@ -1,5 +1,5 @@
 
-__device__ float attention_dot_int8(const __nv_bfloat16* query,
+__device__ __forceinline__ float attention_dot_int8(const __nv_bfloat16* query,
                                     const int8_t* key, float key_scale,
                                     int head_dim, float* warp_sums,
                                     float* total) {
@@ -11,7 +11,7 @@ __device__ float attention_dot_int8(const __nv_bfloat16* query,
     return block_sum(partial, warp_sums, total);
 }
 
-__device__ float attention_dot(const __nv_bfloat16* query,
+__device__ __forceinline__ float attention_dot(const __nv_bfloat16* query,
                                const __nv_bfloat16* key,
                                int head_dim,
                                float* warp_sums,
