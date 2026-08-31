@@ -28,8 +28,16 @@ set(CELEG_METAL_SHADER_SOURCES
     src/backend/metal/kernels/inference/projection.metal
     src/backend/metal/kernels/inference/batch.metal
     src/backend/metal/kernels/inference/pair.metal
+    src/backend/metal/kernels/inference/relative_bias.metal
     src/backend/metal/kernels/tensor.metal
 )
+
+set(_CELEG_METAL_RELATIVE_BIAS_SOURCE_FILE
+    "${CMAKE_CURRENT_LIST_DIR}/kernels/inference/relative_bias.metal")
+file(READ "${_CELEG_METAL_RELATIVE_BIAS_SOURCE_FILE}"
+    CELEG_METAL_RELATIVE_BIAS_SOURCE)
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+    "${_CELEG_METAL_RELATIVE_BIAS_SOURCE_FILE}")
 
 set(CELEG_METAL_APP_SOURCES
     apps/benchmark/metal/inference.cpp
