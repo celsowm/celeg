@@ -32,6 +32,7 @@ if(TARGET celeg_cuda_backend)
     endif()
 
     foreach(test_name IN ITEMS
+        cuda_bidirectional_attention_test
         cuda_gguf_kernels_test
         moe_route_test
         moe_ffn_test

@@ -5,6 +5,8 @@ AttentionCapability select_attention_plan(
     AttentionLayer& attention,
     const AttentionSpec& owner_layout,
     int rows) {
+    const bool bidirectional =
+        std::holds_alternative<BidirectionalPattern>(attention.layout.pattern);
     AttentionRequest request;
     request.kv_format = model.resources_.options().kv_cache_mode;
     request.operation = AttentionOperation::Prefill;
@@ -12,8 +14,10 @@ AttentionCapability select_attention_plan(
     request.position_source = AttentionPositionSource::HostScalar;
     request.bias = attention.alibi_slopes.data()
         ? AttentionPositionBias::Alibi : AttentionPositionBias::None;
-    request.fast_attention = model.resources_.options().fast_attention;
-    request.flash_attention_requested = model.resources_.options().flash_attn;
+    request.fast_attention =
+        model.resources_.options().fast_attention && !bidirectional;
+    request.flash_attention_requested =
+        model.resources_.options().flash_attn && !bidirectional;
     request.head_dim = owner_layout.head_dim;
     request.rows = rows;
     return require_attention_capability(request);
@@ -28,6 +32,8 @@ void store_and_attend(
     const AttentionSpec& layout = attention.layout;
     const AttentionSpec& owner_layout = owner.layout;
     const bool int8_kv = plan.kv_format == KvCacheMode::Int8;
+    const bool bidirectional =
+        std::holds_alternative<BidirectionalPattern>(layout.pattern);
 
     if (attention.key && attention.value) {
         if (int8_kv) {
@@ -52,7 +58,9 @@ void store_and_attend(
         .kv_heads = owner_layout.key_value_heads,
         .head_dim = owner_layout.head_dim,
         .sliding_window = layout.sliding_window_size()};
-    const AttentionExtent extent{.rows = rows};
+    const AttentionExtent extent{
+        .rows = rows,
+        .seq_len = bidirectional ? rows : 0};
     const Bf16KvView bf16_kv{
         .keys = owner.key_cache_bf16(),
         .values = owner.value_cache_bf16()};

@@ -16,9 +16,21 @@ CompiledModelProgram CudaModelCompiler::compile(const ResolvedModel& model) cons
             throw std::invalid_argument(
                 "CUDA lowering currently supports self-attention sources only");
         }
-        if (!attention.has_causal_pattern()) {
+        const bool bidirectional =
+            std::holds_alternative<BidirectionalPattern>(attention.pattern);
+        if (!attention.has_causal_pattern() && !bidirectional) {
             throw std::invalid_argument(
-                "CUDA lowering currently supports only causal attention patterns");
+                "CUDA lowering currently supports causal or bidirectional attention patterns");
+        }
+        if (bidirectional &&
+            !std::holds_alternative<NoAttentionBiasSpec>(attention.bias)) {
+            throw std::invalid_argument(
+                "CUDA bidirectional attention currently supports no attention bias");
+        }
+        if (bidirectional &&
+            compiled->execution.kind != AttentionExecutionKind::Standard) {
+            throw std::invalid_argument(
+                "CUDA bidirectional attention currently supports standard attention only");
         }
         if (!attention.rope_position() &&
             !std::holds_alternative<NoPositionEncodingSpec>(attention.position)) {
