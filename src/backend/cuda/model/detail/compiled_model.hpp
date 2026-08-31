@@ -182,6 +182,10 @@ struct CudaCompiledModel {
     void store_standard_attention_kv_contiguous(
         AttentionLayer& attention, AttentionLayer& owner,
         const AttentionCapability& plan, __nv_bfloat16* k, __nv_bfloat16* v);
+    void store_standard_attention_kv_paged(
+        const AttentionSpec& owner_layout, const AttentionCapability& plan,
+        int slot, __nv_bfloat16* k, __nv_bfloat16* v,
+        const TokenKvPolicy& kv);
     void run_token_attention(AttentionLayer& attention, LayerCommon& common_layer,
                              const CompiledLayerProgram& semantics, int layer_index,
                              const TokenKvPolicy& kv);
