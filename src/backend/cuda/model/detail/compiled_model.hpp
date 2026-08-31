@@ -39,6 +39,8 @@ namespace detail {
 struct ModelBootstrap;
 }
 
+struct CudaQkvProjectionView;
+
 struct CudaCompiledModel {
     CudaModelResources resources_;
     CudaWeightCache& weight_cache_;
@@ -174,6 +176,7 @@ struct CudaCompiledModel {
     void run_token_mixer(Layer& layer, LayerCommon& common_layer,
                          const CompiledLayerProgram& semantics, int layer_index,
                          const TokenKvPolicy& kv);
+    CudaQkvProjectionView project_standard_attention_qkv(AttentionLayer& attention);
     void run_token_attention(AttentionLayer& attention, LayerCommon& common_layer,
                              const CompiledLayerProgram& semantics, int layer_index,
                              const TokenKvPolicy& kv);
