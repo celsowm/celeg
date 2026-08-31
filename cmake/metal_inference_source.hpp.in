@@ -4,5 +4,6 @@ namespace celeg::metal_detail {
 inline constexpr const char* kInferenceShader = R"CELEGINF(
 @CELEG_METAL_INFERENCE_SOURCE@
 @CELEG_METAL_RELATIVE_BIAS_SOURCE@
+@CELEG_METAL_POSITION_SOURCE@
 )CELEGINF";
 }
