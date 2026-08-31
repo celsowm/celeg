@@ -196,20 +196,10 @@ struct CudaCompiledModel {
     AttentionCapability token_attention_plan(AttentionLayer& attention,
                                              const AttentionSpec& owner_layout,
                                              const TokenKvPolicy& kv);
-    void store_and_attend_token_contiguous(AttentionLayer& attention,
-                                           AttentionLayer& owner,
-                                           const AttentionCapability& plan,
-                                           __nv_bfloat16* q, __nv_bfloat16* k,
-                                           __nv_bfloat16* v);
     void dispatch_standard_attention_paged(
         AttentionLayer& attention, const AttentionSpec& owner_layout,
         const AttentionCapability& plan, int slot, __nv_bfloat16* q,
         const TokenKvPolicy& kv);
-    void store_and_attend_token_paged(AttentionLayer& attention,
-                                      const AttentionSpec& owner_layout,
-                                      const AttentionCapability& plan, int slot,
-                                      __nv_bfloat16* q, __nv_bfloat16* k,
-                                      __nv_bfloat16* v, const TokenKvPolicy& kv);
     void run_token_gated_delta(GatedDeltaNetLayer& gated_delta,
                                const CompiledLayerProgram& semantics);
     void run_token_mamba2(Mamba2Layer& mamba, const CompiledLayerProgram& semantics,
