@@ -34,29 +34,11 @@ void run_regular_attention(
     const AttentionSpec& layout = attention.layout;
     const AttentionSpec& owner_layout = owner.layout;
     const int hidden = model.resources_.program_.hidden;
-    const int query_projection_width = attention.query->rows;
     const bool output_gate = layout.output_gate.has_value();
     const bool gate_packed = output_gate && layout.output_gate->packed_with_query;
 
     prof.begin(model.stream_.get());
-    {
-        auto native_fanout = model.native_fanout_scope(
-            workspace.prefill_normed_.data(), rows, hidden);
-        model.linear(
-            workspace.prefill_normed_.data(), *attention.query,
-            gate_packed ? workspace.prefill_qkv_.data() : workspace.prefill_q_.data(),
-            rows, query_projection_width, hidden);
-        if (attention.key) {
-            model.linear(
-                workspace.prefill_normed_.data(), *attention.key,
-                workspace.prefill_k_.data(),
-                rows, layout.key_value_width(), hidden);
-            model.linear(
-                workspace.prefill_normed_.data(), *attention.value,
-                workspace.prefill_v_.data(),
-                rows, layout.key_value_width(), hidden);
-        }
-    }
+    project_cuda_prefill_standard_attention_qkv(model, attention, rows);
     prof.end(PrefillPhase::QkvProj, model.stream_.get());
 
     prof.begin(model.stream_.get());
