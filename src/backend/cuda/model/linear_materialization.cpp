@@ -45,19 +45,18 @@ std::optional<LinearSource> classify_linear_source(
     return std::nullopt;
 }
 
-MaterializationPlan plan_linear_materialization(
-    const LinearSource& source, WeightMode mode, std::string_view name,
-    int rows, int cols) {
-    return MaterializationPlan{source, mode, std::string(name), rows, cols};
-}
-
-DeviceWeight materialize_linear(const MaterializationPlan& plan,
-                                CudaMemoryKind memory_kind) {
-    if (plan.rows <= 0 || plan.cols <= 0) {
+DeviceWeight materialize_linear(
+    const LinearSource& linear_source,
+    WeightMode mode,
+    std::string_view name,
+    int rows,
+    int cols,
+    CudaMemoryKind memory_kind) {
+    if (rows <= 0 || cols <= 0) {
         throw std::invalid_argument("linear materialization dimensions must be positive");
     }
     DeviceWeight weight(memory_kind);
-    weight.shape = {plan.rows, plan.cols};
+    weight.shape = {rows, cols};
     std::visit([&](const auto& source) {
         using Source = std::decay_t<decltype(source)>;
         if constexpr (std::is_same_v<Source, PackedInt8Source>) {
@@ -74,9 +73,9 @@ DeviceWeight materialize_linear(const MaterializationPlan& plan,
                                   dense.size() * sizeof(__nv_bfloat16),
                                   cudaMemcpyHostToDevice));
             const std::byte* data = reinterpret_cast<const std::byte*>(dense.data());
-            if (is_rowwise_quantized_weight_mode(plan.mode)) {
+            if (is_rowwise_quantized_weight_mode(mode)) {
                 cuda_loader_detail::quantize_and_bind(
-                    weight, data, plan.rows, plan.cols, plan.mode,
+                    weight, data, rows, cols, mode,
                     weight.bf16_storage.data());
             } else {
                 weight.linear.storage = Bf16LinearStorage{weight.bf16_storage.data()};
@@ -90,14 +89,15 @@ DeviceWeight materialize_linear(const MaterializationPlan& plan,
                 source.matrix.global_scale, source.matrix.input_global_scale);
         } else if constexpr (std::is_same_v<Source, DenseSource>) {
             const std::size_t count = tensor_element_count(
-                source.tensor.shape, plan.name);
+                source.tensor.shape, name);
             if (source.tensor.dtype == TensorDType::BF16) {
                 if (source.tensor.bytes != count * sizeof(__nv_bfloat16)) {
-                    throw std::runtime_error("invalid BF16 linear byte count: " + plan.name);
+                    throw std::runtime_error(
+                        "invalid BF16 linear byte count: " + std::string(name));
                 }
-                if (is_rowwise_quantized_weight_mode(plan.mode)) {
+                if (is_rowwise_quantized_weight_mode(mode)) {
                     cuda_loader_detail::quantize_and_bind(
-                        weight, source.tensor.data, plan.rows, plan.cols, plan.mode);
+                        weight, source.tensor.data, rows, cols, mode);
                 } else {
                     weight.bf16_storage.reset(count);
                     CELEG_CUDA(cudaMemcpy(weight.bf16_storage.data(), source.tensor.data,
@@ -106,15 +106,15 @@ DeviceWeight materialize_linear(const MaterializationPlan& plan,
                 }
             } else {
                 const std::vector<float> decoded = decode_tensor_f32(
-                    source.tensor, source.tensor.shape, plan.name);
+                    source.tensor, source.tensor.shape, name);
                 std::vector<__nv_bfloat16> dense(count);
                 for (std::size_t index = 0; index < count; ++index) {
                     dense[index] = __float2bfloat16(decoded[index]);
                 }
-                if (is_rowwise_quantized_weight_mode(plan.mode)) {
+                if (is_rowwise_quantized_weight_mode(mode)) {
                     cuda_loader_detail::quantize_and_bind(
                         weight, reinterpret_cast<const std::byte*>(dense.data()),
-                        plan.rows, plan.cols, plan.mode);
+                        rows, cols, mode);
                 } else {
                     weight.bf16_storage.reset(count);
                     CELEG_CUDA(cudaMemcpy(weight.bf16_storage.data(), dense.data(),
@@ -127,21 +127,23 @@ DeviceWeight materialize_linear(const MaterializationPlan& plan,
             const HostTensorView& tensor = source.tensor;
             const GgmlType type = ggml_type_from_block_encoding(tensor.block_encoding);
             const GgmlTypeTrait trait = ggml_type_trait(type);
-            if (!ggml_row_decoder(type).has_value() || plan.cols % trait.block_size != 0) {
-                throw std::runtime_error("invalid GGUF linear source: " + plan.name);
+            if (!ggml_row_decoder(type).has_value() || cols % trait.block_size != 0) {
+                throw std::runtime_error(
+                    "invalid GGUF linear source: " + std::string(name));
             }
-            const std::size_t row_bytes = static_cast<std::size_t>(plan.cols) /
+            const std::size_t row_bytes = static_cast<std::size_t>(cols) /
                 static_cast<std::size_t>(trait.block_size) * trait.type_size;
-            if (tensor.bytes != static_cast<std::size_t>(plan.rows) * row_bytes) {
-                throw std::runtime_error("invalid GGUF linear byte count: " + plan.name);
+            if (tensor.bytes != static_cast<std::size_t>(rows) * row_bytes) {
+                throw std::runtime_error(
+                    "invalid GGUF linear byte count: " + std::string(name));
             }
             const bool host_dequantization = !cuda_gguf_native_mmq(type);
-            if (plan.mode == WeightMode::NativeGguf && !host_dequantization) {
+            if (mode == WeightMode::NativeGguf && !host_dequantization) {
                 DeviceBuffer<std::uint8_t> raw(tensor.bytes, memory_kind);
                 CELEG_CUDA(cudaMemcpy(raw.data(), tensor.data, tensor.bytes,
                                       cudaMemcpyHostToDevice));
-                GgufLinearSegment segment{raw.data(), type, 0, plan.rows,
-                                          plan.cols, row_bytes};
+                GgufLinearSegment segment{raw.data(), type, 0, rows,
+                                          cols, row_bytes};
                 weight.gguf_segment_storage.push_back(std::move(raw));
                 weight.linear.storage = GgufLinearStorage{{segment}};
                 return;
@@ -153,10 +155,10 @@ DeviceWeight materialize_linear(const MaterializationPlan& plan,
                 CELEG_CUDA(cudaMemcpy(weight.bf16_storage.data(), host.data(),
                                       host.size() * sizeof(__nv_bfloat16),
                                       cudaMemcpyHostToDevice));
-                if (is_rowwise_quantized_weight_mode(plan.mode)) {
+                if (is_rowwise_quantized_weight_mode(mode)) {
                     cuda_loader_detail::quantize_and_bind(
                         weight, reinterpret_cast<const std::byte*>(host.data()),
-                        plan.rows, plan.cols, plan.mode,
+                        rows, cols, mode,
                         weight.bf16_storage.data());
                 } else {
                     weight.linear.storage = Bf16LinearStorage{weight.bf16_storage.data()};
@@ -166,24 +168,24 @@ DeviceWeight materialize_linear(const MaterializationPlan& plan,
             DeviceBuffer<std::uint8_t> raw(tensor.bytes, CudaMemoryKind::Device);
             CELEG_CUDA(cudaMemcpy(raw.data(), tensor.data, tensor.bytes,
                                   cudaMemcpyHostToDevice));
-            weight.bf16_storage.reset(static_cast<std::size_t>(plan.rows) * plan.cols);
+            weight.bf16_storage.reset(static_cast<std::size_t>(rows) * cols);
             launch_gguf_dequant(raw.data(), type, weight.bf16_storage.data(),
-                                plan.rows, plan.cols, nullptr);
+                                rows, cols, nullptr);
             CELEG_CUDA(cudaStreamSynchronize(nullptr));
-            if (is_rowwise_quantized_weight_mode(plan.mode)) {
+            if (is_rowwise_quantized_weight_mode(mode)) {
                 std::vector<__nv_bfloat16> host(weight.bf16_storage.size());
                 CELEG_CUDA(cudaMemcpy(host.data(), weight.bf16_storage.data(),
                                       host.size() * sizeof(__nv_bfloat16),
                                       cudaMemcpyDeviceToHost));
                 cuda_loader_detail::quantize_and_bind(
                     weight, reinterpret_cast<const std::byte*>(host.data()),
-                    plan.rows, plan.cols, plan.mode,
+                    rows, cols, mode,
                     weight.bf16_storage.data());
             } else {
                 weight.linear.storage = Bf16LinearStorage{weight.bf16_storage.data()};
             }
         }
-    }, plan.source);
+    }, linear_source);
     return weight;
 }
 
