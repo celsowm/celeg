@@ -1,10 +1,28 @@
 #include "detail/compiled_model.hpp"
+#include "attention_kv_store.hpp"
 #include "backend/cuda/paged_kv.hpp"
 #include "kernels/kernels.cuh"
 
 #include <stdexcept>
 
 namespace celeg {
+namespace {
+
+int latent_rotary_width(const AttentionLayer& attention) {
+    const auto& latent = *attention.layout.latent_state();
+    return attention.latent_key_rope && latent.decoupled_rope
+        ? latent.rope_head_dim
+        : 0;
+}
+
+const __nv_bfloat16* latent_key_rope_for_store(
+    CudaCompiledModel& model, const AttentionLayer& attention) {
+    return latent_rotary_width(attention) != 0
+        ? model.workspace_.latent_key_rope_.data()
+        : nullptr;
+}
+
+}
 
 void CudaCompiledModel::store_standard_attention_kv_contiguous(
     AttentionLayer& attention, AttentionLayer& owner,
@@ -69,6 +87,38 @@ void CudaCompiledModel::store_standard_attention_kv_paged(
         1, slot, paged_kv.page_tokens(), paged_kv.page_vector_elements(),
         paged_kv.layer_vector_offset(slot), owner_layout.key_value_heads,
         owner_layout.head_dim, stream_.get());
+}
+
+void store_cuda_latent_kv_contiguous(
+    CudaCompiledModel& model, AttentionLayer& attention, AttentionLayer& owner) {
+    if (!attention.latent_key || !attention.latent_value) return;
+
+    const auto& latent = *attention.layout.latent_state();
+    const int rotary_width = latent_rotary_width(attention);
+    launch_store_latent_device(
+        model.workspace_.latent_key_.data(), model.workspace_.latent_value_.data(),
+        latent_key_rope_for_store(model, attention),
+        owner.latent_key_cache_ptr(), owner.latent_value_cache_ptr(),
+        owner.latent_key_rope_cache_ptr(), model.position_device_.data(),
+        latent.latent_rank, rotary_width, model.stream_.get());
+}
+
+void store_cuda_latent_kv_paged(
+    CudaCompiledModel& model, AttentionLayer& attention,
+    PhysicalPagedKvCache& paged_kv, int slot,
+    const uint32_t* device_page_table, int page_table_stride) {
+    if (!attention.latent_key || !attention.latent_value) return;
+
+    const auto& latent = *attention.layout.latent_state();
+    const int rotary_width = latent_rotary_width(attention);
+    launch_store_latent_paged_batch(
+        model.workspace_.latent_key_.data(), model.workspace_.latent_value_.data(),
+        latent_key_rope_for_store(model, attention),
+        paged_kv.key_bf16(), paged_kv.value_bf16(), device_page_table,
+        page_table_stride, model.position_device_.data(), 1, slot,
+        paged_kv.page_tokens(), paged_kv.page_vector_elements(),
+        paged_kv.layer_vector_offset(slot), latent.latent_rank,
+        rotary_width, model.stream_.get());
 }
 
 }
