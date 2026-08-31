@@ -39,14 +39,16 @@ std::unique_ptr<IWeightLayout> make_cuda_embedding_layout(
         }
         return make_weight_layout(mode, storage->data, storage->scales);
     }
-    default: {
+    case WeightMode::Bf16:
+    case WeightMode::NativeGguf: {
         const auto* storage = std::get_if<Bf16LinearStorage>(&weight.storage);
         if (!storage || !storage->data) {
             throw std::runtime_error(std::string(label) + " has no BF16 storage");
         }
-        return make_weight_layout(mode, storage->data, nullptr);
+        return make_weight_layout(WeightMode::Bf16, storage->data, nullptr);
     }
     }
+    throw std::invalid_argument("unknown CUDA embedding weight mode");
 }
 
 }
