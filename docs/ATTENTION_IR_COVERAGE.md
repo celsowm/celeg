@@ -31,9 +31,9 @@ The largest remaining semantic gaps are:
 1. external-memory / cross-attention lifecycle and execution;
 2. CUDA relative-position bias tables;
 3. formal backend/mode coverage for non-decoder-oriented patterns, especially bidirectional and Prefix-LM;
-4. extending Metal beyond its now-explicit causal/sliding + RoPE + ALiBi + relative-bias + standard-attention contract.
+4. extending Metal beyond its now-explicit causal/sliding + RoPE/M-RoPE + ALiBi + relative-bias + standard-attention contract.
 
-Metal is no longer treated as unaudited by default. Its runtime now has explicit full-causal and sliding-window paths over ordinary Q/K/V attention, including ALiBi and relative-position bias, while unsupported pattern, multi-axis, sharing, transform, and latent semantics are rejected during model initialization rather than being silently executed as causal attention.
+Metal is no longer treated as unaudited by default. Its runtime now has explicit full-causal and sliding-window paths over ordinary Q/K/V attention, including ALiBi and relative-position bias. Standard RoPE pairing is explicit rather than hard-coded, and ordinary three-axis interleaved M-RoPE is carried through the session lifecycle. Unsupported pattern, sharing, transform, latent, partial-width RoPE, and RoPE-scaling semantics are rejected during model initialization rather than being silently approximated.
 
 ## IR surface
 
@@ -94,7 +94,7 @@ The table below is deliberately conservative. `?` means "prove it" rather than "
 | ALiBi | ✓ | ✓ | ✓ | ✓ |
 | Relative-position bias | ✓ | ✓ | ✗ | ✓ |
 | RoPE | ✓ | ✓ | ✓ | ✓ |
-| M-RoPE, ordinary attention | ✓ | ? | ✓ | ✗ |
+| M-RoPE, ordinary attention | ✓ | ? | ✓ | △ |
 | M-RoPE, latent attention | ✓ | ? | ✗ | ✗ |
 | Private KV | ✓ | ✓ | ✓ | ✓ |
 | Shared KV publisher/consumer | ✓ | ? | ✓ | ✗ |
@@ -109,6 +109,8 @@ The table below is deliberately conservative. `?` means "prove it" rather than "
 | External-memory / cross-attention | IR only | ✗ | ✗ | ✗ |
 
 Metal ordinary KV storage is marked `△` rather than unconditional `✓` for contiguous/paged because its current runtime uses an internal page-sized physical layout without yet exposing the same general page-table/layout capability surface as CUDA/CPU.
+
+Metal ordinary M-RoPE is marked `△` because token/decode and public prefill are semantically supported, including explicit per-token three-axis positions, but M-RoPE currently disables the Metal batched-prefill fast path and executes prefill token-by-token. This is an execution-mode coverage limitation, not a silent semantic fallback.
 
 ### CUDA restrictions that matter
 
@@ -148,7 +150,8 @@ The runtime now supports:
 - ALiBi in both full-causal and sliding-window paths;
 - relative-position bias in both full-causal and sliding-window paths;
 - ordinary private KV state;
-- RoPE;
+- full-width, unscaled RoPE with both `SplitHalf` and `AdjacentPairs` pairing;
+- ordinary three-axis interleaved M-RoPE with split-half pairing;
 - standard attention execution;
 - Q/K normalization;
 - BF16 attention state semantics.
@@ -159,15 +162,20 @@ ALiBi uses the same semantic formula as CPU, `-slope[head] * abs(query_position 
 
 Relative-position bias reuses the CPU bucket contract: exact-distance buckets for the near region, logarithmic buckets for larger distances, clamping at the last directional bucket, and separate positive/negative halves when `bidirectional=true`. The resolved `[query_heads, bucket_count]` tensor is loaded through `TensorRole::AttentionRelativePositionBias`, retained in a Metal-owned buffer per layer, and applied before softmax in normal/cooperative decode and batched-prefill kernels. A `SlidingWindowPattern` may be combined with the same bias without changing bucket semantics.
 
+Standard Metal RoPE now dispatches by `RopePairingKind`; split-half and adjacent-pair layouts no longer share an incorrectly hard-coded adjacent-pair transform. Metal currently requires `rotary_fraction == 1.0` and `NoRopeScaling`, and rejects other RoPE forms before execution.
+
+Ordinary M-RoPE uses the same interleaved axis assignment as the CPU oracle (`axis = pair % 3`) with three explicit positions per token. `PromptEmbedding::rope_positions` can supply one position triplet per prefill token and `next_rope_position` is preserved across decode and session snapshots. M-RoPE prefill deliberately uses the token path until a dedicated batched three-axis Q/K kernel exists. Raw prompt-embedding injection is a separate multimodal lifecycle capability and is not claimed by this attention-only cell.
+
 The following semantics are explicitly rejected before device/pipeline setup rather than silently degrading to another attention mode:
 
 - bidirectional, Prefix-LM, BlockSparse, and DynamicSparse patterns;
-- no-position and M-RoPE modes;
+- no-position attention;
+- partial-width or scaled RoPE;
 - external-memory sources;
 - shared KV publisher/consumer modes;
 - non-BF16 KV state semantics;
 - output gates and output transforms;
-- latent and factorized-latent execution.
+- latent and factorized-latent execution, including latent M-RoPE.
 
 This turns the Metal coverage into explicit capability outcomes without claiming kernels that do not exist.
 
@@ -308,11 +316,12 @@ Extend it only by carrying each semantic fact through execution explicitly and t
 Suggested order:
 
 1. true layout/paging capability declaration;
-2. M-RoPE;
-3. shared KV;
-4. sparse patterns;
-5. latent attention;
-6. external memory after the backend-neutral lifecycle exists.
+2. dedicated batched M-RoPE Q/K preparation;
+3. no-position attention;
+4. shared KV;
+5. sparse patterns;
+6. latent attention;
+7. external memory after the backend-neutral lifecycle exists.
 
 Every newly supported cell must move from `✗`/`△` to `✓` only with a named implementation path and test.
 
