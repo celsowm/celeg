@@ -116,10 +116,19 @@ bool cpu_isa_compiled(CpuIsa isa) {
 }
 
 CpuIsa CpuCapabilities::best_isa() const {
-    if (avx512f && avx512_vnni && cpu_isa_compiled(CpuIsa::Avx512Vnni)) return CpuIsa::Avx512Vnni;
-    if (avx_vnni && cpu_isa_compiled(CpuIsa::AvxVnni)) return CpuIsa::AvxVnni;
-    if (avx2 && fma && cpu_isa_compiled(CpuIsa::Avx2)) return CpuIsa::Avx2;
-    if (neon && cpu_isa_compiled(CpuIsa::Neon)) return CpuIsa::Neon;
+    if (supports(CpuIsa::Avx512Vnni) &&
+        cpu_isa_compiled(CpuIsa::Avx512Vnni)) {
+        return CpuIsa::Avx512Vnni;
+    }
+    if (supports(CpuIsa::AvxVnni) && cpu_isa_compiled(CpuIsa::AvxVnni)) {
+        return CpuIsa::AvxVnni;
+    }
+    if (supports(CpuIsa::Avx2) && fma && cpu_isa_compiled(CpuIsa::Avx2)) {
+        return CpuIsa::Avx2;
+    }
+    if (supports(CpuIsa::Neon) && cpu_isa_compiled(CpuIsa::Neon)) {
+        return CpuIsa::Neon;
+    }
     return CpuIsa::Scalar;
 }
 
@@ -129,7 +138,8 @@ bool CpuCapabilities::supports(CpuIsa isa) const {
         case CpuIsa::Scalar: return true;
         case CpuIsa::Avx2: return avx2;
         case CpuIsa::AvxVnni: return avx_vnni;
-        case CpuIsa::Avx512Vnni: return avx512f && avx512_vnni;
+        case CpuIsa::Avx512Vnni:
+            return avx512f && avx512bw && avx512vl && avx512_vnni;
         case CpuIsa::AmxInt8: return amx_tile && amx_int8;
         case CpuIsa::Neon: return neon;
         case CpuIsa::DotProd: return dotprod;
@@ -146,6 +156,9 @@ std::string CpuCapabilities::summary() const {
         << " x86=" << x86 << " arm64=" << arm64
         << " avx2=" << avx2 << " fma=" << fma
         << " avx-vnni=" << avx_vnni
+        << " avx512-f=" << avx512f
+        << " avx512-bw=" << avx512bw
+        << " avx512-vl=" << avx512vl
         << " avx512-vnni=" << avx512_vnni
         << " amx-int8=" << (amx_tile && amx_int8)
         << " neon=" << neon << " dotprod=" << dotprod
@@ -169,6 +182,8 @@ CpuCapabilities detect_cpu_capabilities() {
     const CpuidRegs leaf7 = cpuid(7, 0);
     c.avx2 = avx && ymm_enabled && (leaf7.ebx & (1u << 5));
     c.avx512f = zmm_enabled && (leaf7.ebx & (1u << 16));
+    c.avx512bw = c.avx512f && (leaf7.ebx & (1u << 30));
+    c.avx512vl = c.avx512f && (leaf7.ebx & (1u << 31));
     c.avx512_vnni = c.avx512f && (leaf7.ecx & (1u << 11));
     const CpuidRegs leaf71 = cpuid(7, 1);
     c.avx_vnni = c.avx2 && (leaf71.eax & (1u << 4));
