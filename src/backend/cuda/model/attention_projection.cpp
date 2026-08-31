@@ -9,6 +9,40 @@
 namespace celeg {
 namespace {
 
+struct CudaStandardProjectionBuffers {
+    const __nv_bfloat16* input = nullptr;
+    __nv_bfloat16* query = nullptr;
+    __nv_bfloat16* key = nullptr;
+    __nv_bfloat16* value = nullptr;
+    int rows = 1;
+};
+
+void project_cuda_standard_attention_qkv_impl(
+    CudaCompiledModel& model, AttentionLayer& attention,
+    const CudaStandardProjectionBuffers& buffers) {
+    if (!attention.query || !buffers.input || !buffers.query) {
+        throw std::logic_error("CUDA standard attention projection is unavailable");
+    }
+    const AttentionSpec& layout = attention.layout;
+    const int hidden = model.resources_.program_.hidden;
+    auto native_fanout = model.native_fanout_scope(
+        buffers.input, buffers.rows, hidden);
+    model.linear(
+        buffers.input, *attention.query, buffers.query,
+        buffers.rows, attention.query->rows, hidden);
+    if (attention.key && attention.value) {
+        if (!buffers.key || !buffers.value) {
+            throw std::logic_error("CUDA standard attention KV projection storage is unavailable");
+        }
+        model.linear(
+            buffers.input, *attention.key, buffers.key,
+            buffers.rows, layout.key_value_width(), hidden);
+        model.linear(
+            buffers.input, *attention.value, buffers.value,
+            buffers.rows, layout.key_value_width(), hidden);
+    }
+}
+
 struct CudaLatentProjectionBuffers {
     const __nv_bfloat16* input = nullptr;
     __nv_bfloat16* query_content = nullptr;
@@ -71,20 +105,30 @@ void project_cuda_prefill_attention_output_impl(
 
 CudaQkvProjectionView CudaCompiledModel::project_standard_attention_qkv(
     AttentionLayer& attention) {
-    const AttentionSpec& layout = attention.layout;
     CudaQkvProjectionView qkv = make_cuda_qkv_projection_view(
         attention, workspace_.qkv_output_.data());
-    auto native_fanout = native_fanout_scope(
-        workspace_.normed_.data(), 1, resources_.program_.hidden);
-    linear(workspace_.normed_.data(), *attention.query, qkv.query,
-           1, qkv.query_projection_width, resources_.program_.hidden);
-    if (attention.key && attention.value) {
-        linear(workspace_.normed_.data(), *attention.key, qkv.key,
-               1, layout.key_value_width(), resources_.program_.hidden);
-        linear(workspace_.normed_.data(), *attention.value, qkv.value,
-               1, layout.key_value_width(), resources_.program_.hidden);
-    }
+    project_cuda_standard_attention_qkv_impl(*this, attention, {
+        .input = workspace_.normed_.data(),
+        .query = qkv.query,
+        .key = qkv.key,
+        .value = qkv.value,
+        .rows = 1});
     return qkv;
+}
+
+void project_cuda_prefill_standard_attention_qkv(
+    CudaCompiledModel& model, AttentionLayer& attention, int rows) {
+    const AttentionSpec& layout = attention.layout;
+    const bool gate_packed = layout.output_gate.has_value() &&
+        layout.output_gate->packed_with_query;
+    project_cuda_standard_attention_qkv_impl(model, attention, {
+        .input = model.workspace_.prefill_normed_.data(),
+        .query = gate_packed
+            ? model.workspace_.prefill_qkv_.data()
+            : model.workspace_.prefill_q_.data(),
+        .key = model.workspace_.prefill_k_.data(),
+        .value = model.workspace_.prefill_v_.data(),
+        .rows = rows});
 }
 
 void require_cuda_projected_latent_bindings(const AttentionLayer& attention) {
