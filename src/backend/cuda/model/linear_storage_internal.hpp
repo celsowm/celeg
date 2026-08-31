@@ -79,17 +79,23 @@ inline void quantize_and_bind(DeviceWeight& weight,
                               size_t cols,
                               WeightMode mode,
                               const __nv_bfloat16* bf16_fallback = nullptr) {
-    if (mode == WeightMode::Int8) {
+    switch (mode) {
+    case WeightMode::Int8: {
         const Int8RowwisePack pack = quantize_bf16_rows(dense_data, rows, cols);
         bind_int8_storage(weight, pack.values, pack.scales, bf16_fallback);
         return;
     }
-    if (mode == WeightMode::Int4) {
+    case WeightMode::Int4: {
         const Int4RowwisePack pack = quantize_bf16_rows_int4(dense_data, rows, cols);
         bind_int4_storage(weight, pack.values, pack.scales, bf16_fallback);
         return;
     }
-    throw std::invalid_argument("quantize_and_bind requires Int8 or Int4 weight mode");
+    case WeightMode::Bf16:
+    case WeightMode::NativeGguf:
+        throw std::invalid_argument(
+            "quantize_and_bind requires a rowwise quantized weight mode");
+    }
+    throw std::invalid_argument("unknown CUDA weight mode");
 }
 
 inline void finish_linear_binding(DeviceWeight& weight, int rows, int cols) {
