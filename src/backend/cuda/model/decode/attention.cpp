@@ -1,4 +1,5 @@
 #include "detail/compiled_model.hpp"
+#include "attention_decode_dispatch.hpp"
 #include "backend/cuda/attention_norm.hpp"
 #include "kernels/kernels.cuh"
 #include "backend/cuda/paged_kv.hpp"
@@ -48,91 +49,25 @@ void CudaCompiledModel::store_and_attend_token_contiguous(
         launch_store_kv(k, v, owner.key_cache_bf16(), owner.value_cache_bf16(),
                         session_.position_, owner_layout.key_value_width(), stream_.get());
     }
-    const GqaGeometry geometry{
-        .q_heads = layout.query_heads,
-        .kv_heads = owner_layout.key_value_heads,
-        .head_dim = owner_layout.head_dim,
-        .sliding_window = layout.sliding_window_size()};
-    const AttentionExtent extent{.seq_len = session_.position_ + 1};
-    switch (plan.algorithm) {
-    case AttentionAlgorithm::Online:
-        if (int8_kv) {
-            launch_gqa_decode_online_int8({
-                .query = q,
-                .kv = {.keys = owner.key_cache_int8_ptr(),
-                       .values = owner.value_cache_int8_ptr(),
-                       .key_scales = owner.key_cache_scales_ptr(),
-                       .value_scales = owner.value_cache_scales_ptr()},
-                .out = workspace_.op_output_.data(),
-                .geometry = geometry,
-                .extent = extent,
-                .stream = stream_.get()});
-        } else {
-            launch_gqa_decode_online({
-                .query = q,
-                .kv = {.keys = owner.key_cache_bf16(),
-                       .values = owner.value_cache_bf16()},
-                .out = workspace_.op_output_.data(),
-                .geometry = geometry,
-                .extent = extent,
-                .stream = stream_.get()});
-        }
-        break;
-    case AttentionAlgorithm::Strict:
-        if (const auto* sparse = std::get_if<BlockSparsePattern>(&layout.pattern)) {
-            const GqaBlockSparsePattern pattern{
-                .block_size = sparse->block_size,
-                .local_blocks = sparse->local_blocks,
-                .global_blocks = sparse->global_blocks};
-            if (int8_kv) {
-                launch_gqa_decode_block_sparse_int8_device({
-                    .query = q,
-                    .kv = {.keys = owner.key_cache_int8_ptr(),
-                           .values = owner.value_cache_int8_ptr(),
-                           .key_scales = owner.key_cache_scales_ptr(),
-                           .value_scales = owner.value_cache_scales_ptr()},
-                    .out = workspace_.op_output_.data(),
-                    .geometry = geometry,
-                    .extent = {.position = position_device_.data()},
-                    .stream = stream_.get()}, pattern);
-            } else {
-                launch_gqa_decode_block_sparse_device({
-                    .query = q,
-                    .kv = {.keys = owner.key_cache_bf16(),
-                           .values = owner.value_cache_bf16()},
-                    .out = workspace_.op_output_.data(),
-                    .geometry = geometry,
-                    .extent = {.position = position_device_.data()},
-                    .stream = stream_.get()}, pattern);
-            }
-        } else if (int8_kv) {
-            launch_gqa_decode_strict_int8({
-                .query = q,
-                .kv = {.keys = owner.key_cache_int8_ptr(),
-                       .values = owner.value_cache_int8_ptr(),
-                       .key_scales = owner.key_cache_scales_ptr(),
-                       .value_scales = owner.value_cache_scales_ptr()},
-                .out = workspace_.op_output_.data(),
-                .geometry = geometry,
-                .extent = extent,
-                .stream = stream_.get()});
-        } else {
-            launch_gqa_decode_strict({
-                .query = q,
-                .kv = {.keys = owner.key_cache_bf16(),
-                       .values = owner.value_cache_bf16()},
-                .out = workspace_.op_output_.data(),
-                .geometry = geometry,
-                .extent = extent,
-                .stream = stream_.get()});
-        }
-        break;
-    case AttentionAlgorithm::Alibi:
-    case AttentionAlgorithm::Segmented:
-    case AttentionAlgorithm::Flash:
-    case AttentionAlgorithm::Gemm:
-        throw UnsupportedAttentionCapability(plan);
-    }
+
+    const auto* block_sparse = std::get_if<BlockSparsePattern>(&layout.pattern);
+    dispatch_cuda_contiguous_decode_attention({
+        .plan = plan,
+        .position_mode = CudaDecodePositionMode::HostScalar,
+        .block_sparse = block_sparse,
+        .query = q,
+        .bf16_kv = {.keys = owner.key_cache_bf16(),
+                    .values = owner.value_cache_bf16()},
+        .int8_kv = {.keys = owner.key_cache_int8_ptr(),
+                    .values = owner.value_cache_int8_ptr(),
+                    .key_scales = owner.key_cache_scales_ptr(),
+                    .value_scales = owner.value_cache_scales_ptr()},
+        .out = workspace_.op_output_.data(),
+        .geometry = make_cuda_gqa_geometry(layout, owner_layout),
+        .extent = block_sparse
+            ? AttentionExtent{.position = position_device_.data()}
+            : AttentionExtent{.seq_len = session_.position_ + 1},
+        .stream = stream_.get()});
 }
 
 void CudaCompiledModel::store_and_attend_token_paged(
@@ -142,19 +77,13 @@ void CudaCompiledModel::store_and_attend_token_paged(
     const AttentionSpec& layout = attention.layout;
     const auto* sparse = std::get_if<BlockSparsePattern>(&layout.pattern);
     const GqaBlockSparsePattern sparse_pattern = sparse
-        ? GqaBlockSparsePattern{.block_size = sparse->block_size,
-                                .local_blocks = sparse->local_blocks,
-                                .global_blocks = sparse->global_blocks}
+        ? lower_cuda_block_sparse_pattern(*sparse)
         : GqaBlockSparsePattern{};
     PhysicalPagedKvCache& paged_kv = *kv.paged_kv;
     const uint32_t* device_page_table = kv.device_page_table;
     const int page_table_stride = kv.page_table_stride;
 
-    const GqaGeometry geometry{
-        .q_heads = layout.query_heads,
-        .kv_heads = owner_layout.key_value_heads,
-        .head_dim = owner_layout.head_dim,
-        .sliding_window = layout.sliding_window_size()};
+    const GqaGeometry geometry = make_cuda_gqa_geometry(layout, owner_layout);
     const PagedKvIndex index{
         .page_tables = device_page_table,
         .page_table_stride = page_table_stride,
