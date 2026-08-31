@@ -24,6 +24,27 @@ LatentGeometry latent_geometry(const AttentionSpec& layout) {
         .sliding_window = layout.sliding_window_size()};
 }
 
+LatentQueryView latent_prefill_query_view(
+    CudaCompiledModel& model, const AttentionSpec& layout) {
+    const auto& latent = *layout.latent_state();
+    return {
+        .content = model.workspace_.prefill_latent_query_content_.data(),
+        .rope = latent.factorized() || layout.latent_query_rope_width() != 0
+            ? model.workspace_.prefill_latent_query_rope_.data() : nullptr};
+}
+
+LatentGeometry latent_prefill_geometry(const AttentionSpec& layout) {
+    const auto& latent = *layout.latent_state();
+    return {
+        .query_heads = layout.query_heads,
+        .latent_rank = latent.latent_rank,
+        .rotary_width = latent.factorized()
+            ? latent.rope_head_dim
+            : (latent.decoupled_rope ? latent.rope_head_dim : 0),
+        .score_scale = layout.query_scale,
+        .sliding_window = layout.sliding_window_size()};
+}
+
 } // namespace
 
 void dispatch_cuda_latent_attention_contiguous(
@@ -60,6 +81,22 @@ void dispatch_cuda_latent_attention_paged(
         .rows = 1,
         .alibi_slopes = attention.alibi_slopes.data(),
         .geometry = latent_geometry(layout),
+        .stream = model.stream_.get()});
+}
+
+void dispatch_cuda_latent_attention_prefill(
+    CudaCompiledModel& model, AttentionLayer& attention,
+    AttentionLayer& owner, int rows) {
+    const AttentionSpec& layout = attention.layout;
+    launch_latent_attention_prefill({
+        .query = latent_prefill_query_view(model, layout),
+        .kv = {.keys = owner.latent_key_cache_ptr(),
+               .values = owner.latent_value_cache_ptr(),
+               .key_rope = owner.latent_key_rope_cache_ptr()},
+        .out = model.workspace_.prefill_op_output_.data(),
+        .extent = {.rows = rows},
+        .alibi_slopes = attention.alibi_slopes.data(),
+        .geometry = latent_prefill_geometry(layout),
         .stream = model.stream_.get()});
 }
 
