@@ -15,6 +15,65 @@
 
 namespace celeg {
 
+MoeFfnWeights bind_cuda_moe_router_weight(
+    CudaCompiledModel& model,
+    const IWeightRepository& repo,
+    const std::string& router_name,
+    int resource_layer,
+    int expert_count,
+    const float* expert_bias) {
+    CudaModelResources& resources = model.resources_;
+    const LinearWeight* router = resources.weight_loader_->load_router_weight_named(
+        repo, router_name, expert_count, resources.program_.hidden);
+    const auto* router_bf16 = std::get_if<Bf16LinearStorage>(&router->storage);
+    if (!router_bf16 || !router_bf16->data) {
+        throw std::logic_error("CUDA MoE router requires BF16 storage");
+    }
+
+    DeviceBuffer<float>& router_float =
+        model.workspace_.moe_router_float_[static_cast<size_t>(resource_layer)];
+    router_float.reset(static_cast<size_t>(expert_count) * resources.program_.hidden);
+    launch_cast_bf16_to_float(
+        router_bf16->data, router_float.data(),
+        expert_count * resources.program_.hidden, model.stream_.get());
+
+    MoeFfnWeights weights{};
+    weights.router = router;
+    weights.expert_bias = expert_bias;
+    weights.router_float = router_float.data();
+    return weights;
+}
+
+ResidentExpertWeights bind_cuda_resident_experts(
+    CudaCompiledModel& model,
+    const IWeightRepository& repo,
+    const MoeExpertTensorNames& expert_names,
+    int expert_count,
+    int intermediate) {
+    CudaModelResources& resources = model.resources_;
+    if (expert_names.packed()) {
+        const ExpertLinearWeight* gate_up =
+            resources.weight_loader_->load_expert_linear_weight(
+                repo, expert_names.packed_gate_up,
+                expert_count, 2 * intermediate, resources.program_.hidden);
+        const ExpertLinearWeight* down =
+            resources.weight_loader_->load_expert_linear_weight(
+                repo, expert_names.packed_down,
+                expert_count, resources.program_.hidden, intermediate);
+        return ResidentExpertWeights{gate_up, down};
+    }
+
+    const ExpertLinearWeight* gate_up =
+        resources.weight_loader_->load_moe_gate_up(
+            repo, expert_names, expert_count, intermediate,
+            resources.program_.hidden);
+    const ExpertLinearWeight* down =
+        resources.weight_loader_->load_moe_down(
+            repo, expert_names, expert_count, intermediate,
+            resources.program_.hidden);
+    return ResidentExpertWeights{gate_up, down};
+}
+
 void bind_cuda_moe_feed_forward(CudaCompiledModel& model,
                                 const IWeightRepository& repo,
                                 const MoeLayerProgram& semantics,
@@ -36,27 +95,11 @@ void bind_cuda_moe_feed_forward(CudaCompiledModel& model,
             {static_cast<int64_t>(expert_count)});
     }
 
-    const LinearWeight* router = resources.weight_loader_->load_router_weight_named(
-        repo,
+    MoeFfnWeights moe_weights = bind_cuda_moe_router_weight(
+        model, repo,
         cuda_tensor_name(resources.model_.weight_plan.requests,
                          TensorRole::MoeRouter, layer_index),
-        expert_count, resources.program_.hidden);
-    const auto* router_bf16 = std::get_if<Bf16LinearStorage>(&router->storage);
-    if (!router_bf16 || !router_bf16->data) {
-        throw std::logic_error("CUDA MoE router requires BF16 storage");
-    }
-
-    DeviceBuffer<float>& router_float =
-        workspace.moe_router_float_[static_cast<size_t>(layer_index)];
-    router_float.reset(static_cast<size_t>(expert_count) * resources.program_.hidden);
-    launch_cast_bf16_to_float(
-        router_bf16->data, router_float.data(),
-        expert_count * resources.program_.hidden, model.stream_.get());
-
-    MoeFfnWeights moe_weights{};
-    moe_weights.router = router;
-    moe_weights.expert_bias = expert_bias;
-    moe_weights.router_float = router_float.data();
+        layer_index, expert_count, expert_bias);
 
     if (semantics.shared) {
         const int shared_intermediate = semantics.shared->mlp.intermediate_size;
@@ -140,27 +183,8 @@ void bind_cuda_moe_feed_forward(CudaCompiledModel& model,
                 expert_count, intermediate);
         }
     } else {
-        if (expert_names.packed()) {
-            const ExpertLinearWeight* gate_up =
-                resources.weight_loader_->load_expert_linear_weight(
-                    repo, expert_names.packed_gate_up,
-                    expert_count, 2 * intermediate, resources.program_.hidden);
-            const ExpertLinearWeight* down =
-                resources.weight_loader_->load_expert_linear_weight(
-                    repo, expert_names.packed_down,
-                    expert_count, resources.program_.hidden, intermediate);
-            moe_weights.storage = ResidentExpertWeights{gate_up, down};
-        } else {
-            const ExpertLinearWeight* gate_up =
-                resources.weight_loader_->load_moe_gate_up(
-                    repo, expert_names, expert_count, intermediate,
-                    resources.program_.hidden);
-            const ExpertLinearWeight* down =
-                resources.weight_loader_->load_moe_down(
-                    repo, expert_names, expert_count, intermediate,
-                    resources.program_.hidden);
-            moe_weights.storage = ResidentExpertWeights{gate_up, down};
-        }
+        moe_weights.storage = bind_cuda_resident_experts(
+            model, repo, expert_names, expert_count, intermediate);
     }
 
     common_layer.feed_forward = moe_weights;
