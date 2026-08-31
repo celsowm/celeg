@@ -189,10 +189,9 @@ struct CudaCompiledModel {
     void run_token_attention(AttentionLayer& attention, LayerCommon& common_layer,
                              const CompiledLayerProgram& semantics, int layer_index,
                              const TokenKvPolicy& kv);
-    void run_token_latent_attention_paged(AttentionLayer& attention,
-                                          LayerCommon& common_layer,
-                                          const CompiledLayerProgram& semantics,
-                                          int layer_index, const TokenKvPolicy& kv);
+    void run_token_latent_attention_paged(
+        AttentionLayer& attention, const CompiledLayerProgram& semantics,
+        int layer_index, const TokenKvPolicy& kv);
     AttentionCapability token_attention_plan(AttentionLayer& attention,
                                              const AttentionSpec& owner_layout,
                                              const TokenKvPolicy& kv);
@@ -217,8 +216,7 @@ struct CudaCompiledModel {
     void enqueue_sampling();
     void enqueue_decode_forward();
     void enqueue_decode_attention(Layer& layer, LayerCommon& common_layer, int layer_index);
-    void enqueue_decode_standard_attention(Layer& layer, LayerCommon& common_layer,
-                                           int layer_index);
+    void enqueue_decode_standard_attention(Layer& layer, int layer_index);
     void enqueue_decode_latent_attention(Layer& layer, LayerCommon& common_layer,
                                          int layer_index);
     void enqueue_decode_factorized_latent_attention(Layer& layer,
