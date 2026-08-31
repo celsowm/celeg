@@ -6,6 +6,52 @@
 #include <stdexcept>
 
 namespace celeg {
+namespace {
+
+struct CudaLatentProjectionBuffers {
+    const __nv_bfloat16* input = nullptr;
+    __nv_bfloat16* query_content = nullptr;
+    __nv_bfloat16* query_rope = nullptr;
+    __nv_bfloat16* key = nullptr;
+    __nv_bfloat16* value = nullptr;
+    __nv_bfloat16* key_rope = nullptr;
+    int rows = 1;
+};
+
+void project_cuda_latent_attention_qkv_impl(
+    CudaCompiledModel& model, AttentionLayer& attention,
+    const CudaLatentProjectionBuffers& buffers) {
+    require_cuda_projected_latent_bindings(attention);
+    const AttentionSpec& layout = attention.layout;
+    const auto& latent = *layout.latent_state();
+    const int hidden = model.resources_.program_.hidden;
+    auto native_fanout = model.native_fanout_scope(
+        buffers.input, buffers.rows, hidden);
+    model.linear(
+        buffers.input, *attention.latent_query, buffers.query_content,
+        buffers.rows, layout.latent_query_content_width(), hidden);
+    if (layout.latent_query_rope_width() != 0) {
+        model.linear(
+            buffers.input, *attention.latent_query_rope, buffers.query_rope,
+            buffers.rows, layout.latent_query_rope_width(), hidden);
+    }
+    if (attention.latent_key && attention.latent_value) {
+        model.linear(
+            buffers.input, *attention.latent_key, buffers.key,
+            buffers.rows, latent.latent_rank, hidden);
+        model.linear(
+            buffers.input, *attention.latent_value, buffers.value,
+            buffers.rows, latent.latent_rank, hidden);
+        if (attention.latent_key_rope && latent.decoupled_rope &&
+            latent.rope_head_dim != 0) {
+            model.linear(
+                buffers.input, *attention.latent_key_rope, buffers.key_rope,
+                buffers.rows, latent.rope_head_dim, hidden);
+        }
+    }
+}
+
+}
 
 CudaQkvProjectionView CudaCompiledModel::project_standard_attention_qkv(
     AttentionLayer& attention) {
@@ -43,38 +89,26 @@ void require_cuda_projected_latent_bindings(const AttentionLayer& attention) {
 
 void project_cuda_latent_attention_qkv(
     CudaCompiledModel& model, AttentionLayer& attention) {
-    require_cuda_projected_latent_bindings(attention);
-    const AttentionSpec& layout = attention.layout;
-    const auto& latent = *layout.latent_state();
-    auto native_fanout = model.native_fanout_scope(
-        model.workspace_.normed_.data(), 1, model.resources_.program_.hidden);
-    model.linear(
-        model.workspace_.normed_.data(), *attention.latent_query,
-        model.workspace_.latent_query_content_.data(), 1,
-        layout.latent_query_content_width(), model.resources_.program_.hidden);
-    if (layout.latent_query_rope_width() != 0) {
-        model.linear(
-            model.workspace_.normed_.data(), *attention.latent_query_rope,
-            model.workspace_.latent_query_rope_.data(), 1,
-            layout.latent_query_rope_width(), model.resources_.program_.hidden);
-    }
-    if (attention.latent_key && attention.latent_value) {
-        model.linear(
-            model.workspace_.normed_.data(), *attention.latent_key,
-            model.workspace_.latent_key_.data(), 1, latent.latent_rank,
-            model.resources_.program_.hidden);
-        model.linear(
-            model.workspace_.normed_.data(), *attention.latent_value,
-            model.workspace_.latent_value_.data(), 1, latent.latent_rank,
-            model.resources_.program_.hidden);
-        if (attention.latent_key_rope && latent.decoupled_rope &&
-            latent.rope_head_dim != 0) {
-            model.linear(
-                model.workspace_.normed_.data(), *attention.latent_key_rope,
-                model.workspace_.latent_key_rope_.data(), 1,
-                latent.rope_head_dim, model.resources_.program_.hidden);
-        }
-    }
+    project_cuda_latent_attention_qkv_impl(model, attention, {
+        .input = model.workspace_.normed_.data(),
+        .query_content = model.workspace_.latent_query_content_.data(),
+        .query_rope = model.workspace_.latent_query_rope_.data(),
+        .key = model.workspace_.latent_key_.data(),
+        .value = model.workspace_.latent_value_.data(),
+        .key_rope = model.workspace_.latent_key_rope_.data(),
+        .rows = 1});
+}
+
+void project_cuda_prefill_latent_attention_qkv(
+    CudaCompiledModel& model, AttentionLayer& attention, int rows) {
+    project_cuda_latent_attention_qkv_impl(model, attention, {
+        .input = model.workspace_.prefill_normed_.data(),
+        .query_content = model.workspace_.prefill_latent_query_content_.data(),
+        .query_rope = model.workspace_.prefill_latent_query_rope_.data(),
+        .key = model.workspace_.prefill_latent_key_.data(),
+        .value = model.workspace_.prefill_latent_value_.data(),
+        .key_rope = model.workspace_.prefill_latent_key_rope_.data(),
+        .rows = rows});
 }
 
 void CudaCompiledModel::project_standard_attention_output(
