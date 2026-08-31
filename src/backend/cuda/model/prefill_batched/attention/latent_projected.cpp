@@ -1,20 +1,6 @@
-namespace celeg::prefill_detail {
+#include "../../attention_projection.hpp"
 
-void require_projected_latent_bindings(const AttentionLayer& attention) {
-    const AttentionSpec& layout = attention.layout;
-    if (!attention.latent_query || !attention.out) {
-        throw std::logic_error(
-            "CUDA projected latent prefill has incomplete query/output bindings");
-    }
-    if (layout.latent_query_rope_width() != 0 && !attention.latent_query_rope) {
-        throw std::logic_error(
-            "CUDA projected latent prefill is missing the query RoPE projection");
-    }
-    if ((attention.latent_key == nullptr) != (attention.latent_value == nullptr)) {
-        throw std::logic_error(
-            "CUDA projected latent prefill must bind latent key/value together");
-    }
-}
+namespace celeg::prefill_detail {
 
 void run_projected_latent_attention(
     CudaCompiledModel& model,
@@ -23,7 +9,7 @@ void run_projected_latent_attention(
     LayerCommon& common_layer,
     const CompiledLayerProgram& semantics,
     int rows) {
-    require_projected_latent_bindings(attention);
+    require_cuda_projected_latent_bindings(attention);
 
     auto& workspace = model.workspace_;
     auto& prof = prefill_phase_profile();
