@@ -55,7 +55,6 @@ void debug_layer_stats(CudaCompiledModel& model, int layer_index, int rows,
 void run_mixer(
     CudaCompiledModel& model,
     Layer& layer,
-    LayerCommon& common_layer,
     const CompiledLayerProgram& semantics,
     int rows) {
     visit_layer(
@@ -70,7 +69,7 @@ void run_mixer(
             run_mlp_only(model, *mlp, rows);
         },
         [&](AttentionLayer* attention) {
-            run_attention(model, *attention, common_layer, semantics, rows);
+            run_attention(model, *attention, semantics, rows);
         },
         [&](ConvolutionLayer* convolution) {
             run_convolution(model, *convolution, semantics, rows);
@@ -114,7 +113,7 @@ void run_layer(
     }
     prof.end(PrefillPhase::Norm, model.stream_.get());
 
-    run_mixer(model, layer, common_layer, semantics, rows);
+    run_mixer(model, layer, semantics, rows);
     debug_layer_stats(model, layer_index, rows, "mixer-out");
 
     if (mixer_after) {
