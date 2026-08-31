@@ -34,4 +34,17 @@ void CudaCompiledModel::project_standard_attention_output(
                  semantics.residual.multiplier, stream_.get());
 }
 
+void CudaCompiledModel::project_latent_attention_output(
+    AttentionLayer& attention, const CompiledLayerProgram& semantics) {
+    const bool fuse_residual = resources_.options().fused_residuals &&
+        !semantics.mixer_norm.after.has_value() &&
+        !std::holds_alternative<std::monostate>(semantics.feed_forward);
+    linear(workspace_.op_output_.data(), *attention.out, workspace_.hidden_.data(),
+           1, resources_.program_.hidden,
+           attention.layout.latent_query_content_width(),
+           fuse_residual ? 1.0f : 0.0f);
+    launch_scale(workspace_.hidden_.data(), resources_.program_.hidden,
+                 semantics.residual.multiplier, stream_.get());
+}
+
 }
