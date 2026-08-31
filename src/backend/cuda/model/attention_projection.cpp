@@ -3,6 +3,8 @@
 #include "attention_projection.hpp"
 #include "kernels/kernels.cuh"
 
+#include <stdexcept>
+
 namespace celeg {
 
 CudaQkvProjectionView CudaCompiledModel::project_standard_attention_qkv(
@@ -23,8 +25,25 @@ CudaQkvProjectionView CudaCompiledModel::project_standard_attention_qkv(
     return qkv;
 }
 
+void require_cuda_projected_latent_bindings(const AttentionLayer& attention) {
+    const AttentionSpec& layout = attention.layout;
+    if (!attention.latent_query || !attention.out) {
+        throw std::logic_error(
+            "CUDA projected latent attention has incomplete query/output bindings");
+    }
+    if (layout.latent_query_rope_width() != 0 && !attention.latent_query_rope) {
+        throw std::logic_error(
+            "CUDA projected latent attention is missing the query RoPE projection");
+    }
+    if ((attention.latent_key == nullptr) != (attention.latent_value == nullptr)) {
+        throw std::logic_error(
+            "CUDA projected latent attention must bind latent key/value together");
+    }
+}
+
 void project_cuda_latent_attention_qkv(
     CudaCompiledModel& model, AttentionLayer& attention) {
+    require_cuda_projected_latent_bindings(attention);
     const AttentionSpec& layout = attention.layout;
     const auto& latent = *layout.latent_state();
     auto native_fanout = model.native_fanout_scope(
