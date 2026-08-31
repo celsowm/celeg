@@ -192,8 +192,8 @@ void CudaCompiledModel::run_token_latent_attention_paged(
 }
 
 void CudaCompiledModel::run_token_attention(
-    AttentionLayer& attention, LayerCommon& common_layer,
-    const CompiledLayerProgram& semantics, int layer_index, const TokenKvPolicy& kv) {
+    AttentionLayer& attention, const CompiledLayerProgram& semantics,
+    int layer_index, const TokenKvPolicy& kv) {
     const AttentionSpec& layout = attention.layout;
     const auto* compiled_attention =
         std::get_if<CompiledAttentionProgram>(&semantics.mixer);
