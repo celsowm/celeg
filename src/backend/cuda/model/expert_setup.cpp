@@ -91,31 +91,13 @@ std::size_t estimate_non_expert_weights(const CheckpointDimensions& dims,
 std::size_t estimate_mtp_non_expert_weights(const CheckpointDimensions& dims,
                                             const CompiledModelProgram& program) {
     if (dims.mtp_num_hidden_layers <= 0) return 0;
-    const int full_attention_layer = [&]() {
-        for (int layer = static_cast<int>(program.layers.size()) - 1; layer >= 0; --layer) {
-            if (std::holds_alternative<CompiledAttentionProgram>(
-                    program.layers.at(static_cast<size_t>(layer)).mixer)) {
-                return layer;
-            }
-        }
-        return -1;
-    }();
-    if (full_attention_layer < 0) {
+    const CompiledAttentionProgram* full_attention = program.last_attention();
+    if (!full_attention) {
         throw std::runtime_error("MTP requires a full-attention target layer");
     }
-    const AttentionSpec& attention = std::get<CompiledAttentionProgram>(
-        program.layers.at(static_cast<size_t>(full_attention_layer)).mixer).semantics;
-    const auto moe_layer = std::find_if(
-        program.layers.begin(), program.layers.end(),
-        [](const CompiledLayerProgram& layer) {
-            return std::holds_alternative<MoeLayerProgram>(layer.feed_forward);
-        });
-    const auto dense_layer = std::find_if(
-        program.layers.begin(), program.layers.end(),
-        [](const CompiledLayerProgram& layer) {
-            return std::holds_alternative<CompiledDenseFeedForwardProgram>(
-                layer.feed_forward);
-        });
+    const AttentionSpec& attention = full_attention->semantics;
+    const MoeLayerProgram* moe = program.first_moe();
+    const CompiledDenseFeedForwardProgram* dense = program.first_dense_feed_forward();
     std::size_t bytes = bf16_bytes(2ull * program.hidden * program.hidden);
     bytes += bf16_bytes(3ull * program.hidden);
     for (int layer = 0; layer < dims.mtp_num_hidden_layers; ++layer) {
@@ -128,21 +110,19 @@ std::size_t estimate_mtp_non_expert_weights(const CheckpointDimensions& dims,
         if (attention.has_query_key_norm()) {
             bytes += bf16_bytes(2ull * static_cast<size_t>(attention.head_dim));
         }
-        if (moe_layer != program.layers.end()) {
-            const auto& moe = std::get<MoeLayerProgram>(moe_layer->feed_forward);
-            const int experts = moe.router.expert_count;
+        if (moe) {
+            const int experts = moe->router.expert_count;
             bytes += bf16_bytes(static_cast<size_t>(experts) * program.hidden);
             bytes += static_cast<size_t>(experts) * program.hidden * sizeof(float);
-            if (moe.shared) {
-                const size_t shared = static_cast<size_t>(moe.shared->mlp.intermediate_size);
+            if (moe->shared) {
+                const size_t shared = static_cast<size_t>(moe->shared->mlp.intermediate_size);
                 bytes += bf16_bytes(3ull * shared * program.hidden + program.hidden);
             }
         } else {
-            if (dense_layer == program.layers.end()) {
+            if (!dense) {
                 throw std::runtime_error("MTP requires a compiled dense FFN width");
             }
-            const int intermediate = std::get<CompiledDenseFeedForwardProgram>(
-                dense_layer->feed_forward).intermediate_size;
+            const int intermediate = dense->intermediate_size;
             if (intermediate <= 0) {
                 throw std::runtime_error("MTP requires a compiled dense FFN width");
             }
@@ -201,20 +181,9 @@ void configure_cuda_expert_resources(CudaCompiledModel& model) {
     if (resources.options().enable_mtp) {
         inputs.extra_moe_layers = resources.program_.has_moe()
             ? resources.dims().mtp_num_hidden_layers : 0;
-        const int full_attention_layer = [&]() {
-            for (int layer = static_cast<int>(resources.program_.layers.size()) - 1;
-                 layer >= 0; --layer) {
-                if (std::holds_alternative<CompiledAttentionProgram>(
-                        resources.program_.layers.at(static_cast<size_t>(layer)).mixer)) {
-                    return layer;
-                }
-            }
-            return -1;
-        }();
-        if (full_attention_layer >= 0) {
-            const AttentionSpec& attention = std::get<CompiledAttentionProgram>(
-                resources.program_.layers.at(
-                    static_cast<size_t>(full_attention_layer)).mixer).semantics;
+        if (const CompiledAttentionProgram* full_attention =
+                resources.program_.last_attention()) {
+            const AttentionSpec& attention = full_attention->semantics;
             inputs.extra_kv_reservation_bytes = static_cast<size_t>(
                 resources.dims().mtp_num_hidden_layers) * 2ull *
                 static_cast<size_t>(attention.key_value_width()) *
