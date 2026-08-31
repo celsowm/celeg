@@ -34,17 +34,7 @@ void CudaCompiledModel::store_and_attend_token_contiguous(
     __nv_bfloat16* q, __nv_bfloat16* k, __nv_bfloat16* v) {
     const AttentionSpec& layout = attention.layout;
     const AttentionSpec& owner_layout = owner.layout;
-    const bool int8_kv = plan.kv_format == KvCacheMode::Int8;
-    if (int8_kv) {
-        launch_store_kv_int8(
-            k, v, owner.key_cache_int8_ptr(), owner.value_cache_int8_ptr(),
-            owner.key_cache_scales_ptr(), owner.value_cache_scales_ptr(),
-            session_.position_, owner_layout.key_value_heads, owner_layout.head_dim,
-            stream_.get());
-    } else {
-        launch_store_kv(k, v, owner.key_cache_bf16(), owner.value_cache_bf16(),
-                        session_.position_, owner_layout.key_value_width(), stream_.get());
-    }
+    store_standard_attention_kv_contiguous(attention, owner, plan, k, v);
 
     const auto* block_sparse = std::get_if<BlockSparsePattern>(&layout.pattern);
     dispatch_cuda_contiguous_decode_attention({
