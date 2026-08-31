@@ -12,21 +12,6 @@
 
 namespace celeg {
 
-void CudaCompiledModel::store_and_attend_token_contiguous(
-    AttentionLayer& attention, AttentionLayer& owner, const AttentionCapability& plan,
-    __nv_bfloat16* q, __nv_bfloat16* k, __nv_bfloat16* v) {
-    store_standard_attention_kv_contiguous(attention, owner, plan, k, v);
-    dispatch_cuda_standard_attention_contiguous(*this, attention, owner, plan, q);
-}
-
-void CudaCompiledModel::store_and_attend_token_paged(
-    AttentionLayer& attention, const AttentionSpec& owner_layout,
-    const AttentionCapability& plan, int slot, __nv_bfloat16* q, __nv_bfloat16* k,
-    __nv_bfloat16* v, const TokenKvPolicy& kv) {
-    store_standard_attention_kv_paged(owner_layout, plan, slot, k, v, kv);
-    dispatch_standard_attention_paged(attention, owner_layout, plan, slot, q, kv);
-}
-
 void CudaCompiledModel::run_token_latent_attention_paged(
     AttentionLayer& attention, const CompiledLayerProgram& semantics,
     int layer_index, const TokenKvPolicy& kv) {
@@ -67,9 +52,11 @@ void CudaCompiledModel::run_token_attention(
     if (kv.paged()) {
         const int slot = kv.paged_kv->attention_slot(resolved_owner.model_layer);
         if (slot < 0) throw std::logic_error("attention layer has no page slot");
-        store_and_attend_token_paged(attention, owner_layout, plan, slot, q, k, v, kv);
+        store_standard_attention_kv_paged(owner_layout, plan, slot, k, v, kv);
+        dispatch_standard_attention_paged(attention, owner_layout, plan, slot, q, kv);
     } else {
-        store_and_attend_token_contiguous(attention, owner, plan, q, k, v);
+        store_standard_attention_kv_contiguous(attention, owner, plan, k, v);
+        dispatch_cuda_standard_attention_contiguous(*this, attention, owner, plan, q);
     }
 
     apply_cuda_token_attention_gate(*this, attention);
