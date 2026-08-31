@@ -4,7 +4,7 @@
 #include <cfloat>
 
 namespace celeg {
-#include "kv_cache.cuh"
+#include "paged_kv_offsets.cuh"
 #include "attention_common.cuh"
 
 namespace {
