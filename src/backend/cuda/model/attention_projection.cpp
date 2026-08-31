@@ -172,6 +172,63 @@ void project_cuda_factorized_latent_attention_qkv_impl(
         model.stream_.get()));
 }
 
+struct CudaFactorizedLatentOutputBuffers {
+    const __nv_bfloat16* normalized_input = nullptr;
+    const __nv_bfloat16* latent_output = nullptr;
+    __nv_bfloat16* decompressed = nullptr;
+    __nv_bfloat16* gate = nullptr;
+    __nv_bfloat16* hidden = nullptr;
+    int rows = 1;
+};
+
+void project_cuda_factorized_latent_attention_output_impl(
+    CudaCompiledModel& model, AttentionLayer& attention,
+    const CompiledLayerProgram& semantics,
+    const CudaFactorizedLatentOutputBuffers& buffers) {
+    const AttentionSpec& layout = attention.layout;
+    const auto& latent = *layout.latent_state();
+    const auto& factorized = *latent.factorized_projection();
+    if (!layout.output_gate.has_value()) {
+        throw std::logic_error("CUDA factorized latent attention has no output gate");
+    }
+    const auto& latent_expansion_storage =
+        std::get<Bf16LinearStorage>(attention.latent_expansion->storage);
+    const int hidden = model.resources_.program_.hidden;
+
+    launch_factorized_latent_value({
+        .latent_output = buffers.latent_output,
+        .expansion = latent_expansion_storage.data,
+        .value_output = buffers.decompressed,
+        .rows = buffers.rows,
+        .query_heads = layout.query_heads,
+        .query_nope = latent.nope_head_dim,
+        .value_dim = factorized.value_head_dim,
+        .latent_rank = latent.latent_rank,
+        .stream = model.stream_.get()});
+    model.linear(
+        buffers.normalized_input, *attention.gate, buffers.gate,
+        buffers.rows, layout.output_gate_width(), hidden);
+    if (layout.output_gate->granularity == AttentionGateGranularity::HeadWise) {
+        launch_sigmoid_multiply_headwise(
+            buffers.decompressed, buffers.gate, buffers.rows,
+            layout.query_heads, factorized.value_head_dim, model.stream_.get());
+    } else {
+        launch_sigmoid_multiply(
+            buffers.decompressed, buffers.gate,
+            buffers.rows * layout.latent_output_width(), model.stream_.get());
+    }
+
+    const bool fuse_residual = cuda_can_fuse_mixer_residual(
+        model.resources_.options().fused_residuals, semantics);
+    model.linear(
+        buffers.decompressed, *attention.out, buffers.hidden,
+        buffers.rows, hidden, layout.latent_output_width(),
+        fuse_residual ? 1.0f : 0.0f);
+    launch_scale(
+        buffers.hidden, buffers.rows * hidden,
+        semantics.residual.multiplier, model.stream_.get());
+}
+
 void project_cuda_prefill_attention_output_impl(
     CudaCompiledModel& model, AttentionLayer& attention,
     const CompiledLayerProgram& semantics, int rows, int input_width) {
@@ -298,6 +355,30 @@ void project_cuda_prefill_latent_attention_output(
     project_cuda_prefill_attention_output_impl(
         model, attention, semantics, rows,
         attention.layout.latent_query_content_width());
+}
+
+void project_cuda_factorized_latent_attention_output(
+    CudaCompiledModel& model, AttentionLayer& attention,
+    const CompiledLayerProgram& semantics) {
+    project_cuda_factorized_latent_attention_output_impl(model, attention, semantics, {
+        .normalized_input = model.workspace_.normed_.data(),
+        .latent_output = model.workspace_.op_output_.data(),
+        .decompressed = model.workspace_.latent_decompressed_.data(),
+        .gate = model.workspace_.attention_gate_.data(),
+        .hidden = model.workspace_.hidden_.data(),
+        .rows = 1});
+}
+
+void project_cuda_prefill_factorized_latent_attention_output(
+    CudaCompiledModel& model, AttentionLayer& attention,
+    const CompiledLayerProgram& semantics, int rows) {
+    project_cuda_factorized_latent_attention_output_impl(model, attention, semantics, {
+        .normalized_input = model.workspace_.prefill_normed_.data(),
+        .latent_output = model.workspace_.prefill_op_output_.data(),
+        .decompressed = model.workspace_.prefill_latent_decompressed_.data(),
+        .gate = model.workspace_.prefill_attention_gate_.data(),
+        .hidden = model.workspace_.prefill_hidden_.data(),
+        .rows = rows});
 }
 
 void CudaCompiledModel::project_standard_attention_output(
