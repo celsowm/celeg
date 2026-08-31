@@ -1,6 +1,7 @@
 #pragma once
 
 #include "detail/layer_state.hpp"
+#include "kernels/kernels.cuh"
 
 #include <vector>
 
