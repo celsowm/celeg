@@ -126,16 +126,28 @@ int main() {
         celeg::ExecutionTopology::derive(mlp_only_graph);
     CELEG_TEST_CHECK(mlp_only_topology.mlp_only_layer_count == 1);
 
-    celeg::ResolvedModel unsupported_pattern = model;
-    std::get<celeg::AttentionSpec>(unsupported_pattern.graph.layers[0].mixer).pattern =
+    celeg::ResolvedModel bidirectional_pattern = model;
+    std::get<celeg::AttentionSpec>(
+        bidirectional_pattern.graph.layers[0].mixer).pattern =
         celeg::BidirectionalPattern{};
-    const auto bidirectional_cpu = celeg::CpuModelCompiler{}.compile(unsupported_pattern);
-    CELEG_TEST_CHECK(std::holds_alternative<celeg::BidirectionalPattern>(
-        compiled_attention(bidirectional_cpu.layers[0]).pattern));
-    bool cuda_pattern_rejected = false;
-    try { (void)celeg::CudaModelCompiler{}.compile(unsupported_pattern); }
-    catch (const std::invalid_argument&) { cuda_pattern_rejected = true; }
-    CELEG_TEST_CHECK(cuda_pattern_rejected);
+    const auto bidirectional_cpu =
+        celeg::CpuModelCompiler{}.compile(bidirectional_pattern);
+    const auto bidirectional_cuda =
+        celeg::CudaModelCompiler{}.compile(bidirectional_pattern);
+    for (const celeg::CompiledModelProgram* program :
+         {&bidirectional_cpu, &bidirectional_cuda}) {
+        CELEG_TEST_CHECK(std::holds_alternative<celeg::BidirectionalPattern>(
+            compiled_attention(program->layers[0]).pattern));
+    }
+
+    celeg::ResolvedModel prefix_lm_pattern = model;
+    std::get<celeg::AttentionSpec>(
+        prefix_lm_pattern.graph.layers[0].mixer).pattern =
+        celeg::PrefixLmPattern{4};
+    const auto prefix_lm_cuda =
+        celeg::CudaModelCompiler{}.compile(prefix_lm_pattern);
+    CELEG_TEST_CHECK(std::holds_alternative<celeg::PrefixLmPattern>(
+        compiled_attention(prefix_lm_cuda.layers[0]).pattern));
 
     celeg::ResolvedModel sparse_pattern = model;
     std::get<celeg::AttentionSpec>(sparse_pattern.graph.layers[0].mixer).pattern =
