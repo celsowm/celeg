@@ -16,7 +16,8 @@ __global__ void gqa_decode_strict_kernel(const __nv_bfloat16* q,
     const int query_head = prefill ? block % q_heads : block;
     if (query_row >= rows || query_head >= q_heads) return;
     const int seq_len = mode == 1 ? *position_pointer + 1 :
-        (mode == 2 ? query_row + 1 : seq_len_value);
+        (mode == 2 ? query_row + 1 :
+         (mode == 4 && query_row >= seq_len_value ? query_row + 1 : seq_len_value));
     const int first_token = sliding_window > 0 ? max(0, seq_len - sliding_window) : 0;
     const int lane = threadIdx.x;
     const int kv_head = query_head / (q_heads / kv_heads);
@@ -153,7 +154,8 @@ __global__ void gqa_decode_strict_int8_kernel(
     const int query_head = prefill ? block % q_heads : block;
     if (query_row >= rows || query_head >= q_heads) return;
     const int seq_len = mode == 1 ? *position_pointer + 1 :
-        (mode == 2 ? query_row + 1 : seq_len_value);
+        (mode == 2 ? query_row + 1 :
+         (mode == 4 && query_row >= seq_len_value ? query_row + 1 : seq_len_value));
     const int first_token = sliding_window > 0 ? max(0, seq_len - sliding_window) : 0;
     const int lane = threadIdx.x;
     const int kv_head = query_head / (q_heads / kv_heads);
@@ -313,7 +315,8 @@ void launch_gqa_decode_online_device(const GqaContiguousArgs& args) {
 void launch_gqa_prefill_strict(const GqaContiguousArgs& args) {
     const int threads = attention_threads(args.geometry.head_dim);
     const int rows = args.extent.rows;
-    const int mode = args.extent.seq_len > 0 ? 3 : 2;
+    const int mode = args.extent.seq_len <= 0 ? 2 :
+        (args.extent.seq_len < rows ? 4 : 3);
     gqa_decode_strict_kernel<<<rows * args.geometry.q_heads, threads, 0, args.stream>>>(
         args.query, args.kv.keys, args.kv.values, args.out, rows,
         args.extent.seq_len, nullptr, mode,
@@ -372,7 +375,8 @@ void launch_gqa_decode_online_int8_device(const GqaContiguousInt8Args& args) {
 void launch_gqa_prefill_strict_int8(const GqaContiguousInt8Args& args) {
     const int threads = attention_threads(args.geometry.head_dim);
     const int rows = args.extent.rows;
-    const int mode = args.extent.seq_len > 0 ? 3 : 2;
+    const int mode = args.extent.seq_len <= 0 ? 2 :
+        (args.extent.seq_len < rows ? 4 : 3);
     gqa_decode_strict_int8_kernel<<<rows * args.geometry.q_heads, threads, 0, args.stream>>>(
         args.query, args.kv.keys, args.kv.values, args.kv.key_scales,
         args.kv.value_scales, args.out, rows, args.extent.seq_len, nullptr, mode,

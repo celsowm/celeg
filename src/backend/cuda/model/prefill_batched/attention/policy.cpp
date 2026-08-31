@@ -7,6 +7,9 @@ AttentionCapability select_attention_plan(
     int rows) {
     const bool bidirectional =
         std::holds_alternative<BidirectionalPattern>(attention.layout.pattern);
+    const bool prefix_lm =
+        std::holds_alternative<PrefixLmPattern>(attention.layout.pattern);
+    const bool strict_visibility = bidirectional || prefix_lm;
     AttentionRequest request;
     request.kv_format = model.resources_.options().kv_cache_mode;
     request.operation = AttentionOperation::Prefill;
@@ -15,9 +18,9 @@ AttentionCapability select_attention_plan(
     request.bias = attention.alibi_slopes.data()
         ? AttentionPositionBias::Alibi : AttentionPositionBias::None;
     request.fast_attention =
-        model.resources_.options().fast_attention && !bidirectional;
+        model.resources_.options().fast_attention && !strict_visibility;
     request.flash_attention_requested =
-        model.resources_.options().flash_attn && !bidirectional;
+        model.resources_.options().flash_attn && !strict_visibility;
     request.head_dim = owner_layout.head_dim;
     request.rows = rows;
     return require_attention_capability(request);
@@ -34,6 +37,7 @@ void store_and_attend(
     const bool int8_kv = plan.kv_format == KvCacheMode::Int8;
     const bool bidirectional =
         std::holds_alternative<BidirectionalPattern>(layout.pattern);
+    const auto* prefix_lm = std::get_if<PrefixLmPattern>(&layout.pattern);
 
     if (attention.key && attention.value) {
         if (int8_kv) {
@@ -58,9 +62,12 @@ void store_and_attend(
         .kv_heads = owner_layout.key_value_heads,
         .head_dim = owner_layout.head_dim,
         .sliding_window = layout.sliding_window_size()};
+    const int visibility_prefix = bidirectional
+        ? rows
+        : (prefix_lm ? std::min(prefix_lm->prefix_length, rows) : 0);
     const AttentionExtent extent{
         .rows = rows,
-        .seq_len = bidirectional ? rows : 0};
+        .seq_len = visibility_prefix};
     const Bf16KvView bf16_kv{
         .keys = owner.key_cache_bf16(),
         .values = owner.value_cache_bf16()};

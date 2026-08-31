@@ -13,9 +13,9 @@
 
 namespace {
 
-celeg::ResolvedModel bidirectional_fixture() {
+celeg::ResolvedModel attention_pattern_fixture() {
     celeg::ResolvedModel model;
-    model.provenance.identity = "cuda-bidirectional-fixture";
+    model.provenance.identity = "cuda-attention-pattern-fixture";
     model.graph.hidden = 2;
 
     celeg::LayerSpec layer;
@@ -38,7 +38,7 @@ celeg::ResolvedModel bidirectional_fixture() {
 }
 
 void check_compiler_contract() {
-    const celeg::ResolvedModel model = bidirectional_fixture();
+    const celeg::ResolvedModel model = attention_pattern_fixture();
     const celeg::CompiledModelProgram program =
         celeg::CudaModelCompiler{}.compile(model);
     CELEG_TEST_CHECK(program.layers.size() == 1);
@@ -50,14 +50,35 @@ void check_compiler_contract() {
 
     celeg::ResolvedModel prefix = model;
     std::get<celeg::AttentionSpec>(prefix.graph.layers[0].mixer).pattern =
-        celeg::PrefixLmPattern{1};
-    bool prefix_rejected = false;
+        celeg::PrefixLmPattern{2};
+    const auto prefix_program = celeg::CudaModelCompiler{}.compile(prefix);
+    const auto* prefix_compiled = std::get_if<celeg::CompiledAttentionProgram>(
+        &prefix_program.layers[0].mixer);
+    CELEG_TEST_CHECK(prefix_compiled != nullptr);
+    CELEG_TEST_CHECK(std::holds_alternative<celeg::PrefixLmPattern>(
+        prefix_compiled->semantics.pattern));
+
+    celeg::ResolvedModel invalid_prefix = prefix;
+    std::get<celeg::AttentionSpec>(invalid_prefix.graph.layers[0].mixer).pattern =
+        celeg::PrefixLmPattern{0};
+    bool invalid_prefix_rejected = false;
     try {
-        (void)celeg::CudaModelCompiler{}.compile(prefix);
+        (void)celeg::CudaModelCompiler{}.compile(invalid_prefix);
     } catch (const std::invalid_argument&) {
-        prefix_rejected = true;
+        invalid_prefix_rejected = true;
     }
-    CELEG_TEST_CHECK(prefix_rejected);
+    CELEG_TEST_CHECK(invalid_prefix_rejected);
+
+    celeg::ResolvedModel sparse = model;
+    std::get<celeg::AttentionSpec>(sparse.graph.layers[0].mixer).pattern =
+        celeg::BlockSparsePattern{16, 2, 1};
+    bool sparse_rejected = false;
+    try {
+        (void)celeg::CudaModelCompiler{}.compile(sparse);
+    } catch (const std::invalid_argument&) {
+        sparse_rejected = true;
+    }
+    CELEG_TEST_CHECK(sparse_rejected);
 
     celeg::ResolvedModel biased = model;
     std::get<celeg::AttentionSpec>(biased.graph.layers[0].mixer).bias =
@@ -139,11 +160,68 @@ void check_bidirectional_prefill(celeg::CudaStream& stream) {
         celeg::cuda_test::to_float(causal[0])) > 1.0f);
 }
 
+void check_prefix_lm_prefill(celeg::CudaStream& stream) {
+    const std::vector<__nv_bfloat16> query = {
+        celeg::cuda_test::to_bf16(1.0f), celeg::cuda_test::to_bf16(0.0f),
+        celeg::cuda_test::to_bf16(1.0f), celeg::cuda_test::to_bf16(0.0f),
+        celeg::cuda_test::to_bf16(1.0f), celeg::cuda_test::to_bf16(0.0f)};
+    const std::vector<__nv_bfloat16> keys = {
+        celeg::cuda_test::to_bf16(1.0f), celeg::cuda_test::to_bf16(0.0f),
+        celeg::cuda_test::to_bf16(0.0f), celeg::cuda_test::to_bf16(1.0f),
+        celeg::cuda_test::to_bf16(1.0f), celeg::cuda_test::to_bf16(0.0f)};
+    const std::vector<__nv_bfloat16> values = {
+        celeg::cuda_test::to_bf16(2.0f), celeg::cuda_test::to_bf16(4.0f),
+        celeg::cuda_test::to_bf16(6.0f), celeg::cuda_test::to_bf16(8.0f),
+        celeg::cuda_test::to_bf16(10.0f), celeg::cuda_test::to_bf16(12.0f)};
+
+    celeg::DeviceBuffer<__nv_bfloat16> dquery(query.size());
+    celeg::DeviceBuffer<__nv_bfloat16> dkeys(keys.size());
+    celeg::DeviceBuffer<__nv_bfloat16> dvalues(values.size());
+    celeg::DeviceBuffer<__nv_bfloat16> prefix_out(query.size());
+    CELEG_CUDA(cudaMemcpy(dquery.data(), query.data(), dquery.bytes(),
+                          cudaMemcpyHostToDevice));
+    CELEG_CUDA(cudaMemcpy(dkeys.data(), keys.data(), dkeys.bytes(),
+                          cudaMemcpyHostToDevice));
+    CELEG_CUDA(cudaMemcpy(dvalues.data(), values.data(), dvalues.bytes(),
+                          cudaMemcpyHostToDevice));
+
+    celeg::launch_gqa_prefill_strict({
+        .query = dquery.data(),
+        .kv = {.keys = dkeys.data(), .values = dvalues.data()},
+        .out = prefix_out.data(),
+        .geometry = {.q_heads = 1, .kv_heads = 1, .head_dim = 2},
+        .extent = {.rows = 3, .seq_len = 2},
+        .stream = stream.get()});
+
+    std::array<__nv_bfloat16, 6> output{};
+    CELEG_CUDA(cudaMemcpyAsync(output.data(), prefix_out.data(), prefix_out.bytes(),
+                               cudaMemcpyDeviceToHost, stream.get()));
+    CELEG_CUDA(cudaStreamSynchronize(stream.get()));
+
+    const float e = std::exp(1.0f / std::sqrt(2.0f));
+    const float prefix_denominator = e + 1.0f;
+    const float prefix0 = (e * 2.0f + 6.0f) / prefix_denominator;
+    const float prefix1 = (e * 4.0f + 8.0f) / prefix_denominator;
+    for (int row = 0; row < 2; ++row) {
+        CELEG_TEST_CHECK(std::abs(
+            celeg::cuda_test::to_float(output[row * 2]) - prefix0) < 0.03f);
+        CELEG_TEST_CHECK(std::abs(
+            celeg::cuda_test::to_float(output[row * 2 + 1]) - prefix1) < 0.03f);
+    }
+
+    const float causal_denominator = 2.0f * e + 1.0f;
+    const float causal0 = (e * 2.0f + 6.0f + e * 10.0f) / causal_denominator;
+    const float causal1 = (e * 4.0f + 8.0f + e * 12.0f) / causal_denominator;
+    CELEG_TEST_CHECK(std::abs(celeg::cuda_test::to_float(output[4]) - causal0) < 0.03f);
+    CELEG_TEST_CHECK(std::abs(celeg::cuda_test::to_float(output[5]) - causal1) < 0.03f);
+}
+
 }
 
 int main() {
     check_compiler_contract();
     celeg::CudaStream stream;
     check_bidirectional_prefill(stream);
+    check_prefix_lm_prefill(stream);
     return 0;
 }
