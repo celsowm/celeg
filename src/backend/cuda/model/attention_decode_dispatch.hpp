@@ -31,6 +31,23 @@ struct CudaContiguousDecodeDispatch {
     cudaStream_t stream = nullptr;
 };
 
+struct CudaPagedDecodeDispatch {
+    AttentionCapability plan{};
+    const BlockSparsePattern* block_sparse = nullptr;
+    const __nv_bfloat16* query = nullptr;
+    Bf16KvPoolView bf16_kv{};
+    Int8KvPoolView int8_kv{};
+    PagedKvIndex index{};
+    PagedKvScaleIndex scale_index{};
+    __nv_bfloat16* out = nullptr;
+    const int32_t* positions = nullptr;
+    int rows = 0;
+    GqaGeometry geometry{};
+    AttentionSegmentation segmentation{};
+    const float* alibi_slopes = nullptr;
+    cudaStream_t stream = nullptr;
+};
+
 CudaDecodeAttentionPolicy plan_cuda_decode_attention(
     const AttentionSpec& layout,
     KvCacheMode kv_format,
@@ -50,5 +67,8 @@ GqaBlockSparsePattern lower_cuda_block_sparse_pattern(
 
 void dispatch_cuda_contiguous_decode_attention(
     const CudaContiguousDecodeDispatch& dispatch);
+
+void dispatch_cuda_paged_decode_attention(
+    const CudaPagedDecodeDispatch& dispatch);
 
 }
