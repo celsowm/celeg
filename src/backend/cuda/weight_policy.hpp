@@ -8,7 +8,17 @@
 namespace celeg {
 
 inline void check_moe_quantization_policy(WeightMode mode, bool is_moe) {
-    if (!is_moe || !is_rowwise_quantized_weight_mode(mode)) return;
+    if (!is_moe) return;
+
+    switch (mode) {
+    case WeightMode::Bf16:
+    case WeightMode::NativeGguf:
+        return;
+    case WeightMode::Int8:
+    case WeightMode::Int4:
+        break;
+    }
+
     throw std::invalid_argument(
         std::string("unsupported MoE quantization policy: --weight-mode ") +
         std::string(weight_mode_name(mode)) +
