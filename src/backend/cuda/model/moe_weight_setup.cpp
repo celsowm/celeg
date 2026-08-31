@@ -44,6 +44,27 @@ MoeFfnWeights bind_cuda_moe_router_weight(
     return weights;
 }
 
+void bind_cuda_shared_expert(
+    CudaCompiledModel& model,
+    const IWeightRepository& repo,
+    const CudaSharedExpertNames& names,
+    int intermediate,
+    MoeFfnWeights& weights) {
+    CudaModelResources& resources = model.resources_;
+    weights.shared_w13 = resources.weight_loader_->load_concat_linear_weight(
+        repo, names.synthetic_w13,
+        {
+            {names.gate, {intermediate, resources.program_.hidden}},
+            {names.up, {intermediate, resources.program_.hidden}},
+        });
+    weights.shared_w2 = resources.weight_loader_->load_linear_weight(
+        repo, names.down, {resources.program_.hidden, intermediate});
+    if (names.gate_weight) {
+        weights.shared_gate = resources.weight_loader_->load_linear_weight(
+            repo, *names.gate_weight, {1, resources.program_.hidden});
+    }
+}
+
 ResidentExpertWeights bind_cuda_resident_experts(
     CudaCompiledModel& model,
     const IWeightRepository& repo,
@@ -102,22 +123,15 @@ void bind_cuda_moe_feed_forward(CudaCompiledModel& model,
         layer_index, expert_count, expert_bias);
 
     if (semantics.shared) {
-        const int shared_intermediate = semantics.shared->mlp.intermediate_size;
-        moe_weights.shared_w13 = resources.weight_loader_->load_concat_linear_weight(
-            repo, cuda_layer_name(layer_index, "shared_expert.w13.weight"),
-            {
-                {cuda_tensor_name(resources.model_.weight_plan.requests,
-                                  TensorRole::MoeSharedGate, layer_index),
-                 {shared_intermediate, resources.program_.hidden}},
-                {cuda_tensor_name(resources.model_.weight_plan.requests,
-                                  TensorRole::MoeSharedUp, layer_index),
-                 {shared_intermediate, resources.program_.hidden}},
-            });
-        moe_weights.shared_w2 = resources.weight_loader_->load_linear_weight(
-            repo,
+        CudaSharedExpertNames names{
+            cuda_layer_name(layer_index, "shared_expert.w13.weight"),
+            cuda_tensor_name(resources.model_.weight_plan.requests,
+                             TensorRole::MoeSharedGate, layer_index),
+            cuda_tensor_name(resources.model_.weight_plan.requests,
+                             TensorRole::MoeSharedUp, layer_index),
             cuda_tensor_name(resources.model_.weight_plan.requests,
                              TensorRole::MoeSharedDown, layer_index),
-            {resources.program_.hidden, shared_intermediate});
+            std::nullopt};
         const auto gate_request = std::find_if(
             resources.model_.weight_plan.requests.begin(),
             resources.model_.weight_plan.requests.end(),
@@ -126,12 +140,13 @@ void bind_cuda_moe_feed_forward(CudaCompiledModel& model,
                        request.layer == layer_index && request.expert == -1;
             });
         if (gate_request != resources.model_.weight_plan.requests.end()) {
-            moe_weights.shared_gate = resources.weight_loader_->load_linear_weight(
-                repo,
-                cuda_tensor_name(resources.model_.weight_plan.requests,
-                                 TensorRole::MoeSharedGateWeight, layer_index),
-                {1, resources.program_.hidden});
+            names.gate_weight = cuda_tensor_name(
+                resources.model_.weight_plan.requests,
+                TensorRole::MoeSharedGateWeight, layer_index);
         }
+        bind_cuda_shared_expert(
+            model, repo, names, semantics.shared->mlp.intermediate_size,
+            moe_weights);
     }
 
     if (workspace.expert_offload_plan_.enabled) {
