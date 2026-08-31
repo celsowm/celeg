@@ -58,11 +58,9 @@ void CudaCompiledModel::store_and_attend_token_paged(
     __nv_bfloat16* v, const TokenKvPolicy& kv) {
     const AttentionSpec& layout = attention.layout;
     PhysicalPagedKvCache& paged_kv = *kv.paged_kv;
-    const uint32_t* device_page_table = kv.device_page_table;
-    const int page_table_stride = kv.page_table_stride;
     const PagedKvIndex index{
-        .page_tables = device_page_table,
-        .page_table_stride = page_table_stride,
+        .page_tables = kv.device_page_table,
+        .page_table_stride = kv.page_table_stride,
         .attention_slot = slot,
         .page_tokens = paged_kv.page_tokens(),
         .page_vector_elements = paged_kv.page_vector_elements(),
@@ -70,25 +68,7 @@ void CudaCompiledModel::store_and_attend_token_paged(
     const PagedKvScaleIndex scale_index{
         .page_scale_elements = paged_kv.page_scale_elements(),
         .layer_scale_offset = paged_kv.layer_scale_offset(slot)};
-    const bool int8_kv = plan.kv_format == KvCacheMode::Int8;
-
-    if (int8_kv) {
-        launch_store_kv_int8_paged_batch(
-            k, v, paged_kv.key_int8(), paged_kv.value_int8(),
-            paged_kv.key_scales(), paged_kv.value_scales(),
-            device_page_table, page_table_stride, position_device_.data(),
-            1, slot, paged_kv.page_tokens(),
-            paged_kv.page_vector_elements(), paged_kv.layer_vector_offset(slot),
-            paged_kv.page_scale_elements(), paged_kv.layer_scale_offset(slot),
-            owner_layout.key_value_heads, owner_layout.head_dim, stream_.get());
-    } else {
-        launch_store_kv_paged_batch(
-            k, v, paged_kv.key_bf16(), paged_kv.value_bf16(),
-            device_page_table, page_table_stride, position_device_.data(),
-            1, slot, paged_kv.page_tokens(),
-            paged_kv.page_vector_elements(), paged_kv.layer_vector_offset(slot),
-            owner_layout.key_value_heads, owner_layout.head_dim, stream_.get());
-    }
+    store_standard_attention_kv_paged(owner_layout, plan, slot, k, v, kv);
 
     const int chunks = (session_.position_ + 1 +
         resources_.options().attention_chunk_tokens - 1) /
