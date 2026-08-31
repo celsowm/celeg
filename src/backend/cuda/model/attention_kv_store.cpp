@@ -8,8 +8,15 @@
 namespace celeg {
 namespace {
 
+bool latent_writes_kv(const AttentionLayer& attention) {
+    const auto& latent = *attention.layout.latent_state();
+    return latent.factorized() ||
+        (attention.latent_key && attention.latent_value);
+}
+
 int latent_rotary_width(const AttentionLayer& attention) {
     const auto& latent = *attention.layout.latent_state();
+    if (latent.factorized()) return latent.rope_head_dim;
     return attention.latent_key_rope && latent.decoupled_rope &&
             latent.rope_head_dim != 0
         ? latent.rope_head_dim : 0;
@@ -19,17 +26,6 @@ const __nv_bfloat16* latent_key_rope_for_store(
     CudaCompiledModel& model, const AttentionLayer& attention) {
     return latent_rotary_width(attention) != 0
         ? model.workspace_.latent_key_rope_.data() : nullptr;
-}
-
-bool latent_prefill_writes_kv(const AttentionLayer& attention) {
-    const auto& latent = *attention.layout.latent_state();
-    return latent.factorized() ||
-        (attention.latent_key && attention.latent_value);
-}
-
-int latent_prefill_rotary_width(const AttentionLayer& attention) {
-    const auto& latent = *attention.layout.latent_state();
-    return latent.factorized() ? latent.rope_head_dim : latent_rotary_width(attention);
 }
 
 } // namespace
@@ -101,7 +97,7 @@ void CudaCompiledModel::store_standard_attention_kv_paged(
 
 void store_cuda_latent_kv_contiguous(
     CudaCompiledModel& model, AttentionLayer& attention, AttentionLayer& owner) {
-    if (!attention.latent_key || !attention.latent_value) return;
+    if (!latent_writes_kv(attention)) return;
 
     const auto& latent = *attention.layout.latent_state();
     const int rotary_width = latent_rotary_width(attention);
@@ -137,10 +133,10 @@ void store_cuda_latent_kv_paged(
 void store_cuda_latent_kv_prefill(
     CudaCompiledModel& model, AttentionLayer& attention,
     AttentionLayer& owner, int rows) {
-    if (!latent_prefill_writes_kv(attention)) return;
+    if (!latent_writes_kv(attention)) return;
 
     const auto& latent = *attention.layout.latent_state();
-    const int rotary_width = latent_prefill_rotary_width(attention);
+    const int rotary_width = latent_rotary_width(attention);
     launch_store_latent_prefill(
         model.workspace_.prefill_latent_key_.data(),
         model.workspace_.prefill_latent_value_.data(),
