@@ -1,6 +1,7 @@
 #include "detail/compiled_model.hpp"
 #include "attention_layer_support.hpp"
 #include "attention_projection.hpp"
+#include "residual_fusion.hpp"
 #include "kernels/kernels.cuh"
 
 #include <stdexcept>
@@ -55,9 +56,8 @@ void project_cuda_prefill_attention_output_impl(
     CudaCompiledModel& model, AttentionLayer& attention,
     const CompiledLayerProgram& semantics, int rows, int input_width) {
     const int hidden = model.resources_.program_.hidden;
-    const bool fuse_residual = model.resources_.options().fused_residuals &&
-        !semantics.mixer_norm.after.has_value() &&
-        !std::holds_alternative<std::monostate>(semantics.feed_forward);
+    const bool fuse_residual = cuda_can_fuse_mixer_residual(
+        model.resources_.options().fused_residuals, semantics);
     model.linear(
         model.workspace_.prefill_op_output_.data(), *attention.out,
         model.workspace_.prefill_hidden_.data(), rows, hidden, input_width,
@@ -144,9 +144,8 @@ void project_cuda_prefill_latent_attention_output(
 
 void CudaCompiledModel::project_standard_attention_output(
     AttentionLayer& attention, const CompiledLayerProgram& semantics) {
-    const bool fuse_residual = resources_.options().fused_residuals &&
-        !semantics.mixer_norm.after.has_value() &&
-        !std::holds_alternative<std::monostate>(semantics.feed_forward);
+    const bool fuse_residual = cuda_can_fuse_mixer_residual(
+        resources_.options().fused_residuals, semantics);
     linear(workspace_.op_output_.data(), *attention.out, workspace_.hidden_.data(),
            1, resources_.program_.hidden, attention.layout.query_width(),
            fuse_residual ? 1.0f : 0.0f);
@@ -156,9 +155,8 @@ void CudaCompiledModel::project_standard_attention_output(
 
 void CudaCompiledModel::project_latent_attention_output(
     AttentionLayer& attention, const CompiledLayerProgram& semantics) {
-    const bool fuse_residual = resources_.options().fused_residuals &&
-        !semantics.mixer_norm.after.has_value() &&
-        !std::holds_alternative<std::monostate>(semantics.feed_forward);
+    const bool fuse_residual = cuda_can_fuse_mixer_residual(
+        resources_.options().fused_residuals, semantics);
     linear(workspace_.op_output_.data(), *attention.out, workspace_.hidden_.data(),
            1, resources_.program_.hidden,
            attention.layout.latent_query_content_width(),
