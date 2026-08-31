@@ -10,5 +10,4 @@
 #include "inference/state.metal"
 #include "inference/projection.metal"
 #include "inference/batch.metal"
-#include "inference/sliding_window.metal"
 #include "inference/pair.metal"
