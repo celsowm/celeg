@@ -1,4 +1,5 @@
 #include "detail/compiled_model.hpp"
+#include "residual_fusion.hpp"
 #include "kernels/kernels.cuh"
 #include "backend/cuda/phase_profile.hpp"
 
@@ -15,9 +16,8 @@ void CudaCompiledModel::enqueue_decode_non_attention_mixer(Layer& layer,
     const float mixer_epsilon = semantics.mixer_norm.before
         ? semantics.mixer_norm.before->epsilon
         : resources_.program_.final_norm.epsilon;
-    const bool fuse_residual = resources_.options().fused_residuals &&
-        !semantics.mixer_norm.after.has_value() &&
-        !std::holds_alternative<std::monostate>(semantics.feed_forward);
+    const bool fuse_residual = cuda_can_fuse_mixer_residual(
+        resources_.options().fused_residuals, semantics);
     visit_layer(layer,
       [&](AttentionLayer*) {
         throw std::logic_error("attention layer routed to the non-attention mixer");
