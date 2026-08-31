@@ -250,25 +250,12 @@ void CudaCompiledModel::run_token_attention(
     AttentionLayer& owner = *resolved_owner.layer;
     const AttentionSpec& owner_layout = owner.layout;
 
-    const CudaQkvProjectionView qkv = make_cuda_qkv_projection_view(
-        attention, workspace_.qkv_output_.data());
+    const CudaQkvProjectionView qkv = project_standard_attention_qkv(attention);
     __nv_bfloat16* q = qkv.query;
     __nv_bfloat16* k = qkv.key;
     __nv_bfloat16* v = qkv.value;
     const bool output_gate = layout.output_gate.has_value();
     const bool gate_packed = output_gate && layout.output_gate->packed_with_query;
-    {
-        auto native_fanout = native_fanout_scope(
-            workspace_.normed_.data(), 1, resources_.program_.hidden);
-        linear(workspace_.normed_.data(), *attention.query, q,
-               1, qkv.query_projection_width, resources_.program_.hidden);
-        if (attention.key && attention.value) {
-            linear(workspace_.normed_.data(), *attention.key, k,
-                   1, layout.key_value_width(), resources_.program_.hidden);
-            linear(workspace_.normed_.data(), *attention.value, v,
-                   1, layout.key_value_width(), resources_.program_.hidden);
-        }
-    }
 
     if (gate_packed) {
         launch_extract_attention_output_gate(
