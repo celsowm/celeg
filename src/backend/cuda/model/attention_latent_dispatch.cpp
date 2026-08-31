@@ -8,9 +8,10 @@ namespace celeg {
 namespace {
 
 LatentQueryView latent_query_view(CudaCompiledModel& model, const AttentionSpec& layout) {
+    const auto& latent = *layout.latent_state();
     return {
         .content = model.workspace_.latent_query_content_.data(),
-        .rope = layout.latent_query_rope_width() != 0
+        .rope = latent.factorized() || layout.latent_query_rope_width() != 0
             ? model.workspace_.latent_query_rope_.data() : nullptr};
 }
 
@@ -19,7 +20,9 @@ LatentGeometry latent_geometry(const AttentionSpec& layout) {
     return {
         .query_heads = layout.query_heads,
         .latent_rank = latent.latent_rank,
-        .rotary_width = latent.decoupled_rope ? latent.rope_head_dim : 0,
+        .rotary_width = latent.factorized()
+            ? latent.rope_head_dim
+            : (latent.decoupled_rope ? latent.rope_head_dim : 0),
         .score_scale = layout.query_scale,
         .sliding_window = layout.sliding_window_size()};
 }
@@ -31,18 +34,6 @@ LatentQueryView latent_prefill_query_view(
         .content = model.workspace_.prefill_latent_query_content_.data(),
         .rope = latent.factorized() || layout.latent_query_rope_width() != 0
             ? model.workspace_.prefill_latent_query_rope_.data() : nullptr};
-}
-
-LatentGeometry latent_prefill_geometry(const AttentionSpec& layout) {
-    const auto& latent = *layout.latent_state();
-    return {
-        .query_heads = layout.query_heads,
-        .latent_rank = latent.latent_rank,
-        .rotary_width = latent.factorized()
-            ? latent.rope_head_dim
-            : (latent.decoupled_rope ? latent.rope_head_dim : 0),
-        .score_scale = layout.query_scale,
-        .sliding_window = layout.sliding_window_size()};
 }
 
 } // namespace
@@ -96,7 +87,7 @@ void dispatch_cuda_latent_attention_prefill(
         .out = model.workspace_.prefill_op_output_.data(),
         .extent = {.rows = rows},
         .alibi_slopes = attention.alibi_slopes.data(),
-        .geometry = latent_prefill_geometry(layout),
+        .geometry = latent_geometry(layout),
         .stream = model.stream_.get()});
 }
 
