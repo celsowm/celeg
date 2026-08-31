@@ -19,6 +19,28 @@ __device__ __forceinline__ bool block_sparse_visible_paged(
     return token_block >= local_start && token_block <= query_block;
 }
 
+__device__ float block_sparse_paged_int8_dot(
+    const __nv_bfloat16* query, const int8_t* key_pool,
+    const float* key_scale_pool, uint32_t page, int attention_slot,
+    int in_page, int kv_head, int page_tokens, size_t page_vector_elements,
+    size_t layer_vector_offset, size_t page_scale_elements,
+    size_t layer_scale_offset, int kv_heads, int head_dim,
+    float* warp_sums, float* dot_total) {
+    const int lane = threadIdx.x;
+    const size_t scale_offset = paged_scale_offset(
+        page, attention_slot, in_page, kv_head, page_tokens,
+        page_scale_elements, layer_scale_offset, kv_heads);
+    float local = 0.0f;
+    for (int d = lane; d < head_dim; d += blockDim.x) {
+        const size_t offset = paged_vector_offset(
+            page, attention_slot, in_page, kv_head, d, page_tokens,
+            page_vector_elements, layer_vector_offset, kv_heads, head_dim);
+        local += bf16_float(query[d]) * static_cast<float>(key_pool[offset]) *
+                 key_scale_pool[scale_offset];
+    }
+    return block_sum(local, warp_sums, dot_total);
+}
+
 __global__ void gqa_decode_block_sparse_paged_kernel(
     const __nv_bfloat16* query, const __nv_bfloat16* key_pool,
     const __nv_bfloat16* value_pool, const uint32_t* page_tables,
@@ -141,21 +163,6 @@ __global__ void gqa_decode_block_sparse_int8_paged_kernel(
     __shared__ float denominator;
     __shared__ float probability;
 
-    const auto dot_for = [&](int token, uint32_t page, int in_page) {
-        const size_t scale_offset = paged_scale_offset(
-            page, attention_slot, in_page, kv_head, page_tokens,
-            page_scale_elements, layer_scale_offset, kv_heads);
-        float local = 0.0f;
-        for (int d = lane; d < head_dim; d += blockDim.x) {
-            const size_t offset = paged_vector_offset(
-                page, attention_slot, in_page, kv_head, d, page_tokens,
-                page_vector_elements, layer_vector_offset, kv_heads, head_dim);
-            local += bf16_float(q[d]) * static_cast<float>(key_pool[offset]) *
-                     key_scale_pool[scale_offset];
-        }
-        return block_sum(local, warp_sums, &dot_total);
-    };
-
     if (lane == 0) maximum = -FLT_MAX;
     __syncthreads();
     for (int token = 0; token <= query_row; ++token) {
@@ -164,7 +171,11 @@ __global__ void gqa_decode_block_sparse_int8_paged_kernel(
         const int in_page = token % page_tokens;
         const uint32_t page = page_tables[
             static_cast<size_t>(row) * page_table_stride + logical_page];
-        const float dot = dot_for(token, page, in_page);
+        const float dot = block_sparse_paged_int8_dot(
+            q, key_pool, key_scale_pool, page, attention_slot, in_page, kv_head,
+            page_tokens, page_vector_elements, layer_vector_offset,
+            page_scale_elements, layer_scale_offset, kv_heads, head_dim,
+            warp_sums, &dot_total);
         if (lane == 0) maximum = fmaxf(
             maximum, rounded_bf16_float(rounded_bf16_float(dot) * scale));
         __syncthreads();
@@ -177,7 +188,11 @@ __global__ void gqa_decode_block_sparse_int8_paged_kernel(
         const int in_page = token % page_tokens;
         const uint32_t page = page_tables[
             static_cast<size_t>(row) * page_table_stride + logical_page];
-        const float dot = dot_for(token, page, in_page);
+        const float dot = block_sparse_paged_int8_dot(
+            q, key_pool, key_scale_pool, page, attention_slot, in_page, kv_head,
+            page_tokens, page_vector_elements, layer_vector_offset,
+            page_scale_elements, layer_scale_offset, kv_heads, head_dim,
+            warp_sums, &dot_total);
         if (lane == 0) denominator += expf(
             rounded_bf16_float(rounded_bf16_float(dot) * scale) - maximum);
         __syncthreads();
@@ -189,7 +204,11 @@ __global__ void gqa_decode_block_sparse_int8_paged_kernel(
         const int in_page = token % page_tokens;
         const uint32_t page = page_tables[
             static_cast<size_t>(row) * page_table_stride + logical_page];
-        const float dot = dot_for(token, page, in_page);
+        const float dot = block_sparse_paged_int8_dot(
+            q, key_pool, key_scale_pool, page, attention_slot, in_page, kv_head,
+            page_tokens, page_vector_elements, layer_vector_offset,
+            page_scale_elements, layer_scale_offset, kv_heads, head_dim,
+            warp_sums, &dot_total);
         if (lane == 0) probability = rounded_bf16_float(expf(
             rounded_bf16_float(rounded_bf16_float(dot) * scale) - maximum) /
             denominator);
