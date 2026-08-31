@@ -20,6 +20,8 @@ void launch_gqa_decode_strict(const GqaContiguousArgs& args);
 void launch_gqa_decode_strict_device(const GqaContiguousArgs& args);
 void launch_gqa_decode_online(const GqaContiguousArgs& args);
 void launch_gqa_decode_online_device(const GqaContiguousArgs& args);
+void launch_gqa_decode_block_sparse_device(
+    const GqaContiguousArgs& args, GqaBlockSparsePattern pattern);
 void launch_gqa_prefill_strict(const GqaContiguousArgs& args);
 void launch_gqa_prefill_online(const GqaContiguousArgs& args);
 void launch_gqa_prefill_block_sparse(
@@ -35,6 +37,8 @@ void launch_gqa_decode_strict_int8(const GqaContiguousInt8Args& args);
 void launch_gqa_decode_online_int8(const GqaContiguousInt8Args& args);
 void launch_gqa_decode_strict_int8_device(const GqaContiguousInt8Args& args);
 void launch_gqa_decode_online_int8_device(const GqaContiguousInt8Args& args);
+void launch_gqa_decode_block_sparse_int8_device(
+    const GqaContiguousInt8Args& args, GqaBlockSparsePattern pattern);
 void launch_gqa_prefill_strict_int8(const GqaContiguousInt8Args& args);
 void launch_gqa_prefill_online_int8(const GqaContiguousInt8Args& args);
 void launch_gqa_prefill_block_sparse_int8(
