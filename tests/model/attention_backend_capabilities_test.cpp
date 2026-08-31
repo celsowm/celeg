@@ -39,6 +39,9 @@ int main() {
         attention.pattern = celeg::SlidingWindowPattern{128};
     }));
     CELEG_TEST_CHECK(metal_rejects([](auto& attention) {
+        attention.pattern = celeg::SlidingWindowPattern{0};
+    }));
+    CELEG_TEST_CHECK(metal_rejects([](auto& attention) {
         attention.pattern = celeg::BidirectionalPattern{};
     }));
     CELEG_TEST_CHECK(metal_rejects([](auto& attention) {
@@ -54,6 +57,9 @@ int main() {
         attention.key_value_source = celeg::ExternalMemorySource{0};
     }));
     CELEG_TEST_CHECK(metal_rejects([](auto& attention) {
+        attention.kv_sharing = celeg::SharedKvPublisher{1};
+    }));
+    CELEG_TEST_CHECK(metal_rejects([](auto& attention) {
         attention.bias = celeg::AlibiBiasSpec{{1.0f}};
     }));
     CELEG_TEST_CHECK(metal_rejects([](auto& attention) {
@@ -64,6 +70,16 @@ int main() {
     }));
     CELEG_TEST_CHECK(metal_rejects([](auto& attention) {
         attention.position = celeg::MultiAxisRopeSpec{};
+    }));
+    CELEG_TEST_CHECK(metal_rejects([](auto& attention) {
+        auto& ordinary = std::get<celeg::OrdinaryKvStateSpec>(attention.state);
+        ordinary.storage.key = celeg::StateScalarType::INT8;
+    }));
+    CELEG_TEST_CHECK(metal_rejects([](auto& attention) {
+        attention.output_gate = celeg::SigmoidAttentionGateSpec{};
+    }));
+    CELEG_TEST_CHECK(metal_rejects([](auto& attention) {
+        attention.output_transform = celeg::OrthogonalizeCurrentValueSpec{1.0e-6f};
     }));
 
     return 0;
