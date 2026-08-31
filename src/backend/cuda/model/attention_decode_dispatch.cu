@@ -4,6 +4,31 @@
 
 namespace celeg {
 
+CudaDecodeAttentionPolicy plan_cuda_decode_attention(
+    const AttentionSpec& layout,
+    KvCacheMode kv_format,
+    AttentionKvLayout kv_layout,
+    AttentionPositionSource position_source,
+    bool fast_attention,
+    bool segmented_attention,
+    bool has_alibi,
+    int owner_head_dim) {
+    const auto* block_sparse = std::get_if<BlockSparsePattern>(&layout.pattern);
+    AttentionRequest request;
+    request.kv_format = kv_format;
+    request.operation = AttentionOperation::Decode;
+    request.layout = kv_layout;
+    request.position_source = position_source;
+    request.bias = has_alibi
+        ? AttentionPositionBias::Alibi : AttentionPositionBias::None;
+    request.fast_attention = fast_attention && block_sparse == nullptr;
+    request.segmented_attention = segmented_attention && block_sparse == nullptr;
+    request.head_dim = owner_head_dim;
+    return {
+        .plan = require_attention_capability(request),
+        .block_sparse = block_sparse};
+}
+
 GqaGeometry make_cuda_gqa_geometry(
     const AttentionSpec& layout,
     const AttentionSpec& owner_layout) {
