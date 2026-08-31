@@ -1,9 +1,8 @@
 #pragma once
 
-namespace celeg {
+#include "detail/compiled_model.hpp"
 
-struct AttentionLayer;
-struct CudaCompiledModel;
+namespace celeg {
 
 void require_cuda_token_latent_attention_paged(
     const CudaCompiledModel& model, const AttentionLayer& attention);
