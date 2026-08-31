@@ -15,6 +15,10 @@ uint32_t attention_window_size(const CompiledAttentionProgram& attention) {
     return 0;
 }
 
+const AlibiBiasSpec* attention_alibi(const CompiledAttentionProgram& attention) {
+    return std::get_if<AlibiBiasSpec>(&attention.semantics.bias);
+}
+
 }
 
 void MetalModel::Impl::encode_attention(
@@ -50,21 +54,33 @@ void MetalModel::Impl::encode_attention(
     set_bytes(encoder, &page_tokens, sizeof(page_tokens), 15);
     dispatch(encoder, "celeg_qk_norm_rope_store_kv",
              std::max(query_heads, key_heads));
+
     const float attention_scale = 1.0f /
         std::sqrt(static_cast<float>(layer.head_dim));
+    const uint32_t sequence_length = position_value + 1;
+    const uint32_t window_size = attention_window_size(attention);
+    const AlibiBiasSpec* alibi = attention_alibi(attention);
     set_buffer(encoder, query_buffer, 0);
     set_buffer(encoder, layer.key_cache, 1);
     set_buffer(encoder, layer.value_cache, 2);
     set_buffer(encoder, operation, 3);
-    const uint32_t sequence_length = position_value + 1;
-    const uint32_t window_size = attention_window_size(attention);
     set_bytes(encoder, &sequence_length, sizeof(sequence_length), 4);
     set_bytes(encoder, &query_heads, sizeof(query_heads), 5);
     set_bytes(encoder, &key_heads, sizeof(key_heads), 6);
     set_bytes(encoder, &head_dim, sizeof(head_dim), 7);
     set_bytes(encoder, &attention_scale, sizeof(attention_scale), 8);
     set_bytes(encoder, &page_tokens, sizeof(page_tokens), 9);
-    if (window_size > 0) {
+    if (alibi) {
+        set_bytes(encoder, &window_size, sizeof(window_size), 10);
+        set_bytes(encoder, alibi->slopes.data(),
+                  alibi->slopes.size() * sizeof(float), 11);
+        if (sequence_length <= 1024) {
+            dispatch_cooperative(encoder, "celeg_attention_alibi_cooperative",
+                                 query_heads);
+        } else {
+            dispatch(encoder, "celeg_attention_alibi", query_heads * head_dim);
+        }
+    } else if (window_size > 0) {
         set_bytes(encoder, &window_size, sizeof(window_size), 10);
         if (sequence_length <= 1024) {
             dispatch_cooperative(
@@ -125,6 +141,7 @@ void MetalModel::Impl::encode_attention_batch(
     const float attention_scale = 1.0f /
         std::sqrt(static_cast<float>(layer.head_dim));
     const uint32_t window_size = attention_window_size(attention);
+    const AlibiBiasSpec* alibi = attention_alibi(attention);
     set_buffer(encoder, batch_query, 0);
     set_buffer(encoder, layer.key_cache, 1);
     set_buffer(encoder, layer.value_cache, 2);
@@ -136,7 +153,22 @@ void MetalModel::Impl::encode_attention_batch(
     set_bytes(encoder, &head_dim, sizeof(head_dim), 8);
     set_bytes(encoder, &attention_scale, sizeof(attention_scale), 9);
     set_bytes(encoder, &page_tokens, sizeof(page_tokens), 10);
-    if (window_size > 0) {
+    if (alibi) {
+        set_bytes(encoder, &window_size, sizeof(window_size), 11);
+        set_bytes(encoder, alibi->slopes.data(),
+                  alibi->slopes.size() * sizeof(float), 12);
+        if (base_position + rows <= 1024) {
+            id<MTLComputePipelineState> state =
+                pipeline("celeg_attention_batch_alibi_cooperative");
+            [encoder setComputePipelineState:state];
+            [encoder dispatchThreadgroups:MTLSizeMake(query_heads, rows, 1)
+               threadsPerThreadgroup:MTLSizeMake(32, 1, 1)];
+            ++command_dispatches;
+        } else {
+            dispatch(encoder, "celeg_attention_batch_alibi",
+                     static_cast<NSUInteger>(rows) * query_heads * head_dim);
+        }
+    } else if (window_size > 0) {
         set_bytes(encoder, &window_size, sizeof(window_size), 11);
         if (base_position + rows <= 1024) {
             id<MTLComputePipelineState> state =
