@@ -1,5 +1,6 @@
 #include "operators/attention.hpp"
 #include "celeg/backend/cpu/kernels.hpp"
+#include "celeg/backend/cpu/paged_kv.hpp"
 #include "support/assertions.hpp"
 
 #include <array>
@@ -72,6 +73,51 @@ void test_adjacent_pair_rope() {
     CELEG_TEST_CHECK(close(values[3], 4.0f * c1 + 3.0f * s1));
 }
 
+void test_bidirectional_pattern_reads_future_keys() {
+    celeg::CpuAttentionPattern pattern;
+    pattern.storage = celeg::BidirectionalPattern{};
+
+    CELEG_TEST_CHECK(pattern.allows(0, 0));
+    CELEG_TEST_CHECK(pattern.allows(0, 1));
+    CELEG_TEST_CHECK(pattern.allows(1, 0));
+    CELEG_TEST_CHECK(pattern.allows(2, 7));
+    CELEG_TEST_CHECK(pattern.first_candidate(3) == 0);
+    CELEG_TEST_CHECK(pattern.may_read_future(0, 8));
+    CELEG_TEST_CHECK(pattern.may_read_future(7, 8));
+}
+
+void test_prefix_lm_pattern_boundaries() {
+    celeg::CpuAttentionPattern pattern;
+    pattern.storage = celeg::PrefixLmPattern{4};
+
+    // Queries inside the prefix can attend anywhere inside the prefix, including
+    // future prefix tokens, but cannot see tokens after the prefix.
+    CELEG_TEST_CHECK(pattern.allows(0, 0));
+    CELEG_TEST_CHECK(pattern.allows(0, 3));
+    CELEG_TEST_CHECK(!pattern.allows(0, 4));
+    CELEG_TEST_CHECK(pattern.allows(2, 3));
+    CELEG_TEST_CHECK(!pattern.allows(2, 5));
+
+    // The first query after the prefix transitions to ordinary causal semantics.
+    CELEG_TEST_CHECK(pattern.allows(4, 0));
+    CELEG_TEST_CHECK(pattern.allows(4, 4));
+    CELEG_TEST_CHECK(!pattern.allows(4, 5));
+    CELEG_TEST_CHECK(pattern.allows(7, 6));
+    CELEG_TEST_CHECK(!pattern.allows(7, 8));
+
+    CELEG_TEST_CHECK(pattern.first_candidate(0) == 0);
+    CELEG_TEST_CHECK(pattern.first_candidate(7) == 0);
+    CELEG_TEST_CHECK(pattern.may_read_future(0, 8));
+    CELEG_TEST_CHECK(pattern.may_read_future(3, 8));
+    CELEG_TEST_CHECK(!pattern.may_read_future(4, 8));
+
+    // A prefix covering the complete sequence has no out-of-prefix future region.
+    celeg::CpuAttentionPattern full_prefix;
+    full_prefix.storage = celeg::PrefixLmPattern{8};
+    CELEG_TEST_CHECK(!full_prefix.may_read_future(0, 8));
+    CELEG_TEST_CHECK(full_prefix.allows(0, 7));
+}
+
 // The attention kernels fold 1/sqrt(head_dim) into the scores themselves, so
 // apply_cpu_attention_qk must premultiply the query by query_scale/(1/sqrt(head_dim))
 // on every path. The query-key-norm path used to apply query_scale directly,
@@ -131,6 +177,8 @@ void test_query_key_norm_uses_same_query_scale() {
 int main() {
     test_current_value_orthogonalization();
     test_adjacent_pair_rope();
+    test_bidirectional_pattern_reads_future_keys();
+    test_prefix_lm_pattern_boundaries();
     test_query_key_norm_uses_same_query_scale();
     return 0;
 }
