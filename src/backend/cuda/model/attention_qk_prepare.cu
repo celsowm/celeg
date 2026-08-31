@@ -92,4 +92,51 @@ void prepare_cuda_attention_qk(const CudaAttentionQkPreparation& preparation) {
         preparation.stream);
 }
 
+void prepare_cuda_latent_attention_qk(
+    const CudaLatentQkPreparation& preparation) {
+    if (!preparation.layout || !preparation.query_rope) {
+        throw std::logic_error("CUDA latent QK preparation is incomplete");
+    }
+
+    const AttentionSpec& layout = *preparation.layout;
+    const auto& latent = *layout.latent_state();
+    const auto* rope = layout.rope_position();
+    if (!rope || !preparation.key_rope || !latent.decoupled_rope ||
+        latent.rope_head_dim == 0) {
+        return;
+    }
+
+    const float norm_epsilon = layout.query_norm
+        ? layout.query_norm->epsilon
+        : preparation.fallback_norm_epsilon;
+
+    switch (preparation.position_mode) {
+    case CudaQkPositionMode::HostScalar:
+        launch_dynamic_qk_norm_rope(
+            preparation.query_rope, preparation.key_rope,
+            nullptr, nullptr, layout.query_heads, 1, latent.rope_head_dim,
+            preparation.host_position, static_cast<float>(rope->theta), 1.0f,
+            norm_epsilon, false, lower_cuda_rope_scaling(*rope), rope->pairing,
+            preparation.stream);
+        return;
+
+    case CudaQkPositionMode::DeviceScalar:
+        if (!preparation.device_position) {
+            throw std::logic_error("CUDA latent device-position attention has no position");
+        }
+        launch_dynamic_qk_norm_rope_device(
+            preparation.query_rope, preparation.key_rope,
+            nullptr, nullptr, layout.query_heads, 1, latent.rope_head_dim,
+            preparation.device_position, static_cast<float>(rope->theta), 1.0f,
+            norm_epsilon, false, lower_cuda_rope_scaling(*rope), rope->pairing,
+            preparation.stream);
+        return;
+
+    case CudaQkPositionMode::MultiAxisDevice:
+        throw std::invalid_argument("CUDA latent attention does not support M-RoPE yet");
+    }
+
+    throw std::logic_error("unknown CUDA latent QK position mode");
+}
+
 }
