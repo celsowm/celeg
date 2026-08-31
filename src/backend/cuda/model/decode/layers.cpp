@@ -75,7 +75,27 @@ void CudaCompiledModel::run_token_mixer(Layer& layer,
                                         int layer_index, const TokenKvPolicy& kv) {
     visit_layer(layer,
       [&](AttentionLayer* attention) {
-        run_token_attention(*attention, semantics, layer_index, kv);
+        const auto* compiled_attention =
+            std::get_if<CompiledAttentionProgram>(&semantics.mixer);
+        if (!compiled_attention) {
+            throw std::logic_error("CUDA token attention has no compiled attention program");
+        }
+        switch (compiled_attention->execution.kind) {
+        case AttentionExecutionKind::Standard:
+            run_token_attention(*attention, semantics, layer_index, kv);
+            return;
+        case AttentionExecutionKind::Latent:
+            if (!kv.paged()) {
+                throw std::invalid_argument(
+                    "CUDA latent attention is not implemented for contiguous host token execution");
+            }
+            run_token_latent_attention_paged(*attention, semantics, layer_index, kv);
+            return;
+        case AttentionExecutionKind::FactorizedLatent:
+            throw std::invalid_argument(
+                "CUDA factorized latent attention is not implemented for host token execution");
+        }
+        throw std::logic_error("unknown compiled CUDA token attention execution kind");
       },
       [&](GatedDeltaNetLayer* gated_delta) {
         run_token_gated_delta(*gated_delta, semantics);
