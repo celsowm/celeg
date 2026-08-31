@@ -179,6 +179,9 @@ struct CudaCompiledModel {
     CudaQkvProjectionView project_standard_attention_qkv(AttentionLayer& attention);
     void project_standard_attention_output(
         AttentionLayer& attention, const CompiledLayerProgram& semantics);
+    void store_standard_attention_kv_contiguous(
+        AttentionLayer& attention, AttentionLayer& owner,
+        const AttentionCapability& plan, __nv_bfloat16* k, __nv_bfloat16* v);
     void run_token_attention(AttentionLayer& attention, LayerCommon& common_layer,
                              const CompiledLayerProgram& semantics, int layer_index,
                              const TokenKvPolicy& kv);
