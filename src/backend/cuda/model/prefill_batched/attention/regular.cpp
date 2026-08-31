@@ -4,25 +4,12 @@
 
 namespace celeg::prefill_detail {
 
-void require_regular_attention_bindings(const AttentionLayer& attention) {
-    if (!attention.query || !attention.out) {
-        throw std::logic_error(
-            "CUDA prefill attention has incomplete query/output bindings");
-    }
-    if ((attention.key == nullptr) != (attention.value == nullptr)) {
-        throw std::logic_error(
-            "CUDA prefill attention must bind key/value together");
-    }
-}
-
 void run_regular_attention(
     CudaCompiledModel& model,
     AttentionLayer& attention,
     AttentionLayer& owner,
     const CompiledLayerProgram& semantics,
     int rows) {
-    require_regular_attention_bindings(attention);
-
     auto& prof = prefill_phase_profile();
     const AttentionSpec& layout = attention.layout;
     const AttentionSpec& owner_layout = owner.layout;
