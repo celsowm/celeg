@@ -20,7 +20,7 @@ void CudaCompiledModel::enqueue_decode_attention(
         enqueue_decode_latent_attention(layer, layer_index);
         return;
     case AttentionExecutionKind::FactorizedLatent:
-        enqueue_decode_factorized_latent_attention(layer, common_layer, layer_index);
+        enqueue_decode_factorized_latent_attention(layer, layer_index);
         return;
     }
     throw std::logic_error("unknown compiled CUDA attention execution kind");
