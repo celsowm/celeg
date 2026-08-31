@@ -1,6 +1,8 @@
 #include "packed/commit.hpp"
 #include "support/assertions.hpp"
 
+#include <cuda_runtime_api.h>
+
 #include <iostream>
 #include <stdexcept>
 #include <vector>
@@ -29,10 +31,26 @@ celeg::PackedSessionContext make_session(
     return session;
 }
 
+bool cuda_runtime_available() {
+    int device_count = 0;
+    const cudaError_t status = cudaGetDeviceCount(&device_count);
+    if (status == cudaSuccess) return device_count > 0;
+    if (status == cudaErrorInsufficientDriver || status == cudaErrorNoDevice) {
+        cudaGetLastError();
+        return false;
+    }
+    throw std::runtime_error(cudaGetErrorString(status));
+}
+
 }
 
 int main() {
     try {
+        if (!cuda_runtime_available()) {
+            std::cout << "packed_commit_test: skipped (CUDA runtime unavailable)\n";
+            return 0;
+        }
+
         celeg::SessionState identity;
         celeg::SessionPhase phase = celeg::SessionPhase::Ready;
         int position = 4;
