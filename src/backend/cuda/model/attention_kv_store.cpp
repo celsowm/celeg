@@ -21,6 +21,17 @@ const __nv_bfloat16* latent_key_rope_for_store(
         ? model.workspace_.latent_key_rope_.data() : nullptr;
 }
 
+bool latent_prefill_writes_kv(const AttentionLayer& attention) {
+    const auto& latent = *attention.layout.latent_state();
+    return latent.factorized() ||
+        (attention.latent_key && attention.latent_value);
+}
+
+int latent_prefill_rotary_width(const AttentionLayer& attention) {
+    const auto& latent = *attention.layout.latent_state();
+    return latent.factorized() ? latent.rope_head_dim : latent_rotary_width(attention);
+}
+
 } // namespace
 
 void CudaCompiledModel::store_standard_attention_kv_contiguous(
@@ -120,6 +131,23 @@ void store_cuda_latent_kv_paged(
         page_table_stride, model.position_device_.data(), 1, slot,
         paged_kv.page_tokens(), paged_kv.page_vector_elements(),
         paged_kv.layer_vector_offset(slot), latent.latent_rank,
+        rotary_width, model.stream_.get());
+}
+
+void store_cuda_latent_kv_prefill(
+    CudaCompiledModel& model, AttentionLayer& attention,
+    AttentionLayer& owner, int rows) {
+    if (!latent_prefill_writes_kv(attention)) return;
+
+    const auto& latent = *attention.layout.latent_state();
+    const int rotary_width = latent_prefill_rotary_width(attention);
+    launch_store_latent_prefill(
+        model.workspace_.prefill_latent_key_.data(),
+        model.workspace_.prefill_latent_value_.data(),
+        rotary_width != 0
+            ? model.workspace_.prefill_latent_key_rope_.data() : nullptr,
+        owner.latent_key_cache_ptr(), owner.latent_value_cache_ptr(),
+        owner.latent_key_rope_cache_ptr(), rows, latent.latent_rank,
         rotary_width, model.stream_.get());
 }
 
