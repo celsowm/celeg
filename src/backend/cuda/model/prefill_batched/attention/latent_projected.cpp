@@ -19,14 +19,17 @@ void run_projected_latent_attention(
     prof.end(PrefillPhase::QkvProj, model.stream_.get());
 
     prof.begin(model.stream_.get());
-    prepare_cuda_prefill_latent_attention_qk({
-        .layout = &layout,
-        .query_rope = workspace.prefill_latent_query_rope_.data(),
-        .key_rope = attention.latent_key
-            ? workspace.prefill_latent_key_rope_.data() : nullptr,
-        .norm_epsilon = model.resources_.program_.final_norm.epsilon,
-        .rows = rows,
-        .stream = model.stream_.get()});
+    if (layout.rope_position() && attention.latent_key_rope &&
+        latent.decoupled_rope && latent.rope_head_dim != 0) {
+        prepare_cuda_prefill_latent_attention_qk({
+            .layout = &layout,
+            .query_rope = workspace.prefill_latent_query_rope_.data(),
+            .key_rope = attention.latent_key
+                ? workspace.prefill_latent_key_rope_.data() : nullptr,
+            .norm_epsilon = model.resources_.program_.final_norm.epsilon,
+            .rows = rows,
+            .stream = model.stream_.get()});
+    }
     prof.end(PrefillPhase::RopeKv, model.stream_.get());
 
     prof.begin(model.stream_.get());
