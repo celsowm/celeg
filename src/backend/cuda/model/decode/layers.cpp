@@ -48,7 +48,7 @@ void CudaCompiledModel::run_token_layer(Layer& layer, int layer_index,
                                   stream_.get()));
     }
 
-    run_token_mixer(layer, common_layer, semantics, layer_index, kv);
+    run_token_mixer(layer, semantics, layer_index, kv);
 
     if (mixer_after) {
         launch_rmsnorm(workspace_.hidden_.data(), common_layer.mixer_norm_after,
@@ -70,12 +70,12 @@ void CudaCompiledModel::run_token_layer(Layer& layer, int layer_index,
     }
 }
 
-void CudaCompiledModel::run_token_mixer(Layer& layer, LayerCommon& common_layer,
+void CudaCompiledModel::run_token_mixer(Layer& layer,
                                         const CompiledLayerProgram& semantics,
                                         int layer_index, const TokenKvPolicy& kv) {
     visit_layer(layer,
       [&](AttentionLayer* attention) {
-        run_token_attention(*attention, common_layer, semantics, layer_index, kv);
+        run_token_attention(*attention, semantics, layer_index, kv);
       },
       [&](GatedDeltaNetLayer* gated_delta) {
         run_token_gated_delta(*gated_delta, semantics);
