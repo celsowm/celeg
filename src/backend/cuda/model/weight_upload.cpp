@@ -155,6 +155,10 @@ const LinearWeight* WeightLoader::load_router_weight_named(
                 static_cast<int64_t>(hidden)}) {
             throw std::runtime_error("cached router shape mismatch for " + name);
         }
+        const auto* bf16 = std::get_if<Bf16LinearStorage>(&cached->second.linear.storage);
+        if (!bf16 || !bf16->data) {
+            throw std::runtime_error("cached router is not backed by BF16 storage: " + name);
+        }
         return &cached->second.linear;
     }
     const __nv_bfloat16* bf16 = load_weight(repo, name,
