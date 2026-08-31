@@ -45,6 +45,16 @@ int main() {
         attention.pattern = celeg::SlidingWindowPattern{128};
         attention.bias = celeg::AlibiBiasSpec{{1.0f}};
     }));
+    CELEG_TEST_CHECK(!metal_rejects([](auto& attention) {
+        attention.bias = celeg::RelativePositionBiasSpec{32, 128, false};
+    }));
+    CELEG_TEST_CHECK(!metal_rejects([](auto& attention) {
+        attention.pattern = celeg::SlidingWindowPattern{128};
+        attention.bias = celeg::RelativePositionBiasSpec{32, 128, false};
+    }));
+    CELEG_TEST_CHECK(!metal_rejects([](auto& attention) {
+        attention.bias = celeg::RelativePositionBiasSpec{32, 128, true};
+    }));
     CELEG_TEST_CHECK(metal_rejects([](auto& attention) {
         attention.pattern = celeg::SlidingWindowPattern{0};
     }));
@@ -65,9 +75,6 @@ int main() {
     }));
     CELEG_TEST_CHECK(metal_rejects([](auto& attention) {
         attention.kv_sharing = celeg::SharedKvPublisher{1};
-    }));
-    CELEG_TEST_CHECK(metal_rejects([](auto& attention) {
-        attention.bias = celeg::RelativePositionBiasSpec{32, 128, false};
     }));
     CELEG_TEST_CHECK(metal_rejects([](auto& attention) {
         attention.position = celeg::NoPositionEncodingSpec{};
