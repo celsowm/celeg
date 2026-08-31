@@ -1,3 +1,4 @@
+#include "../../attention_projection.hpp"
 #include "backend/cuda/attention_norm.hpp"
 
 namespace celeg::prefill_detail {
@@ -116,16 +117,8 @@ void run_regular_attention(
     }
 
     prof.begin(model.stream_.get());
-    const bool fuse_residual = model.resources_.options().fused_residuals &&
-        !semantics.mixer_norm.after.has_value() &&
-        !std::holds_alternative<std::monostate>(semantics.feed_forward);
-    model.linear(
-        workspace.prefill_op_output_.data(), *attention.out,
-        workspace.prefill_hidden_.data(), rows, hidden, layout.query_width(),
-        fuse_residual ? 1.0f : 0.0f);
-    launch_scale(
-        workspace.prefill_hidden_.data(), rows * hidden,
-        semantics.residual.multiplier, model.stream_.get());
+    project_cuda_prefill_standard_attention_output(
+        model, attention, semantics, rows);
     prof.end(PrefillPhase::AttnOut, model.stream_.get());
 }
 
