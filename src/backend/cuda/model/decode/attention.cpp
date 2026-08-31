@@ -181,14 +181,7 @@ void CudaCompiledModel::run_token_latent_attention_paged(
                      .score_scale = layout.query_scale,
                      .sliding_window = layout.sliding_window_size()},
         .stream = stream_.get()});
-    const bool fuse_residual = resources_.options().fused_residuals &&
-        !semantics.mixer_norm.after.has_value() &&
-        !std::holds_alternative<std::monostate>(semantics.feed_forward);
-    linear(workspace_.op_output_.data(), *attention.out,
-           workspace_.hidden_.data(), 1, resources_.program_.hidden,
-           layout.latent_query_content_width(), fuse_residual ? 1.0f : 0.0f);
-    launch_scale(workspace_.hidden_.data(), resources_.program_.hidden,
-                 semantics.residual.multiplier, stream_.get());
+    project_latent_attention_output(attention, semantics);
 }
 
 void CudaCompiledModel::run_token_attention(
