@@ -6,7 +6,6 @@ void run_latent_attention(
     CudaCompiledModel& model,
     AttentionLayer& attention,
     AttentionLayer& owner,
-    LayerCommon& common_layer,
     const CompiledLayerProgram& semantics,
     int rows) {
     const AttentionSpec& layout = attention.layout;
@@ -18,7 +17,7 @@ void run_latent_attention(
     switch (latent_prefill_path(layout)) {
     case LatentPrefillPath::Factorized:
         run_factorized_latent_attention(
-            model, attention, owner, common_layer, semantics, rows);
+            model, attention, owner, semantics, rows);
         return;
     case LatentPrefillPath::Projected:
         if (layout.output_gate.has_value() || layout.multi_axis_position()) {
@@ -26,7 +25,7 @@ void run_latent_attention(
                 "CUDA projected latent attention does not support query gates or M-RoPE yet");
         }
         run_projected_latent_attention(
-            model, attention, owner, common_layer, semantics, rows);
+            model, attention, owner, semantics, rows);
         return;
     }
 
