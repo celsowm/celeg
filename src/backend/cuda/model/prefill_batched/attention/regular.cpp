@@ -24,7 +24,6 @@ void run_regular_attention(
     CudaCompiledModel& model,
     AttentionLayer& attention,
     AttentionLayer& owner,
-    LayerCommon& common_layer,
     const CompiledLayerProgram& semantics,
     int rows) {
     require_regular_attention_bindings(attention);
