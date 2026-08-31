@@ -1,6 +1,5 @@
 #include "detail/compiled_model.hpp"
 #include "attention_contiguous_dispatch.hpp"
-#include "attention_decode_dispatch.hpp"
 #include "attention_kv_store.hpp"
 #include "attention_latent_dispatch.hpp"
 #include "attention_layer_support.hpp"
@@ -9,25 +8,10 @@
 #include "attention_qk_prepare.hpp"
 #include "attention_token_qk.hpp"
 #include "backend/cuda/paged_kv.hpp"
-#include "backend/cuda/moe.hpp"
 
 #include <stdexcept>
 
 namespace celeg {
-
-AttentionCapability CudaCompiledModel::token_attention_plan(
-    AttentionLayer& attention, const AttentionSpec& owner_layout,
-    const TokenKvPolicy& kv) {
-    return plan_cuda_decode_attention(
-        attention.layout,
-        resources_.options().kv_cache_mode,
-        kv.kv_layout,
-        kv.position_source,
-        resources_.options().fast_attention,
-        kv.paged() && use_segmented_attention(session_.position_),
-        attention.alibi_slopes.data() != nullptr,
-        owner_layout.head_dim).plan;
-}
 
 void CudaCompiledModel::store_and_attend_token_contiguous(
     AttentionLayer& attention, AttentionLayer& owner, const AttentionCapability& plan,
