@@ -1,5 +1,6 @@
 #include "attention_weight_setup.hpp"
 
+#include "attention_state_setup.hpp"
 #include "detail/compiled_model.hpp"
 #include "backend/cuda/weight_setup_support.hpp"
 
@@ -253,32 +254,10 @@ bool bind_cuda_attention_layer(CudaCompiledModel& model,
         }
     }
 
-    if (resources.options().kv_cache_mode == KvCacheMode::Int8) {
-        attention_layer.state = OrdinaryInt8KvState{};
-    } else {
-        attention_layer.state = OrdinaryBf16KvState{};
-    }
-    if (resources.options().allocate_local_kv_cache && attention_layer.key) {
-        const size_t cache_elements =
-            static_cast<size_t>(model.max_context_) *
-            static_cast<size_t>(layout.key_value_width());
-        if (resources.options().kv_cache_mode == KvCacheMode::Int8) {
-            auto& ordinary_state =
-                std::get<OrdinaryInt8KvState>(attention_layer.state);
-            ordinary_state.key_cache.reset(cache_elements);
-            ordinary_state.value_cache.reset(cache_elements);
-            const size_t scale_elements =
-                static_cast<size_t>(model.max_context_) *
-                static_cast<size_t>(layout.key_value_heads);
-            ordinary_state.key_scales.reset(scale_elements);
-            ordinary_state.value_scales.reset(scale_elements);
-        } else {
-            auto& ordinary_state =
-                std::get<OrdinaryBf16KvState>(attention_layer.state);
-            ordinary_state.key_cache.reset(cache_elements);
-            ordinary_state.value_cache.reset(cache_elements);
-        }
-    }
+    initialize_cuda_ordinary_attention_state(
+        attention_layer, layout, resources.options().kv_cache_mode,
+        model.max_context_,
+        resources.options().allocate_local_kv_cache && attention_layer.key);
     if (kv_sharing_publishes(layout.kv_sharing)) {
         shared_owner[static_cast<size_t>(kv_sharing_group(layout.kv_sharing))] =
             layer_index;
