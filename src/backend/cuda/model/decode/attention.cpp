@@ -1,6 +1,7 @@
 #include "detail/compiled_model.hpp"
 #include "attention_decode_dispatch.hpp"
 #include "attention_kv_store.hpp"
+#include "attention_latent_dispatch.hpp"
 #include "attention_layer_support.hpp"
 #include "attention_projection.hpp"
 #include "attention_qk_prepare.hpp"
@@ -110,7 +111,6 @@ void CudaCompiledModel::run_token_latent_attention_paged(
         throw std::invalid_argument(
             "CUDA latent attention does not support query gates or M-RoPE yet");
     }
-    const auto& latent = *layout.latent_state();
     project_cuda_latent_attention_qkv(*this, attention);
     prepare_cuda_latent_attention_qk({
         .layout = &layout,
@@ -124,31 +124,12 @@ void CudaCompiledModel::run_token_latent_attention_paged(
     const CudaAttentionOwner resolved_owner = resolve_cuda_attention_owner(
         attention, layer_index, resources_.layers_);
     const int slot = paged_kv.attention_slot(resolved_owner.model_layer);
-    if (slot < 0) throw std::logic_error("latent attention has no page slot");
     store_cuda_latent_kv_paged(
         *this, attention, paged_kv, slot,
         kv.device_page_table, kv.page_table_stride);
-    launch_latent_attention_paged_batch({
-        .query = {.content = workspace_.latent_query_content_.data(),
-                  .rope = layout.latent_query_rope_width() != 0
-                              ? workspace_.latent_query_rope_.data() : nullptr},
-        .kv = {.keys = paged_kv.key_bf16(), .values = paged_kv.value_bf16()},
-        .index = {.page_tables = kv.device_page_table,
-                  .page_table_stride = kv.page_table_stride,
-                  .attention_slot = slot,
-                  .page_tokens = paged_kv.page_tokens(),
-                  .page_vector_elements = paged_kv.page_vector_elements(),
-                  .layer_vector_offset = paged_kv.layer_vector_offset(slot)},
-        .out = workspace_.op_output_.data(),
-        .positions = position_device_.data(),
-        .rows = 1,
-        .alibi_slopes = attention.alibi_slopes.data(),
-        .geometry = {.query_heads = layout.query_heads,
-                     .latent_rank = latent.latent_rank,
-                     .rotary_width = latent.decoupled_rope ? latent.rope_head_dim : 0,
-                     .score_scale = layout.query_scale,
-                     .sliding_window = layout.sliding_window_size()},
-        .stream = stream_.get()});
+    dispatch_cuda_latent_attention_paged(
+        *this, attention, paged_kv, slot,
+        kv.device_page_table, kv.page_table_stride);
     project_latent_attention_output(attention, semantics);
 }
 
