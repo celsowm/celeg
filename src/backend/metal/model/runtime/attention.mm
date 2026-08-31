@@ -24,6 +24,11 @@ const AlibiBiasSpec* attention_alibi(const CompiledAttentionProgram& attention) 
 void MetalModel::Impl::encode_attention(
     id<MTLComputeCommandEncoder> encoder, Layer& layer,
     const CompiledAttentionProgram& attention) {
+    const AlibiBiasSpec* alibi = attention_alibi(attention);
+    if (alibi && !layer.alibi_slopes) {
+        layer.alibi_slopes = buffer(alibi->slopes);
+    }
+
     encode_matvec(encoder, layer.query, normed, query_buffer);
     encode_matvec(encoder, layer.key, normed, key_buffer);
     encode_matvec(encoder, layer.value, normed, value_buffer);
@@ -59,7 +64,6 @@ void MetalModel::Impl::encode_attention(
         std::sqrt(static_cast<float>(layer.head_dim));
     const uint32_t sequence_length = position_value + 1;
     const uint32_t window_size = attention_window_size(attention);
-    const AlibiBiasSpec* alibi = attention_alibi(attention);
     set_buffer(encoder, query_buffer, 0);
     set_buffer(encoder, layer.key_cache, 1);
     set_buffer(encoder, layer.value_cache, 2);
@@ -72,8 +76,7 @@ void MetalModel::Impl::encode_attention(
     set_bytes(encoder, &page_tokens, sizeof(page_tokens), 9);
     if (alibi) {
         set_bytes(encoder, &window_size, sizeof(window_size), 10);
-        set_bytes(encoder, alibi->slopes.data(),
-                  alibi->slopes.size() * sizeof(float), 11);
+        set_buffer(encoder, layer.alibi_slopes, 11);
         if (sequence_length <= 1024) {
             dispatch_cooperative(encoder, "celeg_attention_alibi_cooperative",
                                  query_heads);
@@ -100,6 +103,11 @@ void MetalModel::Impl::encode_attention_batch(
     id<MTLComputeCommandEncoder> encoder, Layer& layer,
     const CompiledAttentionProgram& attention, uint32_t rows,
     uint32_t base_position) {
+    const AlibiBiasSpec* alibi = attention_alibi(attention);
+    if (alibi && !layer.alibi_slopes) {
+        layer.alibi_slopes = buffer(alibi->slopes);
+    }
+
     encode_matmul(encoder, layer.query, batch_normed, batch_query, rows);
     encode_matmul(encoder, layer.key, batch_normed, batch_key, rows);
     encode_matmul(encoder, layer.value, batch_normed, batch_value, rows);
@@ -141,7 +149,6 @@ void MetalModel::Impl::encode_attention_batch(
     const float attention_scale = 1.0f /
         std::sqrt(static_cast<float>(layer.head_dim));
     const uint32_t window_size = attention_window_size(attention);
-    const AlibiBiasSpec* alibi = attention_alibi(attention);
     set_buffer(encoder, batch_query, 0);
     set_buffer(encoder, layer.key_cache, 1);
     set_buffer(encoder, layer.value_cache, 2);
@@ -155,8 +162,7 @@ void MetalModel::Impl::encode_attention_batch(
     set_bytes(encoder, &page_tokens, sizeof(page_tokens), 10);
     if (alibi) {
         set_bytes(encoder, &window_size, sizeof(window_size), 11);
-        set_bytes(encoder, alibi->slopes.data(),
-                  alibi->slopes.size() * sizeof(float), 12);
+        set_buffer(encoder, layer.alibi_slopes, 12);
         if (base_position + rows <= 1024) {
             id<MTLComputePipelineState> state =
                 pipeline("celeg_attention_batch_alibi_cooperative");
