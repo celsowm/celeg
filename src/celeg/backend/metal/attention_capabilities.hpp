@@ -2,6 +2,7 @@
 
 #include "celeg/backend/attention_capabilities.hpp"
 
+#include <cmath>
 #include <stdexcept>
 
 namespace celeg {
@@ -54,6 +55,16 @@ inline void validate_metal_attention_capabilities(
             ordinary.storage.value != StateScalarType::BF16) {
             throw std::invalid_argument(
                 "Metal attention currently supports BF16 KV state only");
+        }
+        if (const RopePositionSpec* rope = attention.rope_position()) {
+            if (std::abs(rope->rotary_fraction - 1.0) > 1.0e-12) {
+                throw std::invalid_argument(
+                    "Metal attention currently requires full-width RoPE");
+            }
+            if (!std::holds_alternative<NoRopeScaling>(rope->scaling)) {
+                throw std::invalid_argument(
+                    "Metal attention currently does not support RoPE scaling");
+            }
         }
         if (attention.output_gate.has_value()) {
             throw std::invalid_argument(
