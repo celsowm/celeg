@@ -20,7 +20,7 @@ inline constexpr AttentionBackendCapabilities metal_attention_capabilities() {
         .relative_position_bias = true,
         .no_position = false,
         .rope = true,
-        .multi_axis_rope = false,
+        .multi_axis_rope = true,
         .standard_execution = true,
         .latent_execution = false,
         .factorized_latent_execution = false,
@@ -64,6 +64,18 @@ inline void validate_metal_attention_capabilities(
             if (!std::holds_alternative<NoRopeScaling>(rope->scaling)) {
                 throw std::invalid_argument(
                     "Metal attention currently does not support RoPE scaling");
+            }
+        }
+        if (const MultiAxisRopeSpec* multi = attention.multi_axis_position()) {
+            if (!multi->interleaved || multi->axes != 3 ||
+                multi->base.pairing != RopePairingKind::SplitHalf) {
+                throw std::invalid_argument(
+                    "Metal M-RoPE requires three interleaved axes with split-half pairing");
+            }
+            const int pairs = attention.head_dim / 2;
+            if (multi->sections[0] + multi->sections[1] + multi->sections[2] != pairs) {
+                throw std::invalid_argument(
+                    "Metal M-RoPE sections do not match the rotary dimension");
             }
         }
         if (attention.output_gate.has_value()) {
