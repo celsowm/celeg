@@ -31,6 +31,17 @@ bool metal_rejects(Mutator mutate) {
     return false;
 }
 
+celeg::MultiAxisRopeSpec valid_mrope() {
+    celeg::MultiAxisRopeSpec multi;
+    multi.base.theta = 10000.0;
+    multi.base.rotary_fraction = 1.0;
+    multi.base.pairing = celeg::RopePairingKind::SplitHalf;
+    multi.sections = {2, 1, 1};
+    multi.interleaved = true;
+    multi.axes = 3;
+    return multi;
+}
+
 }
 
 int main() {
@@ -42,6 +53,19 @@ int main() {
     CELEG_TEST_CHECK(!metal_rejects([](auto& attention) {
         auto& rope = std::get<celeg::RopePositionSpec>(attention.position);
         rope.pairing = celeg::RopePairingKind::AdjacentPairs;
+    }));
+    CELEG_TEST_CHECK(!metal_rejects([](auto& attention) {
+        attention.position = valid_mrope();
+    }));
+    CELEG_TEST_CHECK(metal_rejects([](auto& attention) {
+        auto multi = valid_mrope();
+        multi.sections = {1, 1, 1};
+        attention.position = multi;
+    }));
+    CELEG_TEST_CHECK(metal_rejects([](auto& attention) {
+        auto multi = valid_mrope();
+        multi.base.pairing = celeg::RopePairingKind::AdjacentPairs;
+        attention.position = multi;
     }));
     CELEG_TEST_CHECK(metal_rejects([](auto& attention) {
         auto& rope = std::get<celeg::RopePositionSpec>(attention.position);
