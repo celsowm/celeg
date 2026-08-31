@@ -93,22 +93,16 @@ void CudaCompiledModel::enqueue_decode_standard_attention(
     decode_phase_profile().end(DecodePhase::RopeKv, stream_.get());
 
     decode_phase_profile().begin(stream_.get());
-    const auto* block_sparse = std::get_if<BlockSparsePattern>(&layout.pattern);
-    AttentionRequest attention_request;
-    attention_request.kv_format = resources_.options().kv_cache_mode;
-    attention_request.operation = AttentionOperation::Decode;
-    attention_request.layout = AttentionKvLayout::Contiguous;
-    attention_request.position_source = AttentionPositionSource::DeviceCounter;
-    attention_request.bias = attention->alibi_slopes.data()
-        ? AttentionPositionBias::Alibi : AttentionPositionBias::None;
-    attention_request.fast_attention =
-        resources_.options().fast_attention && block_sparse == nullptr;
-    attention_request.segmented_attention =
-        session_.active_segmented_attention_ && block_sparse == nullptr;
-    attention_request.head_dim = owner_layout.head_dim;
-    const AttentionCapability attention_plan =
-        require_attention_capability(attention_request);
-    const bool int8_kv = attention_request.kv_format == KvCacheMode::Int8;
+    const CudaDecodeAttentionPolicy attention_policy = plan_cuda_decode_attention(
+        layout,
+        resources_.options().kv_cache_mode,
+        AttentionKvLayout::Contiguous,
+        AttentionPositionSource::DeviceCounter,
+        resources_.options().fast_attention,
+        session_.active_segmented_attention_,
+        attention->alibi_slopes.data() != nullptr,
+        owner_layout.head_dim);
+    const bool int8_kv = attention_policy.plan.kv_format == KvCacheMode::Int8;
 
     if (attention->key && attention->value) {
         if (int8_kv) {
@@ -125,9 +119,9 @@ void CudaCompiledModel::enqueue_decode_standard_attention(
     }
 
     dispatch_cuda_contiguous_decode_attention({
-        .plan = attention_plan,
+        .plan = attention_policy.plan,
         .position_mode = CudaDecodePositionMode::DeviceCounter,
-        .block_sparse = block_sparse,
+        .block_sparse = attention_policy.block_sparse,
         .query = q,
         .bf16_kv = {.keys = owner->key_cache_bf16(),
                     .values = owner->value_cache_bf16()},
