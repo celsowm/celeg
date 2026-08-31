@@ -5,8 +5,21 @@
 
 namespace celeg {
 
+namespace {
+
+uint32_t attention_window_size(const CompiledAttentionProgram& attention) {
+    if (const auto* sliding =
+            std::get_if<SlidingWindowPattern>(&attention.semantics.pattern)) {
+        return static_cast<uint32_t>(sliding->window_size);
+    }
+    return 0;
+}
+
+}
+
 void MetalModel::Impl::encode_attention(
-    id<MTLComputeCommandEncoder> encoder, Layer& layer) {
+    id<MTLComputeCommandEncoder> encoder, Layer& layer,
+    const CompiledAttentionProgram& attention) {
     encode_matvec(encoder, layer.query, normed, query_buffer);
     encode_matvec(encoder, layer.key, normed, key_buffer);
     encode_matvec(encoder, layer.value, normed, value_buffer);
@@ -44,13 +57,22 @@ void MetalModel::Impl::encode_attention(
     set_buffer(encoder, layer.value_cache, 2);
     set_buffer(encoder, operation, 3);
     const uint32_t sequence_length = position_value + 1;
+    const uint32_t window_size = attention_window_size(attention);
     set_bytes(encoder, &sequence_length, sizeof(sequence_length), 4);
     set_bytes(encoder, &query_heads, sizeof(query_heads), 5);
     set_bytes(encoder, &key_heads, sizeof(key_heads), 6);
     set_bytes(encoder, &head_dim, sizeof(head_dim), 7);
     set_bytes(encoder, &attention_scale, sizeof(attention_scale), 8);
     set_bytes(encoder, &page_tokens, sizeof(page_tokens), 9);
-    if (sequence_length <= 1024) {
+    if (window_size > 0) {
+        set_bytes(encoder, &window_size, sizeof(window_size), 10);
+        if (sequence_length <= 1024) {
+            dispatch_cooperative(
+                encoder, "celeg_attention_sliding_cooperative", query_heads);
+        } else {
+            dispatch(encoder, "celeg_attention_sliding", query_heads * head_dim);
+        }
+    } else if (sequence_length <= 1024) {
         dispatch_cooperative(encoder, "celeg_attention_cooperative", query_heads);
     } else {
         dispatch(encoder, "celeg_attention", query_heads * head_dim);
@@ -59,7 +81,8 @@ void MetalModel::Impl::encode_attention(
 }
 
 void MetalModel::Impl::encode_attention_batch(
-    id<MTLComputeCommandEncoder> encoder, Layer& layer, uint32_t rows,
+    id<MTLComputeCommandEncoder> encoder, Layer& layer,
+    const CompiledAttentionProgram& attention, uint32_t rows,
     uint32_t base_position) {
     encode_matmul(encoder, layer.query, batch_normed, batch_query, rows);
     encode_matmul(encoder, layer.key, batch_normed, batch_key, rows);
@@ -101,6 +124,7 @@ void MetalModel::Impl::encode_attention_batch(
 
     const float attention_scale = 1.0f /
         std::sqrt(static_cast<float>(layer.head_dim));
+    const uint32_t window_size = attention_window_size(attention);
     set_buffer(encoder, batch_query, 0);
     set_buffer(encoder, layer.key_cache, 1);
     set_buffer(encoder, layer.value_cache, 2);
@@ -112,7 +136,20 @@ void MetalModel::Impl::encode_attention_batch(
     set_bytes(encoder, &head_dim, sizeof(head_dim), 8);
     set_bytes(encoder, &attention_scale, sizeof(attention_scale), 9);
     set_bytes(encoder, &page_tokens, sizeof(page_tokens), 10);
-    if (base_position + rows <= 1024) {
+    if (window_size > 0) {
+        set_bytes(encoder, &window_size, sizeof(window_size), 11);
+        if (base_position + rows <= 1024) {
+            id<MTLComputePipelineState> state =
+                pipeline("celeg_attention_batch_sliding_cooperative");
+            [encoder setComputePipelineState:state];
+            [encoder dispatchThreadgroups:MTLSizeMake(query_heads, rows, 1)
+               threadsPerThreadgroup:MTLSizeMake(32, 1, 1)];
+            ++command_dispatches;
+        } else {
+            dispatch(encoder, "celeg_attention_batch_sliding",
+                     static_cast<NSUInteger>(rows) * query_heads * head_dim);
+        }
+    } else if (base_position + rows <= 1024) {
         id<MTLComputePipelineState> state = pipeline("celeg_attention_batch_cooperative");
         [encoder setComputePipelineState:state];
         [encoder dispatchThreadgroups:MTLSizeMake(query_heads, rows, 1)
