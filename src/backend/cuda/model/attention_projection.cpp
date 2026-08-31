@@ -20,7 +20,15 @@ struct CudaStandardProjectionBuffers {
 void project_cuda_standard_attention_qkv_impl(
     CudaCompiledModel& model, AttentionLayer& attention,
     const CudaStandardProjectionBuffers& buffers) {
-    if (!attention.query || !buffers.input || !buffers.query) {
+    if (!attention.query || !attention.out) {
+        throw std::logic_error(
+            "CUDA standard attention has incomplete query/output bindings");
+    }
+    if ((attention.key == nullptr) != (attention.value == nullptr)) {
+        throw std::logic_error(
+            "CUDA standard attention must bind key/value together");
+    }
+    if (!buffers.input || !buffers.query) {
         throw std::logic_error("CUDA standard attention projection is unavailable");
     }
     const AttentionSpec& layout = attention.layout;
@@ -30,7 +38,7 @@ void project_cuda_standard_attention_qkv_impl(
     model.linear(
         buffers.input, *attention.query, buffers.query,
         buffers.rows, attention.query->rows, hidden);
-    if (attention.key && attention.value) {
+    if (attention.key) {
         if (!buffers.key || !buffers.value) {
             throw std::logic_error("CUDA standard attention KV projection storage is unavailable");
         }
