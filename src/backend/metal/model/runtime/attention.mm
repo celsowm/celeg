@@ -10,7 +10,7 @@ namespace {
 uint32_t attention_window_size(const CompiledAttentionProgram& attention) {
     if (const auto* sliding =
             std::get_if<SlidingWindowPattern>(&attention.semantics.pattern)) {
-        return static_cast<uint32_t>(sliding->window_size);
+        return static_cast<uint32_t>(sliding->window);
     }
     return 0;
 }
