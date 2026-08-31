@@ -56,4 +56,45 @@ void apply_cuda_token_attention_gate(
         model.stream_.get());
 }
 
+void prepare_cuda_prefill_attention_gate(
+    CudaCompiledModel& model, AttentionLayer& attention, int rows) {
+    const AttentionSpec& layout = attention.layout;
+    if (!layout.output_gate.has_value()) return;
+
+    if (layout.output_gate->packed_with_query) {
+        launch_extract_attention_output_gate(
+            model.workspace_.prefill_qkv_.data(),
+            model.workspace_.prefill_q_.data(),
+            model.workspace_.prefill_attention_gate_.data(),
+            rows,
+            layout.query_width(),
+            layout.head_dim,
+            model.stream_.get());
+        return;
+    }
+
+    if (!attention.gate) {
+        throw std::logic_error("CUDA prefill attention is missing its output gate binding");
+    }
+    model.linear(
+        model.workspace_.prefill_normed_.data(),
+        *attention.gate,
+        model.workspace_.prefill_attention_gate_.data(),
+        rows,
+        layout.query_width(),
+        model.resources_.program_.hidden);
+}
+
+void apply_cuda_prefill_attention_gate(
+    CudaCompiledModel& model, AttentionLayer& attention, int rows) {
+    const AttentionSpec& layout = attention.layout;
+    if (!layout.output_gate.has_value()) return;
+
+    launch_sigmoid_multiply(
+        model.workspace_.prefill_op_output_.data(),
+        model.workspace_.prefill_attention_gate_.data(),
+        rows * layout.query_width(),
+        model.stream_.get());
+}
+
 }
