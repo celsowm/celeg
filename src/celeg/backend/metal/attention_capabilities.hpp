@@ -7,7 +7,7 @@ namespace celeg {
 inline constexpr AttentionBackendCapabilities metal_attention_capabilities() {
     return {
         .full_causal = true,
-        .sliding_window = false,
+        .sliding_window = true,
         .bidirectional = false,
         .prefix_lm = false,
         .block_sparse = false,
