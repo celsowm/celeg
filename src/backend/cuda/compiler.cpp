@@ -9,17 +9,23 @@ namespace celeg {
 
 CompiledModelProgram CudaModelCompiler::compile(const ResolvedModel& model) const {
     CompiledModelProgram program = build_model_program(model);
-    validate_attention_backend_capabilities(program, "CUDA", {
-        true,  // full_causal
-        true,  // sliding_window
-        true,  // bidirectional
-        true,  // prefix_lm
-        true,  // block_sparse
-        true,  // dynamic_sparse
-        false, // external_memory
-        true,  // alibi
-        false, // relative_position_bias
-    });
+    validate_attention_backend_capabilities(
+        program, "CUDA",
+        {.full_causal = true,
+         .sliding_window = true,
+         .bidirectional = true,
+         .prefix_lm = true,
+         .block_sparse = true,
+         .dynamic_sparse = true,
+         .external_memory = false,
+         .alibi = true,
+         .relative_position_bias = false,
+         .no_position = true,
+         .rope = true,
+         .multi_axis_rope = true,
+         .standard_execution = true,
+         .latent_execution = true,
+         .factorized_latent_execution = true});
 
     for (const auto& layer : program.layers) {
         const auto* compiled = std::get_if<CompiledAttentionProgram>(&layer.mixer);
