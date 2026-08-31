@@ -31,7 +31,9 @@ The largest remaining semantic gaps are:
 1. external-memory / cross-attention lifecycle and execution;
 2. CUDA relative-position bias tables;
 3. formal backend/mode coverage for non-decoder-oriented patterns, especially bidirectional and Prefix-LM;
-4. an explicit Metal capability audit instead of inference from shared IR.
+4. extending Metal beyond its now-explicit causal + RoPE + standard-attention contract.
+
+Metal is no longer treated as unaudited by default. Its runtime currently binds ordinary Q/K/V attention to causal RoPE kernels and does not carry arbitrary attention pattern, bias, multi-axis, or latent semantics into the runtime layer. Unsupported combinations are therefore rejected during model initialization rather than being silently executed as causal attention.
 
 ## IR surface
 
@@ -83,40 +85,45 @@ The table below is deliberately conservative. `?` means "prove it" rather than "
 
 | Capability | Reference/model | CPU | CUDA | Metal |
 |---|---:|---:|---:|---:|
-| Full causal | ✓ | ✓ | ✓ | ? |
-| Sliding window | ✓ | ✓ | ✓ | ? |
-| Bidirectional | ✓ | ✓ | △ | ? |
-| Prefix-LM | ✓ | ✓ | △ | ? |
-| BlockSparse | ✓ | ✓ | △ | ? |
-| DynamicSparse | ✓ | ✓ | △ | ? |
-| ALiBi | ✓ | ✓ | ✓ | ? |
-| Relative-position bias | ✓ | ✓ | ✗ | ? |
-| RoPE | ✓ | ✓ | ✓ | ? |
-| M-RoPE, ordinary attention | ✓ | ? | ✓ | ? |
-| M-RoPE, latent attention | ✓ | ? | ✗ | ? |
-| Private KV | ✓ | ✓ | ✓ | ? |
-| Shared KV publisher/consumer | ✓ | ? | ✓ | ? |
-| Contiguous ordinary KV | ✓ | ✓ | ✓ | ? |
-| Paged ordinary KV | ✓ | ✓ | ✓ | ? |
-| BF16 ordinary KV | ✓ | ✓ | ✓ | ? |
-| INT8 ordinary KV | ✓ | ? | ✓ | ? |
-| Projected latent attention | ✓ | ? | ✓ | ? |
-| Factorized latent attention | ✓ | ? | ✓ | ? |
-| Q/K normalization | ✓ | ✓ | ✓ | ? |
-| Output gate | ✓ | ? | ✓ | ? |
-| External-memory / cross-attention | IR only | ✗ | ✗ | ? |
+| Full causal | ✓ | ✓ | ✓ | ✓ |
+| Sliding window | ✓ | ✓ | ✓ | ✗ |
+| Bidirectional | ✓ | ✓ | △ | ✗ |
+| Prefix-LM | ✓ | ✓ | △ | ✗ |
+| BlockSparse | ✓ | ✓ | △ | ✗ |
+| DynamicSparse | ✓ | ✓ | △ | ✗ |
+| ALiBi | ✓ | ✓ | ✓ | ✗ |
+| Relative-position bias | ✓ | ✓ | ✗ | ✗ |
+| RoPE | ✓ | ✓ | ✓ | ✓ |
+| M-RoPE, ordinary attention | ✓ | ? | ✓ | ✗ |
+| M-RoPE, latent attention | ✓ | ? | ✗ | ✗ |
+| Private KV | ✓ | ✓ | ✓ | ✓ |
+| Shared KV publisher/consumer | ✓ | ? | ✓ | ✗ |
+| Contiguous ordinary KV | ✓ | ✓ | ✓ | △ |
+| Paged ordinary KV | ✓ | ✓ | ✓ | △ |
+| BF16 ordinary KV | ✓ | ✓ | ✓ | ✓ |
+| INT8 ordinary KV | ✓ | ? | ✓ | ✗ |
+| Projected latent attention | ✓ | ? | ✓ | ✗ |
+| Factorized latent attention | ✓ | ? | ✓ | ✗ |
+| Q/K normalization | ✓ | ✓ | ✓ | ✓ |
+| Output gate | ✓ | ? | ✓ | ✗ |
+| External-memory / cross-attention | IR only | ✗ | ✗ | ✗ |
+
+Metal ordinary KV storage is marked `△` rather than unconditional `✓` for contiguous/paged because its current runtime uses an internal page-sized physical layout without yet exposing the same general page-table/layout capability surface as CUDA/CPU.
 
 ### CUDA restrictions that matter
 
-`CudaModelCompiler` currently makes several capability boundaries explicit:
+CUDA backend capability support and semantic-combination validation are now separated from kernel/layout capability selection.
 
-- external-memory attention is rejected; CUDA currently lowers self-attention sources only;
+The semantic policy makes these boundaries explicit:
+
+- external-memory attention is rejected;
 - relative-position bias tables are rejected; ALiBi is supported instead;
 - bidirectional, Prefix-LM, BlockSparse, and DynamicSparse are accepted only as standard attention;
 - those constrained patterns currently require no attention bias;
 - Prefix-LM requires a positive prefix length;
 - BlockSparse and DynamicSparse have validated shape/range limits;
-- latent attention rejects M-RoPE and has additional gate/rank restrictions.
+- latent attention rejects M-RoPE and has additional gate/rank restrictions;
+- malformed LongRoPE factor sets are rejected before dispatch.
 
 Therefore the CUDA entries for bidirectional, Prefix-LM, BlockSparse, and DynamicSparse are `△`, not unconditional `✓`.
 
@@ -126,7 +133,32 @@ The CPU attention policy has explicit semantics for all six attention-pattern va
 
 The same policy lowers and scores both ALiBi and `RelativePositionBiasSpec`, including bidirectional relative buckets.
 
+CPU and CUDA now both reject external-memory attention at compile time until a real external-memory lifecycle exists.
+
 This is stronger evidence than merely finding the variants in the IR, but execution-mode-specific tests are still required before broadening every CPU cell above.
+
+### Metal evidence already present
+
+Metal has an explicit backend capability contract consumed during model initialization.
+
+The current runtime supports the deliberately narrow attention surface that is actually transported into `MetalModel::Impl::Layer` and consumed by its kernels:
+
+- full causal pattern;
+- ordinary KV state;
+- RoPE;
+- standard attention execution;
+- Q/K normalization;
+- BF16 runtime attention storage.
+
+The following semantics are explicitly rejected before device/pipeline setup rather than silently degrading to causal attention:
+
+- sliding-window, bidirectional, Prefix-LM, BlockSparse, and DynamicSparse patterns;
+- ALiBi and relative-position bias;
+- no-position and M-RoPE modes;
+- external-memory sources;
+- latent and factorized-latent execution.
+
+This turns the previous Metal `?` cells into explicit capability outcomes without claiming kernels that do not exist.
 
 ## What "AttentionSpec 100% implemented" must mean
 
@@ -162,7 +194,7 @@ Goal: stop learning backend support from scattered `if`, `std::holds_alternative
    - state kind;
    - paged/contiguous storage;
    - execution kind/mode.
-3. Make compiler validation consume that descriptor where practical.
+3. Make compiler/lifecycle validation consume that descriptor where practical.
 4. Add table-driven tests that enumerate `AttentionSpec` variants and verify accepted/rejected combinations.
 5. Generate or validate this document's matrix from the same source of truth if feasible; do not create a second manually maintained capability database.
 
@@ -222,7 +254,7 @@ The IR and CPU already define the semantic contract. CUDA currently rejects it e
 
 Acceptance criteria:
 
-- `CudaModelCompiler` no longer rejects `RelativePositionBiasSpec` for the supported standard paths;
+- CUDA no longer rejects `RelativePositionBiasSpec` for the supported standard paths;
 - token/graph/prefill coverage is explicit;
 - unsupported combinations remain compile-time capability errors.
 
@@ -256,29 +288,29 @@ Acceptance criteria:
 - every unsupported execution mode is intentionally rejected;
 - reference/CPU/CUDA tests prove future-key behavior.
 
-### Phase 4 — Audit Metal independently
+### Phase 4 — Extend Metal deliberately
 
-Do not copy CUDA's matrix into Metal.
+Metal now has an audited baseline rather than an unknown matrix.
 
-Audit the Metal backend from compiler/binding through kernel dispatch and tests for every row in the matrix.
+Extend it only by carrying each semantic fact into `Impl::Layer`, binding it explicitly, and testing the corresponding kernel behavior.
 
-Order:
+Suggested order:
 
-1. full causal + RoPE baseline;
-2. sliding window;
-3. paged/contiguous KV;
-4. ALiBi / relative bias;
+1. sliding window;
+2. true layout/paging capability declaration;
+3. ALiBi;
+4. relative bias;
 5. M-RoPE;
 6. shared KV;
 7. sparse patterns;
 8. latent attention;
 9. external memory after the backend-neutral lifecycle exists.
 
-Every audited cell must become `✓`, `△`, or `✗` with a named restriction/test.
+Every newly supported cell must move from `✗`/`△` to `✓` only with a named implementation path and test.
 
 ### Phase 5 — Keep the matrix from regressing
 
-1. Add an attention capability test suite that is backend-parameterized.
+1. Keep the attention capability test suite backend-parameterized.
 2. Require new `AttentionSpec` variants to update capability tests in the same change.
 3. Require a backend to reject unsupported variants at compile/bind time.
 4. Add representative end-to-end model fixtures for decoder attention and cross-attention.
@@ -297,7 +329,7 @@ AttentionSpec
     ↓
 backend capability policy
     ↓
-compiler validation
+compiler / lifecycle validation
     ↓
 execution dispatch
     ↓
@@ -326,7 +358,7 @@ The attention subsystem can be called complete with respect to the IR when:
 - external-memory attention executes end-to-end on the chosen baseline backends;
 - CUDA relative-position bias is either implemented for its declared modes or deliberately scoped out by capability policy;
 - Bidirectional and Prefix-LM have execution-mode tests rather than compiler-only acceptance;
-- Metal has an audited matrix;
+- Metal has an audited matrix and rejects unsupported semantics before execution;
 - unsupported combinations fail during compile/bind with stable diagnostics;
 - capability tests prevent a new IR variant from landing without backend decisions;
 - this matrix has no unexplained `?` cells.
