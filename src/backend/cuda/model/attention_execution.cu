@@ -42,18 +42,19 @@ void CudaCompiledModel::enqueue_decode_standard_attention(
         throw std::logic_error("standard CUDA attention has a non-standard descriptor");
     }
 
-    __nv_bfloat16* q = workspace_.qkv_output_.data();
-    const int query_projection_width = attention->query->rows;
+    const CudaQkvProjectionView qkv = make_cuda_qkv_projection_view(
+        *attention, workspace_.qkv_output_.data());
+    __nv_bfloat16* q = qkv.query;
+    __nv_bfloat16* k = qkv.key;
+    __nv_bfloat16* v = qkv.value;
     const bool output_gate = layout.output_gate.has_value();
-    __nv_bfloat16* k = q + query_projection_width;
-    __nv_bfloat16* v = k + layout.key_value_width();
 
     decode_phase_profile().begin(stream_.get());
     {
         auto native_fanout = native_fanout_scope(
             workspace_.normed_.data(), 1, resources_.program_.hidden);
         linear(workspace_.normed_.data(), *attention->query, q,
-               1, query_projection_width, resources_.program_.hidden);
+               1, qkv.query_projection_width, resources_.program_.hidden);
         if (attention->key && attention->value) {
             linear(workspace_.normed_.data(), *attention->key, k,
                    1, layout.key_value_width(), resources_.program_.hidden);
