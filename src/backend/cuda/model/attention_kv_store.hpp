@@ -16,4 +16,8 @@ void store_cuda_latent_kv_paged(
     PhysicalPagedKvCache& paged_kv, int slot,
     const uint32_t* device_page_table, int page_table_stride);
 
+void store_cuda_latent_kv_prefill(
+    CudaCompiledModel& model, AttentionLayer& attention,
+    AttentionLayer& owner, int rows);
+
 }
