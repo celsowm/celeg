@@ -16,6 +16,11 @@ struct GqaBlockSparsePattern {
     int global_blocks = 0;
 };
 
+struct GqaDynamicSparsePattern {
+    int block_size = 0;
+    int max_selected_blocks = 0;
+};
+
 void launch_gqa_decode_strict(const GqaContiguousArgs& args);
 void launch_gqa_decode_strict_device(const GqaContiguousArgs& args);
 void launch_gqa_decode_online(const GqaContiguousArgs& args);
@@ -26,6 +31,8 @@ void launch_gqa_prefill_strict(const GqaContiguousArgs& args);
 void launch_gqa_prefill_online(const GqaContiguousArgs& args);
 void launch_gqa_prefill_block_sparse(
     const GqaContiguousArgs& args, GqaBlockSparsePattern pattern);
+void launch_gqa_prefill_dynamic_sparse(
+    const GqaContiguousArgs& args, GqaDynamicSparsePattern pattern);
 
 void launch_gqa_decode_segmented_device(const GqaDecodeSegmentedArgs& args);
 void launch_gqa_prefill_segmented(const GqaSegmentedArgs& args);
