@@ -1,3 +1,5 @@
+#include "../residual_fusion.hpp"
+
 namespace celeg::prefill_detail {
 
 void run_gated_delta(
@@ -16,9 +18,8 @@ void run_gated_delta(
     const float mixer_epsilon = semantics.mixer_norm.before
         ? semantics.mixer_norm.before->epsilon
         : model.resources_.program_.final_norm.epsilon;
-    const bool fuse_residual = model.resources_.options().fused_residuals &&
-        !semantics.mixer_norm.after.has_value() &&
-        !std::holds_alternative<std::monostate>(semantics.feed_forward);
+    const bool fuse_residual = cuda_can_fuse_mixer_residual(
+        model.resources_.options().fused_residuals, semantics);
 
     prof.begin(model.stream_.get());
     {
@@ -107,9 +108,8 @@ void run_mamba2(
         : (semantics.mixer_norm.after
             ? semantics.mixer_norm.after->epsilon
             : model.resources_.program_.final_norm.epsilon);
-    const bool fuse_residual = model.resources_.options().fused_residuals &&
-        !semantics.mixer_norm.after.has_value() &&
-        !std::holds_alternative<std::monostate>(semantics.feed_forward);
+    const bool fuse_residual = cuda_can_fuse_mixer_residual(
+        model.resources_.options().fused_residuals, semantics);
 
     model.linear(
         workspace.prefill_normed_.data(), *mamba.in,
@@ -180,9 +180,8 @@ void run_convolution(
     auto& workspace = model.workspace_;
     auto& prof = prefill_phase_profile();
     const int hidden = model.resources_.program_.hidden;
-    const bool fuse_residual = model.resources_.options().fused_residuals &&
-        !semantics.mixer_norm.after.has_value() &&
-        !std::holds_alternative<std::monostate>(semantics.feed_forward);
+    const bool fuse_residual = cuda_can_fuse_mixer_residual(
+        model.resources_.options().fused_residuals, semantics);
 
     prof.begin(model.stream_.get());
     model.linear(
