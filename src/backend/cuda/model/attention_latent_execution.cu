@@ -2,12 +2,9 @@
 #include "attention_kv_store.hpp"
 #include "attention_layer_support.hpp"
 #include "attention_projection.hpp"
-#include "backend/cuda/attention_norm.hpp"
+#include "attention_qk_prepare.hpp"
 #include "backend/cuda/phase_profile.hpp"
 #include "kernels/kernels.cuh"
-#include "kernels/attention_output.hpp"
-#include "kernels/rope_pairing.hpp"
-#include "backend/cuda/weight_layout.hpp"
 
 #include <stdexcept>
 
@@ -32,8 +29,6 @@ void CudaCompiledModel::enqueue_decode_latent_attention(
         throw std::invalid_argument("CUDA latent attention requires BF16 state storage");
     }
     const AttentionSpec& layout = attention->layout;
-    const float qk_norm_epsilon = layout.query_norm
-        ? layout.query_norm->epsilon : resources_.program_.final_norm.epsilon;
     const CudaAttentionOwner resolved_owner = resolve_cuda_attention_owner(
         *attention, layer_index, resources_.layers_);
     AttentionLayer& owner = *resolved_owner.layer;
@@ -46,21 +41,15 @@ void CudaCompiledModel::enqueue_decode_latent_attention(
     project_cuda_latent_attention_qkv(*this, *attention);
     decode_phase_profile().end(DecodePhase::Projection, stream_.get());
     decode_phase_profile().begin(stream_.get());
-    if (const auto* rope = layout.rope_position();
-        rope && attention->latent_key_rope && execution.has_decoupled_rope &&
-        execution.rotary_width != 0) {
-        if (rope->pairing != RopePairingKind::SplitHalf) {
-            throw std::invalid_argument(
-                "CUDA latent attention requires split-half RoPE pairing");
-        }
-        launch_dynamic_qk_norm_rope_device(
-            workspace_.latent_query_rope_.data(),
-            attention->latent_key ? workspace_.latent_key_rope_.data() : nullptr,
-            nullptr, nullptr, layout.query_heads, 1,
-            latent.rope_head_dim, position_device_.data(),
-            static_cast<float>(rope->theta), 1.0f, qk_norm_epsilon, false,
-            lower_cuda_rope_scaling(*rope), rope->pairing, stream_.get());
-    }
+    prepare_cuda_latent_attention_qk({
+        .layout = &layout,
+        .query_rope = workspace_.latent_query_rope_.data(),
+        .key_rope = attention->latent_key_rope
+            ? workspace_.latent_key_rope_.data() : nullptr,
+        .fallback_norm_epsilon = resources_.program_.final_norm.epsilon,
+        .position_mode = CudaQkPositionMode::DeviceScalar,
+        .device_position = position_device_.data(),
+        .stream = stream_.get()});
     decode_phase_profile().end(DecodePhase::RopeKv, stream_.get());
     decode_phase_profile().begin(stream_.get());
     store_cuda_latent_kv_contiguous(*this, *attention, owner);
