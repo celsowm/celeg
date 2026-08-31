@@ -16,6 +16,8 @@ namespace celeg {
 AttentionCapability CudaCompiledModel::token_attention_plan(
     AttentionLayer& attention, const AttentionSpec& owner_layout,
     const TokenKvPolicy& kv) {
+    const bool block_sparse =
+        std::holds_alternative<BlockSparsePattern>(attention.layout.pattern);
     AttentionRequest request;
     request.kv_format = resources_.options().kv_cache_mode;
     request.operation = AttentionOperation::Decode;
@@ -23,9 +25,9 @@ AttentionCapability CudaCompiledModel::token_attention_plan(
     request.position_source = kv.position_source;
     request.bias = attention.alibi_slopes.data()
         ? AttentionPositionBias::Alibi : AttentionPositionBias::None;
-    request.fast_attention = resources_.options().fast_attention;
+    request.fast_attention = resources_.options().fast_attention && !block_sparse;
     request.segmented_attention =
-        kv.paged() && use_segmented_attention(session_.position_);
+        kv.paged() && !block_sparse && use_segmented_attention(session_.position_);
     request.head_dim = owner_layout.head_dim;
     return require_attention_capability(request);
 }
@@ -77,7 +79,33 @@ void CudaCompiledModel::store_and_attend_token_contiguous(
         }
         break;
     case AttentionAlgorithm::Strict:
-        if (int8_kv) {
+        if (const auto* sparse = std::get_if<BlockSparsePattern>(&layout.pattern)) {
+            const GqaBlockSparsePattern pattern{
+                .block_size = sparse->block_size,
+                .local_blocks = sparse->local_blocks,
+                .global_blocks = sparse->global_blocks};
+            if (int8_kv) {
+                launch_gqa_decode_block_sparse_int8_device({
+                    .query = q,
+                    .kv = {.keys = owner.key_cache_int8_ptr(),
+                           .values = owner.value_cache_int8_ptr(),
+                           .key_scales = owner.key_cache_scales_ptr(),
+                           .value_scales = owner.value_cache_scales_ptr()},
+                    .out = workspace_.op_output_.data(),
+                    .geometry = geometry,
+                    .extent = {.position = position_device_.data()},
+                    .stream = stream_.get()}, pattern);
+            } else {
+                launch_gqa_decode_block_sparse_device({
+                    .query = q,
+                    .kv = {.keys = owner.key_cache_bf16(),
+                           .values = owner.value_cache_bf16()},
+                    .out = workspace_.op_output_.data(),
+                    .geometry = geometry,
+                    .extent = {.position = position_device_.data()},
+                    .stream = stream_.get()}, pattern);
+            }
+        } else if (int8_kv) {
             launch_gqa_decode_strict_int8({
                 .query = q,
                 .kv = {.keys = owner.key_cache_int8_ptr(),
@@ -112,6 +140,12 @@ void CudaCompiledModel::store_and_attend_token_paged(
     const AttentionCapability& plan, int slot, __nv_bfloat16* q, __nv_bfloat16* k,
     __nv_bfloat16* v, const TokenKvPolicy& kv) {
     const AttentionSpec& layout = attention.layout;
+    const auto* sparse = std::get_if<BlockSparsePattern>(&layout.pattern);
+    const GqaBlockSparsePattern sparse_pattern = sparse
+        ? GqaBlockSparsePattern{.block_size = sparse->block_size,
+                                .local_blocks = sparse->local_blocks,
+                                .global_blocks = sparse->global_blocks}
+        : GqaBlockSparsePattern{};
     PhysicalPagedKvCache& paged_kv = *kv.paged_kv;
     const uint32_t* device_page_table = kv.device_page_table;
     const int page_table_stride = kv.page_table_stride;
@@ -157,7 +191,18 @@ void CudaCompiledModel::store_and_attend_token_paged(
             paged_kv.page_vector_elements(), paged_kv.layer_vector_offset(slot),
             paged_kv.page_scale_elements(), paged_kv.layer_scale_offset(slot),
             owner_layout.key_value_heads, owner_layout.head_dim, stream_.get());
-        if (plan.algorithm == AttentionAlgorithm::Alibi) {
+        if (sparse) {
+            launch_gqa_decode_block_sparse_int8_paged({
+                .query = q,
+                .kv = pool,
+                .index = index,
+                .scale_index = scale_index,
+                .out = workspace_.op_output_.data(),
+                .positions = position_device_.data(),
+                .rows = 1,
+                .geometry = geometry,
+                .stream = stream_.get()}, sparse_pattern);
+        } else if (plan.algorithm == AttentionAlgorithm::Alibi) {
             launch_gqa_decode_alibi_int8_paged_batch({
                 .query = q,
                 .kv = pool,
@@ -204,7 +249,17 @@ void CudaCompiledModel::store_and_attend_token_paged(
             1, slot, paged_kv.page_tokens(),
             paged_kv.page_vector_elements(), paged_kv.layer_vector_offset(slot),
             owner_layout.key_value_heads, owner_layout.head_dim, stream_.get());
-        if (plan.algorithm == AttentionAlgorithm::Alibi) {
+        if (sparse) {
+            launch_gqa_decode_block_sparse_paged({
+                .query = q,
+                .kv = pool,
+                .index = index,
+                .out = workspace_.op_output_.data(),
+                .positions = position_device_.data(),
+                .rows = 1,
+                .geometry = geometry,
+                .stream = stream_.get()}, sparse_pattern);
+        } else if (plan.algorithm == AttentionAlgorithm::Alibi) {
             launch_gqa_decode_alibi_paged_batch({
                 .query = q,
                 .kv = pool,
