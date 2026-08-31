@@ -104,19 +104,16 @@ void load_mtp_weights(CudaCompiledModel& model, const IWeightRepository& repo) {
                 resource_layer, E);
 
             if (moe_semantics.shared) {
-                const int shared = moe_semantics.shared->mlp.intermediate_size;
-                moe.shared_w13 = resources.weight_loader_->load_concat_linear_weight(
-                    repo, prefix + ".mlp.shared_expert.w13.weight",
-                    {{prefix + ".mlp.shared_expert.gate_proj.weight",
-                      {shared, resources.program_.hidden}},
-                     {prefix + ".mlp.shared_expert.up_proj.weight",
-                      {shared, resources.program_.hidden}}});
-                moe.shared_w2 = resources.weight_loader_->load_linear_weight(
-                    repo, prefix + ".mlp.shared_expert.down_proj.weight",
-                    {resources.program_.hidden, shared});
-                moe.shared_gate = resources.weight_loader_->load_linear_weight(
-                    repo, prefix + ".mlp.shared_expert_gate.weight",
-                    {1, resources.program_.hidden});
+                bind_cuda_shared_expert(
+                    model, repo,
+                    CudaSharedExpertNames{
+                        prefix + ".mlp.shared_expert.w13.weight",
+                        prefix + ".mlp.shared_expert.gate_proj.weight",
+                        prefix + ".mlp.shared_expert.up_proj.weight",
+                        prefix + ".mlp.shared_expert.down_proj.weight",
+                        prefix + ".mlp.shared_expert_gate.weight"},
+                    moe_semantics.shared->mlp.intermediate_size,
+                    moe);
             }
 
             const std::string experts_prefix = prefix + ".mlp.experts";
