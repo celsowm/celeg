@@ -4,13 +4,11 @@
 #include "backend/cuda/paged_kv.hpp"
 #include "backend/cuda/weight_policy.hpp"
 #include "celeg/model/weights/quantization.hpp"
-#include "celeg/checkpoint/packed/int4.hpp"
 #include "backend/cuda/weight_layout.hpp"
 #include "backend/cuda/weights_loader.hpp"
 #include "backend/cuda/weight_setup_support.hpp"
 #include "backend/cuda/weight_setup.hpp"
-#include "backend/cuda/moe.hpp"
-#include "backend/cuda/moe/expert_source.hpp"
+#include "moe_weight_setup.hpp"
 
 #include <filesystem>
 #include <algorithm>
@@ -109,179 +107,7 @@ void CudaCompiledModel::load_checkpoint_weights(
             common_layer.feed_forward = std::monostate{};
         } else if (const auto* moe_program =
                        std::get_if<MoeLayerProgram>(&semantic_layer.feed_forward)) {
-            const MoeLayerProgram& moe_semantics = *moe_program;
-            const int E = moe_semantics.router.expert_count;
-            const int inter = moe_semantics.routed.mlp.intermediate_size;
-            const MoeExpertTensorNames expert_names = moe_expert_tensor_names(
-                resources_.model_.weight_plan.requests, i, E);
-            const float* expert_bias = nullptr;
-            if (moe_semantics.router.has_expert_bias) {
-                expert_bias = resources_.weight_loader_->load_f32_weight(
-                    repo, tensor_name(resources_.model_.weight_plan.requests,
-                                      TensorRole::MoeRouterBias, i),
-                    {static_cast<int64_t>(E)});
-            }
-            const LinearWeight* router = resources_.weight_loader_->load_router_weight_named(
-                repo, tensor_name(resources_.model_.weight_plan.requests,
-                                  TensorRole::MoeRouter, i),
-                E, resources_.program_.hidden);
-
-            DeviceBuffer<float>& router_float = workspace_.moe_router_float_[static_cast<size_t>(i)];
-            router_float.reset(static_cast<size_t>(E) * resources_.program_.hidden);
-            launch_cast_bf16_to_float(
-                std::get<Bf16LinearStorage>(router->storage).data, router_float.data(),
-                static_cast<int>(E) * resources_.program_.hidden, stream_.get());
-
-            MoeFfnWeights moe_weights{};
-            moe_weights.router = router;
-            moe_weights.expert_bias = expert_bias;
-            moe_weights.router_float = router_float.data();
-
-            if (moe_semantics.shared) {
-                const int shared_inter = moe_semantics.shared->mlp.intermediate_size;
-                moe_weights.shared_w13 = resources_.weight_loader_->load_concat_linear_weight(
-                    repo, layer_name(i, "shared_expert.w13.weight"),
-                    {
-                        {tensor_name(resources_.model_.weight_plan.requests,
-                                     TensorRole::MoeSharedGate, i),
-                         {shared_inter, resources_.program_.hidden}},
-                        {tensor_name(resources_.model_.weight_plan.requests,
-                                     TensorRole::MoeSharedUp, i),
-                         {shared_inter, resources_.program_.hidden}},
-                    });
-                moe_weights.shared_w2 = resources_.weight_loader_->load_linear_weight(
-                    repo, tensor_name(resources_.model_.weight_plan.requests,
-                                      TensorRole::MoeSharedDown, i),
-                    {resources_.program_.hidden, shared_inter});
-                const auto gate_request = std::find_if(
-                    resources_.model_.weight_plan.requests.begin(),
-                    resources_.model_.weight_plan.requests.end(),
-                    [i](const TensorRequest& request) {
-                        return request.role == TensorRole::MoeSharedGateWeight &&
-                               request.layer == i && request.expert == -1;
-                    });
-                if (gate_request != resources_.model_.weight_plan.requests.end()) {
-                    moe_weights.shared_gate = resources_.weight_loader_->load_linear_weight(
-                        repo, tensor_name(resources_.model_.weight_plan.requests,
-                                          TensorRole::MoeSharedGateWeight, i),
-                        {1, resources_.program_.hidden});
-                }
-            }
-
-            if (workspace_.expert_offload_plan_.enabled) {
-                const std::string& probe_name = expert_names.packed()
-                    ? expert_names.packed_gate_up : expert_names.gate.front();
-                if (!has_packed_int4_matrix(repo, probe_name)) {
-                    const HostTensorView expert_probe = repo.tensor(probe_name);
-                    if (expert_probe.dtype == TensorDType::Quantized) {
-                        throw std::invalid_argument(
-                            "native GGUF MoE experts do not support BF16 offload; "
-                            "disable expert offload to keep packed Q4/Q6 weights resident");
-                    }
-                }
-                if (resources_.options().expert_offload.backing == ExpertBackingMode::DiskCached) {
-                    std::vector<ExpertLocation> catalog =
-                        resources_.weight_loader_->build_expert_catalog(
-                            repo, expert_names, E, inter,
-                            resources_.program_.hidden);
-                    workspace_.expert_catalog_[static_cast<size_t>(i)] = catalog;
-                    if (resources_.weights_->expert_catalog[static_cast<size_t>(i)].empty()) {
-                        resources_.weights_->expert_catalog[static_cast<size_t>(i)] = catalog;
-                    }
-
-                    size_t gate_up_bytes = 2 * inter * resources_.program_.hidden * sizeof(__nv_bfloat16);
-                    size_t down_bytes = resources_.program_.hidden * inter * sizeof(__nv_bfloat16);
-                    auto cache = std::make_unique<ExpertLayerCache>(
-                        E, workspace_.expert_offload_plan_.experts_per_layer,
-                        gate_up_bytes, down_bytes);
-                    cache->set_policy(resources_.options().expert_offload.policy);
-                    std::vector<const __nv_bfloat16*> empty_host_dev(static_cast<size_t>(E), nullptr);
-                    cache->set_host_sources(empty_host_dev, empty_host_dev);
-
-                    auto controller = std::make_unique<ResidencyController>();
-                    controller->cache = std::move(cache);
-                    controller->transfer_stream = std::make_unique<CudaStream>();
-
-                    if (workspace_.expert_offload_plan_.experts_per_layer > 0) {
-                        for (int s = 0; s < workspace_.expert_offload_plan_.experts_per_layer; ++s) {
-                            const ExpertLocation& loc = catalog[static_cast<size_t>(s)];
-                            ExpertHostLease lease = resources_.weights_->host_expert_cache->acquire(i, s, [&](std::span<std::byte> payload) {
-                                if (!resources_.weights_->expert_source) {
-                                    throw std::runtime_error("CUDA expert source is not initialized");
-                                }
-                                resources_.weights_->expert_source->read(i, s, payload);
-                            });
-                            controller->cache->promote(
-                                           s, s,
-                                           reinterpret_cast<const __nv_bfloat16*>(lease.payload()),
-                                           reinterpret_cast<const __nv_bfloat16*>(lease.payload() + loc.w1.bytes + loc.w3.bytes),
-                                           controller->transfer_stream->get());
-                            auto ev = std::make_unique<CudaEvent>();
-                            ev->record(controller->transfer_stream->get());
-                            controller->inflight_transfers.push_back({std::move(lease), std::move(ev)});
-                        }
-                    }
-                    CELEG_CUDA(cudaStreamSynchronize(controller->transfer_stream->get()));
-                    controller->inflight_transfers.clear();
-                    moe_weights.storage = OffloadedExpertWeights{
-                        controller->cache->gate_up_ptrs(), controller->cache->down_ptrs()};
-                    resources_.weights_->expert_controllers[static_cast<size_t>(i)] = std::move(controller);
-                    workspace_.expert_caches_[static_cast<size_t>(i)] = resources_.weights_->expert_controllers[static_cast<size_t>(i)]->cache.get();
-                } else {
-                    WeightLoader::HostExpertLayer host_layer =
-                        resources_.weight_loader_->load_moe_experts_host(
-                            repo, expert_names, E, inter,
-                            resources_.program_.hidden,
-                            workspace_.host_expert_store_,
-                            resources_.options().expert_offload.host_mode);
-                    auto cache = std::make_unique<ExpertLayerCache>(
-                        E, workspace_.expert_offload_plan_.experts_per_layer,
-                        host_layer.gate_up_bytes, host_layer.down_bytes);
-                    cache->set_policy(resources_.options().expert_offload.policy);
-                    cache->set_host_sources(host_layer.gate_up_host_dev,
-                                            host_layer.down_host_dev);
-
-                    auto controller = std::make_unique<ResidencyController>();
-                    controller->cache = std::move(cache);
-                    controller->transfer_stream = std::make_unique<CudaStream>();
-
-                    std::vector<int> seed(static_cast<size_t>(
-                        workspace_.expert_offload_plan_.experts_per_layer));
-                    for (int s = 0; s < workspace_.expert_offload_plan_.experts_per_layer; ++s) {
-                        seed[static_cast<size_t>(s)] = s;
-                    }
-                    controller->cache->seed(seed, controller->transfer_stream->get());
-                    CELEG_CUDA(cudaStreamSynchronize(controller->transfer_stream->get()));
-                    moe_weights.storage = OffloadedExpertWeights{
-                        controller->cache->gate_up_ptrs(), controller->cache->down_ptrs()};
-                    resources_.weights_->expert_controllers[static_cast<size_t>(i)] = std::move(controller);
-                    workspace_.expert_caches_[static_cast<size_t>(i)] = resources_.weights_->expert_controllers[static_cast<size_t>(i)]->cache.get();
-                }
-            } else {
-                if (expert_names.packed()) {
-                    const ExpertLinearWeight* gate_up =
-                        resources_.weight_loader_->load_expert_linear_weight(
-                            repo, expert_names.packed_gate_up,
-                            E, 2 * inter, resources_.program_.hidden);
-                    const ExpertLinearWeight* down =
-                        resources_.weight_loader_->load_expert_linear_weight(
-                            repo, expert_names.packed_down,
-                            E, resources_.program_.hidden, inter);
-                    moe_weights.storage = ResidentExpertWeights{gate_up, down};
-                } else {
-                    const ExpertLinearWeight* gate_up =
-                        resources_.weight_loader_->load_moe_gate_up(
-                            repo, expert_names, E, inter,
-                            resources_.program_.hidden);
-                    const ExpertLinearWeight* down =
-                        resources_.weight_loader_->load_moe_down(
-                            repo, expert_names, E, inter,
-                            resources_.program_.hidden);
-                    moe_weights.storage = ResidentExpertWeights{gate_up, down};
-                }
-            }
-
-            common_layer.feed_forward = moe_weights;
+            bind_cuda_moe_feed_forward(*this, repo, *moe_program, i, common_layer);
         } else {
             const auto* dense = std::get_if<CompiledDenseFeedForwardProgram>(
                 &semantic_layer.feed_forward);
