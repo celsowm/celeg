@@ -10,19 +10,18 @@ namespace {
 
 int latent_rotary_width(const AttentionLayer& attention) {
     const auto& latent = *attention.layout.latent_state();
-    return attention.latent_key_rope && latent.decoupled_rope
-        ? latent.rope_head_dim
-        : 0;
+    return attention.latent_key_rope && latent.decoupled_rope &&
+            latent.rope_head_dim != 0
+        ? latent.rope_head_dim : 0;
 }
 
 const __nv_bfloat16* latent_key_rope_for_store(
     CudaCompiledModel& model, const AttentionLayer& attention) {
     return latent_rotary_width(attention) != 0
-        ? model.workspace_.latent_key_rope_.data()
-        : nullptr;
+        ? model.workspace_.latent_key_rope_.data() : nullptr;
 }
 
-}
+} // namespace
 
 void CudaCompiledModel::store_standard_attention_kv_contiguous(
     AttentionLayer& attention, AttentionLayer& owner,
@@ -107,6 +106,9 @@ void store_cuda_latent_kv_paged(
     CudaCompiledModel& model, AttentionLayer& attention,
     PhysicalPagedKvCache& paged_kv, int slot,
     const uint32_t* device_page_table, int page_table_stride) {
+    if (slot < 0) {
+        throw std::logic_error("latent attention has no page slot");
+    }
     if (!attention.latent_key || !attention.latent_value) return;
 
     const auto& latent = *attention.layout.latent_state();
