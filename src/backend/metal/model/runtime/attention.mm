@@ -24,6 +24,11 @@ const RelativePositionBiasSpec* attention_relative_bias(
     return std::get_if<RelativePositionBiasSpec>(&attention.semantics.bias);
 }
 
+bool split_half_rope(const CompiledAttentionProgram& attention) {
+    const RopePositionSpec* rope = attention.semantics.rope_position();
+    return rope && rope->pairing == RopePairingKind::SplitHalf;
+}
+
 }
 
 void MetalModel::Impl::encode_attention(
@@ -69,7 +74,10 @@ void MetalModel::Impl::encode_attention(
     set_bytes(encoder, &layer.key_norm_epsilon,
               sizeof(layer.key_norm_epsilon), 14);
     set_bytes(encoder, &page_tokens, sizeof(page_tokens), 15);
-    dispatch(encoder, "celeg_qk_norm_rope_store_kv",
+    dispatch(encoder,
+             split_half_rope(attention)
+                 ? "celeg_qk_norm_rope_store_kv_split"
+                 : "celeg_qk_norm_rope_store_kv",
              std::max(query_heads, key_heads));
 
     const float attention_scale = 1.0f /
@@ -165,7 +173,10 @@ void MetalModel::Impl::encode_attention_batch(
     set_bytes(encoder, &query_scale, sizeof(query_scale), 10);
     set_bytes(encoder, &layer.query_norm_epsilon, sizeof(layer.query_norm_epsilon), 11);
     set_bytes(encoder, &layer.key_norm_epsilon, sizeof(layer.key_norm_epsilon), 12);
-    dispatch(encoder, "celeg_qk_norm_rope_batch",
+    dispatch(encoder,
+             split_half_rope(attention)
+                 ? "celeg_qk_norm_rope_batch_split"
+                 : "celeg_qk_norm_rope_batch",
              static_cast<NSUInteger>(rows) * head_count);
 
     const uint32_t kv_width = key_heads * head_dim;
