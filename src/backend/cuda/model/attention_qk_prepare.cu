@@ -92,6 +92,55 @@ void prepare_cuda_attention_qk(const CudaAttentionQkPreparation& preparation) {
         preparation.stream);
 }
 
+void prepare_cuda_prefill_attention_qk(
+    const CudaPrefillAttentionQkPreparation& preparation) {
+    if (!preparation.layout || !preparation.query || preparation.rows <= 0) {
+        throw std::logic_error("CUDA prefill attention QK preparation is incomplete");
+    }
+
+    const AttentionSpec& layout = *preparation.layout;
+    const float norm_epsilon = layout.query_norm
+        ? layout.query_norm->epsilon
+        : (layout.key_norm
+            ? layout.key_norm->epsilon
+            : preparation.fallback_norm_epsilon);
+
+    if (layout.has_query_key_norm()) {
+        launch_attention_qk_norm(
+            layout,
+            preparation.query,
+            preparation.key,
+            preparation.query_norm,
+            preparation.key_norm,
+            preparation.rows,
+            preparation.stream);
+    }
+
+    if (const auto* rope = layout.rope_position()) {
+        launch_dynamic_qk_norm_rope_prefill(
+            preparation.query,
+            preparation.key,
+            nullptr, nullptr,
+            preparation.rows,
+            layout.query_heads,
+            layout.key_value_heads,
+            layout.head_dim,
+            static_cast<float>(rope->theta),
+            static_cast<float>(rope->rotary_fraction),
+            norm_epsilon,
+            false,
+            lower_cuda_rope_scaling(*rope),
+            rope->pairing,
+            preparation.stream);
+    }
+
+    launch_scale(
+        preparation.query,
+        static_cast<size_t>(preparation.rows) * layout.query_width(),
+        cuda_query_prescale(layout),
+        preparation.stream);
+}
+
 void prepare_cuda_latent_attention_qk(
     const CudaLatentQkPreparation& preparation) {
     if (!preparation.layout || !preparation.query_rope) {
