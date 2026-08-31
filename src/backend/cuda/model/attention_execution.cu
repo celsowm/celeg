@@ -1,13 +1,11 @@
 #include "detail/compiled_model.hpp"
 #include "attention_decode_dispatch.hpp"
 #include "attention_layer_support.hpp"
-#include "backend/cuda/attention_norm.hpp"
+#include "attention_qk_prepare.hpp"
 #include "backend/cuda/phase_profile.hpp"
 #include "kernels/kernels.cuh"
 #include "kernels/attention_output.hpp"
-#include "kernels/rope_pairing.hpp"
 #include "backend/cuda/paged_kv.hpp"
-#include "backend/cuda/weight_layout.hpp"
 
 #include <stdexcept>
 
@@ -65,30 +63,16 @@ void CudaCompiledModel::enqueue_decode_standard_attention(
     decode_phase_profile().end(DecodePhase::Projection, stream_.get());
 
     decode_phase_profile().begin(stream_.get());
-    if (layout.has_query_key_norm()) {
-        launch_attention_qk_norm(
-            layout, q, attention->key ? k : nullptr,
-            attention->q_norm, attention->k_norm, 1, stream_.get());
-    }
-    if (const auto* rope = layout.rope_position()) {
-        if (rope->pairing == RopePairingKind::AdjacentPairs) {
-            launch_adjacent_qk_norm_rope_positions(
-                q, attention->key ? k : nullptr,
-                nullptr, nullptr, 1,
-                layout.query_heads, layout.key_value_heads, layout.head_dim,
-                position_device_.data(), static_cast<float>(rope->theta),
-                static_cast<float>(rope->rotary_fraction),
-                qk_norm_epsilon, false, lower_cuda_rope_scaling(*rope), stream_.get());
-        } else {
-            launch_dynamic_qk_norm_rope_device(
-                q, attention->key ? k : nullptr, nullptr, nullptr,
-                layout.query_heads, layout.key_value_heads, layout.head_dim,
-                position_device_.data(), static_cast<float>(rope->theta),
-                static_cast<float>(rope->rotary_fraction), qk_norm_epsilon,
-                false, lower_cuda_rope_scaling(*rope), rope->pairing, stream_.get());
-        }
-    }
-    launch_scale(q, layout.query_width(), cuda_query_prescale(layout), stream_.get());
+    prepare_cuda_attention_qk({
+        .layout = &layout,
+        .query = q,
+        .key = attention->key ? k : nullptr,
+        .query_norm = attention->q_norm,
+        .key_norm = attention->k_norm,
+        .norm_epsilon = qk_norm_epsilon,
+        .position_mode = CudaQkPositionMode::DeviceScalar,
+        .device_position = position_device_.data(),
+        .stream = stream_.get()});
     decode_phase_profile().end(DecodePhase::RopeKv, stream_.get());
 
     decode_phase_profile().begin(stream_.get());
