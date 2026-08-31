@@ -8,6 +8,8 @@ struct CudaCompiledModel;
 
 void require_cuda_projected_latent_bindings(const AttentionLayer& attention);
 
+void project_cuda_prefill_standard_attention_qkv(
+    CudaCompiledModel& model, AttentionLayer& attention, int rows);
 void project_cuda_latent_attention_qkv(
     CudaCompiledModel& model, AttentionLayer& attention);
 void project_cuda_prefill_latent_attention_qkv(
