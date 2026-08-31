@@ -216,7 +216,7 @@ struct CudaCompiledModel {
 
     void enqueue_sampling();
     void enqueue_decode_forward();
-    void enqueue_decode_attention(Layer& layer, LayerCommon& common_layer, int layer_index);
+    void enqueue_decode_attention(Layer& layer, int layer_index);
     void enqueue_decode_standard_attention(Layer& layer, int layer_index);
     void enqueue_decode_latent_attention(Layer& layer, int layer_index);
     void enqueue_decode_factorized_latent_attention(Layer& layer, int layer_index);
