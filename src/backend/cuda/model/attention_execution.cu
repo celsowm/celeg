@@ -29,9 +29,6 @@ void CudaCompiledModel::enqueue_decode_standard_attention(
     const AttentionSpec& layout = attention->layout;
     const float qk_norm_epsilon = layout.query_norm
         ? layout.query_norm->epsilon : resources_.program_.final_norm.epsilon;
-    const bool fuse_mixer_residual = resources_.options().fused_residuals &&
-        !semantics.mixer_norm.after.has_value() &&
-        !std::holds_alternative<std::monostate>(semantics.feed_forward);
     const CudaAttentionOwner resolved_owner = resolve_cuda_attention_owner(
         *attention, layer_index, resources_.layers_);
     AttentionLayer& owner = *resolved_owner.layer;
@@ -127,11 +124,7 @@ void CudaCompiledModel::enqueue_decode_standard_attention(
     decode_phase_profile().end(DecodePhase::Attention, stream_.get());
 
     decode_phase_profile().begin(stream_.get());
-    linear(workspace_.op_output_.data(), *attention->out, workspace_.hidden_.data(),
-           1, resources_.program_.hidden, layout.query_width(),
-           fuse_mixer_residual ? 1.0f : 0.0f);
-    launch_scale(workspace_.hidden_.data(), resources_.program_.hidden,
-                 semantics.residual.multiplier, stream_.get());
+    project_standard_attention_output(*attention, semantics);
     decode_phase_profile().end(DecodePhase::AttnOut, stream_.get());
 }
 
