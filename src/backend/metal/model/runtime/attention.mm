@@ -19,14 +19,26 @@ const AlibiBiasSpec* attention_alibi(const CompiledAttentionProgram& attention) 
     return std::get_if<AlibiBiasSpec>(&attention.semantics.bias);
 }
 
+const RelativePositionBiasSpec* attention_relative_bias(
+    const CompiledAttentionProgram& attention) {
+    return std::get_if<RelativePositionBiasSpec>(&attention.semantics.bias);
+}
+
 }
 
 void MetalModel::Impl::encode_attention(
     id<MTLComputeCommandEncoder> encoder, Layer& layer,
     const CompiledAttentionProgram& attention) {
     const AlibiBiasSpec* alibi = attention_alibi(attention);
+    const RelativePositionBiasSpec* relative = attention_relative_bias(attention);
     if (alibi && !layer.alibi_slopes) {
         layer.alibi_slopes = buffer(alibi->slopes);
+    }
+    if (relative && !layer.relative_bias) {
+        const int layer_index = static_cast<int>(&layer - layers.data());
+        layer.relative_bias = load_vector(
+            TensorRole::AttentionRelativePositionBias, layer_index,
+            layer.query_heads * relative->bucket_count);
     }
 
     encode_matvec(encoder, layer.query, normed, query_buffer);
@@ -74,7 +86,23 @@ void MetalModel::Impl::encode_attention(
     set_bytes(encoder, &head_dim, sizeof(head_dim), 7);
     set_bytes(encoder, &attention_scale, sizeof(attention_scale), 8);
     set_bytes(encoder, &page_tokens, sizeof(page_tokens), 9);
-    if (alibi) {
+    if (relative) {
+        const uint32_t bucket_count = static_cast<uint32_t>(relative->bucket_count);
+        const uint32_t max_distance = static_cast<uint32_t>(relative->max_distance);
+        const uint32_t bidirectional = relative->bidirectional ? 1u : 0u;
+        set_bytes(encoder, &window_size, sizeof(window_size), 10);
+        set_buffer(encoder, layer.relative_bias, 11);
+        set_bytes(encoder, &bucket_count, sizeof(bucket_count), 12);
+        set_bytes(encoder, &max_distance, sizeof(max_distance), 13);
+        set_bytes(encoder, &bidirectional, sizeof(bidirectional), 14);
+        if (sequence_length <= 1024) {
+            dispatch_cooperative(
+                encoder, "celeg_attention_relative_bias_cooperative", query_heads);
+        } else {
+            dispatch(encoder, "celeg_attention_relative_bias",
+                     query_heads * head_dim);
+        }
+    } else if (alibi) {
         set_bytes(encoder, &window_size, sizeof(window_size), 10);
         set_buffer(encoder, layer.alibi_slopes, 11);
         if (sequence_length <= 1024) {
@@ -104,8 +132,15 @@ void MetalModel::Impl::encode_attention_batch(
     const CompiledAttentionProgram& attention, uint32_t rows,
     uint32_t base_position) {
     const AlibiBiasSpec* alibi = attention_alibi(attention);
+    const RelativePositionBiasSpec* relative = attention_relative_bias(attention);
     if (alibi && !layer.alibi_slopes) {
         layer.alibi_slopes = buffer(alibi->slopes);
+    }
+    if (relative && !layer.relative_bias) {
+        const int layer_index = static_cast<int>(&layer - layers.data());
+        layer.relative_bias = load_vector(
+            TensorRole::AttentionRelativePositionBias, layer_index,
+            layer.query_heads * relative->bucket_count);
     }
 
     encode_matmul(encoder, layer.query, batch_normed, batch_query, rows);
@@ -160,7 +195,27 @@ void MetalModel::Impl::encode_attention_batch(
     set_bytes(encoder, &head_dim, sizeof(head_dim), 8);
     set_bytes(encoder, &attention_scale, sizeof(attention_scale), 9);
     set_bytes(encoder, &page_tokens, sizeof(page_tokens), 10);
-    if (alibi) {
+    if (relative) {
+        const uint32_t bucket_count = static_cast<uint32_t>(relative->bucket_count);
+        const uint32_t max_distance = static_cast<uint32_t>(relative->max_distance);
+        const uint32_t bidirectional = relative->bidirectional ? 1u : 0u;
+        set_bytes(encoder, &window_size, sizeof(window_size), 11);
+        set_buffer(encoder, layer.relative_bias, 12);
+        set_bytes(encoder, &bucket_count, sizeof(bucket_count), 13);
+        set_bytes(encoder, &max_distance, sizeof(max_distance), 14);
+        set_bytes(encoder, &bidirectional, sizeof(bidirectional), 15);
+        if (base_position + rows <= 1024) {
+            id<MTLComputePipelineState> state =
+                pipeline("celeg_attention_batch_relative_bias_cooperative");
+            [encoder setComputePipelineState:state];
+            [encoder dispatchThreadgroups:MTLSizeMake(query_heads, rows, 1)
+               threadsPerThreadgroup:MTLSizeMake(32, 1, 1)];
+            ++command_dispatches;
+        } else {
+            dispatch(encoder, "celeg_attention_batch_relative_bias",
+                     static_cast<NSUInteger>(rows) * query_heads * head_dim);
+        }
+    } else if (alibi) {
         set_bytes(encoder, &window_size, sizeof(window_size), 11);
         set_buffer(encoder, layer.alibi_slopes, 12);
         if (base_position + rows <= 1024) {
