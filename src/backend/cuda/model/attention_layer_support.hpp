@@ -28,6 +28,9 @@ CudaQkvProjectionView make_cuda_qkv_projection_view(
     AttentionLayer& attention,
     __nv_bfloat16* storage);
 
+const __nv_bfloat16* require_cuda_factorized_latent_bindings(
+    const AttentionLayer& attention);
+
 Bf16KvView cuda_bf16_kv_view(AttentionLayer& owner);
 Int8KvView cuda_int8_kv_view(AttentionLayer& owner);
 
