@@ -1,5 +1,6 @@
 #include "detail/compiled_model.hpp"
 #include "attention_layer_support.hpp"
+#include "residual_fusion.hpp"
 #include "backend/cuda/attention_norm.hpp"
 #include "backend/cuda/phase_profile.hpp"
 #include "kernels/kernels.cuh"
@@ -34,9 +35,8 @@ void CudaCompiledModel::enqueue_decode_factorized_latent_attention(
     const AttentionSpec& layout = attention->layout;
     const float qk_norm_epsilon = layout.query_norm
         ? layout.query_norm->epsilon : resources_.program_.final_norm.epsilon;
-    const bool fuse_mixer_residual = resources_.options().fused_residuals &&
-        !semantics.mixer_norm.after.has_value() &&
-        !std::holds_alternative<std::monostate>(semantics.feed_forward);
+    const bool fuse_mixer_residual = cuda_can_fuse_mixer_residual(
+        resources_.options().fused_residuals, semantics);
     const CudaAttentionOwner resolved_owner = resolve_cuda_attention_owner(
         *attention, layer_index, resources_.layers_);
     AttentionLayer& owner = *resolved_owner.layer;
