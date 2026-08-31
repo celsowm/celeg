@@ -34,7 +34,15 @@ enum class WeightMode {
 };
 
 inline constexpr bool is_rowwise_quantized_weight_mode(WeightMode mode) {
-    return mode == WeightMode::Int8 || mode == WeightMode::Int4;
+    switch (mode) {
+    case WeightMode::Bf16:
+    case WeightMode::NativeGguf:
+        return false;
+    case WeightMode::Int8:
+    case WeightMode::Int4:
+        return true;
+    }
+    return false;
 }
 
 inline constexpr std::string_view weight_mode_name(WeightMode mode) {
