@@ -10,6 +10,7 @@
 #include "backend/cuda/weight_setup.hpp"
 #include "backend/cuda/moe.hpp"
 #include "backend/cuda/moe/expert_source.hpp"
+#include "attention_state_setup.hpp"
 
 #include <memory>
 #include <stdexcept>
@@ -245,23 +246,9 @@ void load_mtp_weights(CudaCompiledModel& model, const IWeightRepository& repo) {
         attention.k_norm = resources.weight_loader_->load_rms_norm_weight(
             repo, prefix + ".self_attn.k_norm.weight", {mtp_layout.head_dim},
             NormWeightKind::Scale);
-        const size_t cache_elements = static_cast<size_t>(model.max_context_) *
-            static_cast<size_t>(mtp_layout.key_value_width());
-        if (resources.options().kv_cache_mode == KvCacheMode::Int8) {
-            attention.state = OrdinaryInt8KvState{};
-            auto& ordinary_state = std::get<OrdinaryInt8KvState>(attention.state);
-            ordinary_state.key_cache.reset(cache_elements);
-            ordinary_state.value_cache.reset(cache_elements);
-            const size_t scales = static_cast<size_t>(model.max_context_) *
-                static_cast<size_t>(mtp_layout.key_value_heads);
-            ordinary_state.key_scales.reset(scales);
-            ordinary_state.value_scales.reset(scales);
-        } else {
-            attention.state = OrdinaryBf16KvState{};
-            auto& ordinary_state = std::get<OrdinaryBf16KvState>(attention.state);
-            ordinary_state.key_cache.reset(cache_elements);
-            ordinary_state.value_cache.reset(cache_elements);
-        }
+        initialize_cuda_ordinary_attention_state(
+            attention, mtp_layout, resources.options().kv_cache_mode,
+            model.max_context_, true);
         mtp.layers.emplace_back(std::move(attention));
     }
 }
