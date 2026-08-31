@@ -1,7 +1,7 @@
 #include "detail/compiled_model.hpp"
 #include "attention_decode_dispatch.hpp"
 #include "attention_layer_support.hpp"
-#include "backend/cuda/attention_norm.hpp"
+#include "attention_qk_prepare.hpp"
 #include "kernels/kernels.cuh"
 #include "backend/cuda/paged_kv.hpp"
 #include "backend/cuda/weight_layout.hpp"
@@ -368,38 +368,35 @@ void CudaCompiledModel::run_token_attention(
     const float qk_epsilon = layout.query_norm
         ? layout.query_norm->epsilon
         : (layout.key_norm ? layout.key_norm->epsilon : resources_.program_.final_norm.epsilon);
-    if (layout.has_query_key_norm()) {
-        launch_attention_qk_norm(
-            layout, q, attention.key ? k : nullptr,
-            attention.q_norm, attention.k_norm, 1, stream_.get());
+    const auto* multi = kv.paged() ? nullptr : layout.multi_axis_position();
+    if (layout.rope_position() && multi) {
+        const auto& position =
+            kv.rope_position ? *kv.rope_position : session_.next_rope_position_;
+        CELEG_CUDA(cudaMemcpyAsync(mrope_position_device_.data(), position.data(),
+                                   sizeof(position), cudaMemcpyHostToDevice,
+                                   stream_.get()));
     }
-    if (const auto* rope = layout.rope_position()) {
-        const auto* multi = kv.paged() ? nullptr : layout.multi_axis_position();
-        if (multi) {
-            const auto& position =
-                kv.rope_position ? *kv.rope_position : session_.next_rope_position_;
-            CELEG_CUDA(cudaMemcpyAsync(mrope_position_device_.data(), position.data(),
-                                       sizeof(position), cudaMemcpyHostToDevice,
-                                       stream_.get()));
-            launch_dynamic_mrope_qk_norm_rope(
-                q, attention.key ? k : nullptr, nullptr, nullptr,
-                layout.query_heads, layout.key_value_heads, layout.head_dim,
-                mrope_position_device_.data(), multi->sections[0], multi->sections[1],
-                multi->sections[2], multi->interleaved,
-                static_cast<float>(rope->theta), static_cast<float>(rope->rotary_fraction),
-                qk_epsilon, false, lower_cuda_rope_scaling(*rope),
-                stream_.get());
-        } else {
-            launch_dynamic_qk_norm_rope(
-                q, attention.key ? k : nullptr, nullptr, nullptr,
-                layout.query_heads, layout.key_value_heads, layout.head_dim,
-                session_.position_, static_cast<float>(rope->theta),
-                static_cast<float>(rope->rotary_fraction), qk_epsilon,
-                false, lower_cuda_rope_scaling(*rope), rope->pairing, stream_.get());
-        }
+
+    CudaAttentionQkPreparation qk_preparation{
+        .layout = &layout,
+        .query = q,
+        .key = attention.key ? k : nullptr,
+        .query_norm = attention.q_norm,
+        .key_norm = attention.k_norm,
+        .norm_epsilon = qk_epsilon,
+        .position_mode = multi
+            ? CudaQkPositionMode::MultiAxisDevice
+            : CudaQkPositionMode::HostScalar,
+        .host_position = session_.position_,
+        .device_position = multi ? mrope_position_device_.data() : nullptr,
+        .stream = stream_.get()};
+    if (multi) {
+        qk_preparation.mrope_section0 = multi->sections[0];
+        qk_preparation.mrope_section1 = multi->sections[1];
+        qk_preparation.mrope_section2 = multi->sections[2];
+        qk_preparation.mrope_interleaved = multi->interleaved;
     }
-    launch_scale(q, layout.query_width(),
-                 cuda_query_prescale(layout), stream_.get());
+    prepare_cuda_attention_qk(qk_preparation);
 
     const AttentionCapability plan = token_attention_plan(attention, owner_layout, kv);
     if (kv.paged()) {
