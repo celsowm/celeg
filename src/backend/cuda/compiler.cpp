@@ -18,19 +18,25 @@ CompiledModelProgram CudaModelCompiler::compile(const ResolvedModel& model) cons
         }
         const bool bidirectional =
             std::holds_alternative<BidirectionalPattern>(attention.pattern);
-        if (!attention.has_causal_pattern() && !bidirectional) {
+        const auto* prefix_lm = std::get_if<PrefixLmPattern>(&attention.pattern);
+        if (!attention.has_causal_pattern() && !bidirectional && !prefix_lm) {
             throw std::invalid_argument(
-                "CUDA lowering currently supports causal or bidirectional attention patterns");
+                "CUDA lowering currently supports causal, bidirectional, or prefix-LM attention patterns");
         }
-        if (bidirectional &&
+        if (prefix_lm && prefix_lm->prefix_length <= 0) {
+            throw std::invalid_argument(
+                "CUDA prefix-LM attention requires a positive prefix length");
+        }
+        const bool noncausal_dense_pattern = bidirectional || prefix_lm != nullptr;
+        if (noncausal_dense_pattern &&
             !std::holds_alternative<NoAttentionBiasSpec>(attention.bias)) {
             throw std::invalid_argument(
-                "CUDA bidirectional attention currently supports no attention bias");
+                "CUDA bidirectional and prefix-LM attention currently support no attention bias");
         }
-        if (bidirectional &&
+        if (noncausal_dense_pattern &&
             compiled->execution.kind != AttentionExecutionKind::Standard) {
             throw std::invalid_argument(
-                "CUDA bidirectional attention currently supports standard attention only");
+                "CUDA bidirectional and prefix-LM attention currently support standard attention only");
         }
         if (!attention.rope_position() &&
             !std::holds_alternative<NoPositionEncodingSpec>(attention.position)) {
