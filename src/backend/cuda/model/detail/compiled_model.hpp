@@ -173,9 +173,8 @@ struct CudaCompiledModel {
                                   int page_table_stride);
     void run_token_layers(const TokenKvPolicy& kv);
     void run_token_layer(Layer& layer, int layer_index, const TokenKvPolicy& kv);
-    void run_token_mixer(Layer& layer, LayerCommon& common_layer,
-                         const CompiledLayerProgram& semantics, int layer_index,
-                         const TokenKvPolicy& kv);
+    void run_token_mixer(Layer& layer, const CompiledLayerProgram& semantics,
+                         int layer_index, const TokenKvPolicy& kv);
     CudaQkvProjectionView project_standard_attention_qkv(AttentionLayer& attention);
     void project_standard_attention_output(
         AttentionLayer& attention, const CompiledLayerProgram& semantics);
@@ -186,7 +185,7 @@ struct CudaCompiledModel {
         const AttentionSpec& owner_layout, const AttentionCapability& plan,
         int slot, __nv_bfloat16* k, __nv_bfloat16* v,
         const TokenKvPolicy& kv);
-    void run_token_attention(AttentionLayer& attention, LayerCommon& common_layer,
+    void run_token_attention(AttentionLayer& attention,
                              const CompiledLayerProgram& semantics, int layer_index,
                              const TokenKvPolicy& kv);
     void run_token_latent_attention_paged(
