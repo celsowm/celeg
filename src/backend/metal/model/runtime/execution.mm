@@ -5,7 +5,8 @@
 namespace celeg {
 
 void MetalModel::Impl::encode_token(id<MTLCommandBuffer>& command_buffer,
-                                    id<MTLComputeCommandEncoder>& encoder, int32_t token) {
+                                    id<MTLComputeCommandEncoder>& encoder, int32_t token,
+                                    const std::array<int32_t, 3>* rope_position) {
         if (position >= max_context) throw std::runtime_error("Metal context limit reached");
         const uint32_t hidden_width = static_cast<uint32_t>(model.graph.hidden);
         const uint32_t token_value = static_cast<uint32_t>(token);
@@ -46,7 +47,8 @@ void MetalModel::Impl::encode_token(id<MTLCommandBuffer>& command_buffer,
                 case Layer::MixerKind::Attention:
                     encode_attention(
                         encoder, layer,
-                        std::get<CompiledAttentionProgram>(program_layer.mixer));
+                        std::get<CompiledAttentionProgram>(program_layer.mixer),
+                        rope_position);
                     break;
             }
 
@@ -84,13 +86,17 @@ void MetalModel::Impl::encode_token(id<MTLCommandBuffer>& command_buffer,
         ++position;
 }
 
-void MetalModel::Impl::run_token(int32_t token) {
+void MetalModel::Impl::run_token(int32_t token,
+                                 const std::array<int32_t, 3>* rope_position) {
     id<MTLCommandBuffer> command_buffer = nil;
     id<MTLComputeCommandEncoder> encoder = nil;
     begin_commands(command_buffer, encoder);
-    encode_token(command_buffer, encoder, token);
+    encode_token(command_buffer, encoder, token, rope_position);
     finish_commands(command_buffer, encoder);
     apply_logits_transforms();
+    if (!rope_position) {
+        for (int32_t& value : next_rope_position) ++value;
+    }
 }
 
 bool MetalModel::Impl::supports_prefill_batch() const {
@@ -102,6 +108,7 @@ bool MetalModel::Impl::supports_prefill_batch() const {
             return false;
         }
         if (const auto* attention = std::get_if<CompiledAttentionProgram>(&layer.mixer)) {
+            if (attention->semantics.multi_axis_position()) return false;
             const bool supported_pattern =
                 std::holds_alternative<FullCausalPattern>(attention->semantics.pattern) ||
                 std::holds_alternative<SlidingWindowPattern>(attention->semantics.pattern);
@@ -143,8 +150,8 @@ void MetalModel::Impl::encode_prefill_batch(
                              model.graph.embedding_transform.post_norm->epsilon);
         set_buffer(encoder, batch_normed, 0);
         set_buffer(encoder, batch_hidden, 1);
-        set_bytes(encoder, &count, sizeof(count), 2);
-        dispatch(encoder, "celeg_copy_batch", count);
+        set_bytes(encoder, &hidden_width, sizeof(hidden_width), 2);
+        dispatch(encoder, "celeg_copy_batch", hidden_width);
     }
 
     for (size_t layer_index = 0; layer_index < layers.size(); ++layer_index) {
@@ -193,6 +200,7 @@ void MetalModel::Impl::encode_prefill_batch(
     encode_matmul(encoder, embedding, batch_normed, logits, 1,
                   static_cast<NSUInteger>(rows - 1) * hidden_width * sizeof(float));
     position += static_cast<int>(rows);
+    for (int32_t& value : next_rope_position) value += static_cast<int32_t>(rows);
 }
 
 }
