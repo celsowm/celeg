@@ -8,8 +8,6 @@ void run_projected_latent_attention(
     AttentionLayer& owner,
     const CompiledLayerProgram& semantics,
     int rows) {
-    require_cuda_projected_latent_bindings(attention);
-
     auto& workspace = model.workspace_;
     auto& prof = prefill_phase_profile();
     const AttentionSpec& layout = attention.layout;
