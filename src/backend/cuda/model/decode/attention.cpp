@@ -17,20 +17,15 @@ namespace celeg {
 AttentionCapability CudaCompiledModel::token_attention_plan(
     AttentionLayer& attention, const AttentionSpec& owner_layout,
     const TokenKvPolicy& kv) {
-    const bool block_sparse =
-        std::holds_alternative<BlockSparsePattern>(attention.layout.pattern);
-    AttentionRequest request;
-    request.kv_format = resources_.options().kv_cache_mode;
-    request.operation = AttentionOperation::Decode;
-    request.layout = kv.kv_layout;
-    request.position_source = kv.position_source;
-    request.bias = attention.alibi_slopes.data()
-        ? AttentionPositionBias::Alibi : AttentionPositionBias::None;
-    request.fast_attention = resources_.options().fast_attention && !block_sparse;
-    request.segmented_attention =
-        kv.paged() && !block_sparse && use_segmented_attention(session_.position_);
-    request.head_dim = owner_layout.head_dim;
-    return require_attention_capability(request);
+    return plan_cuda_decode_attention(
+        attention.layout,
+        resources_.options().kv_cache_mode,
+        kv.kv_layout,
+        kv.position_source,
+        resources_.options().fast_attention,
+        kv.paged() && use_segmented_attention(session_.position_),
+        attention.alibi_slopes.data() != nullptr,
+        owner_layout.head_dim).plan;
 }
 
 void CudaCompiledModel::store_and_attend_token_contiguous(
