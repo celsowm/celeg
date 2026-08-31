@@ -14,7 +14,7 @@ void CudaCompiledModel::enqueue_decode_attention(
     }
     switch (attention->execution.kind) {
     case AttentionExecutionKind::Standard:
-        enqueue_decode_standard_attention(layer, common_layer, layer_index);
+        enqueue_decode_standard_attention(layer, layer_index);
         return;
     case AttentionExecutionKind::Latent:
         enqueue_decode_latent_attention(layer, common_layer, layer_index);
