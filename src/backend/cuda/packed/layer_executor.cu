@@ -35,11 +35,14 @@ void PackedLayerExecutor::launch_embedding_rows(
             workspace_.sampled.data(), rows, int8->data,
             int8->scales, workspace_.hidden.data(),
             workspace_.program_.hidden, workspace_.stream.get());
-    } else {
+    } else if (const auto* bf16 = std::get_if<Bf16LinearStorage>(&storage)) {
         launch_embedding_batch(
-            workspace_.sampled.data(), rows, std::get<Bf16LinearStorage>(storage).data,
+            workspace_.sampled.data(), rows, bf16->data,
             workspace_.hidden.data(), workspace_.program_.hidden,
             workspace_.stream.get());
+    } else {
+        throw std::runtime_error(
+            "packed CUDA does not support this embedding storage format");
     }
     launch_scale(workspace_.hidden.data(), rows * workspace_.program_.hidden,
                  reference.program().embedding_transform.multiplier,
