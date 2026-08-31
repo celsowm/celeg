@@ -2,8 +2,25 @@
 #include "backend/cuda/weight_cache.hpp"
 
 #include <functional>
+#include <stdexcept>
 
 namespace celeg {
+
+namespace {
+
+void validate_decode_attention_patterns(const CudaCompiledModel& model) {
+    for (const auto& layer : model.resources_.program_.layers) {
+        const auto* attention =
+            std::get_if<CompiledAttentionProgram>(&layer.mixer);
+        if (attention && std::holds_alternative<BlockSparsePattern>(
+                             attention->semantics.pattern)) {
+            throw std::invalid_argument(
+                "CUDA block-sparse attention currently supports prefill only");
+        }
+    }
+}
+
+}
 
 CudaModel::CudaModel(const std::string& model_path,
                    int max_context,
@@ -98,8 +115,14 @@ void CudaInferenceSession::prefill_chunk_paged(const std::vector<int32_t>& token
                                               const std::vector<uint32_t>& page_table) {
     owner_->state_->prefill_chunk_paged(tokens, begin, finalize, paged_kv, page_table);
 }
-int32_t CudaInferenceSession::decode() { return owner_->state_->decode(); }
-void CudaInferenceSession::decode_async_begin() { owner_->state_->decode_async_begin(); }
+int32_t CudaInferenceSession::decode() {
+    validate_decode_attention_patterns(*owner_->state_);
+    return owner_->state_->decode();
+}
+void CudaInferenceSession::decode_async_begin() {
+    validate_decode_attention_patterns(*owner_->state_);
+    owner_->state_->decode_async_begin();
+}
 int32_t CudaInferenceSession::decode_async_finish() { return owner_->state_->decode_async_finish(); }
 void CudaInferenceSession::set_generation_config(GenerationConfig generation) {
     owner_->state_->set_generation_config(std::move(generation));
