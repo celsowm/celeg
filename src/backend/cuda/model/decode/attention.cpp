@@ -1,6 +1,7 @@
 #include "detail/compiled_model.hpp"
 #include "attention_decode_dispatch.hpp"
 #include "attention_layer_support.hpp"
+#include "attention_projection.hpp"
 #include "attention_qk_prepare.hpp"
 #include "kernels/kernels.cuh"
 #include "backend/cuda/paged_kv.hpp"
@@ -109,32 +110,7 @@ void CudaCompiledModel::run_token_latent_attention_paged(
             "CUDA latent attention does not support query gates or M-RoPE yet");
     }
     const auto& latent = *layout.latent_state();
-    {
-        auto native_fanout = native_fanout_scope(
-            workspace_.normed_.data(), 1, resources_.program_.hidden);
-        linear(workspace_.normed_.data(), *attention.latent_query,
-               workspace_.latent_query_content_.data(), 1,
-               layout.latent_query_content_width(), resources_.program_.hidden);
-        if (layout.latent_query_rope_width() != 0) {
-            linear(workspace_.normed_.data(), *attention.latent_query_rope,
-                   workspace_.latent_query_rope_.data(), 1,
-                   layout.latent_query_rope_width(), resources_.program_.hidden);
-        }
-        if (attention.latent_key && attention.latent_value) {
-            linear(workspace_.normed_.data(), *attention.latent_key,
-                   workspace_.latent_key_.data(), 1, latent.latent_rank,
-                   resources_.program_.hidden);
-            linear(workspace_.normed_.data(), *attention.latent_value,
-                   workspace_.latent_value_.data(), 1, latent.latent_rank,
-                   resources_.program_.hidden);
-            if (attention.latent_key_rope && latent.decoupled_rope &&
-                latent.rope_head_dim != 0) {
-                linear(workspace_.normed_.data(), *attention.latent_key_rope,
-                       workspace_.latent_key_rope_.data(), 1,
-                       latent.rope_head_dim, resources_.program_.hidden);
-            }
-        }
-    }
+    project_cuda_latent_attention_qkv(*this, attention);
     if (const auto* rope = layout.rope_position();
         rope && attention.latent_key_rope && latent.decoupled_rope &&
         latent.rope_head_dim != 0) {
