@@ -56,6 +56,39 @@ void apply_cuda_token_attention_gate(
         model.stream_.get());
 }
 
+void apply_cuda_graph_attention_gate(
+    CudaCompiledModel& model, AttentionLayer& attention,
+    const __nv_bfloat16* projected_query) {
+    const AttentionSpec& layout = attention.layout;
+    if (!layout.output_gate.has_value()) return;
+
+    const __nv_bfloat16* gate = nullptr;
+    if (layout.output_gate->packed_with_query) {
+        if (!projected_query) {
+            throw std::logic_error("CUDA graph attention has no projected query gate storage");
+        }
+        gate = projected_query + layout.query_width();
+    } else {
+        if (!attention.gate) {
+            throw std::logic_error("CUDA graph attention is missing its output gate binding");
+        }
+        model.linear(
+            model.workspace_.normed_.data(),
+            *attention.gate,
+            model.workspace_.attention_gate_.data(),
+            1,
+            layout.query_width(),
+            model.resources_.program_.hidden);
+        gate = model.workspace_.attention_gate_.data();
+    }
+
+    launch_sigmoid_multiply(
+        model.workspace_.op_output_.data(),
+        gate,
+        layout.query_width(),
+        model.stream_.get());
+}
+
 void prepare_cuda_prefill_attention_gate(
     CudaCompiledModel& model, AttentionLayer& attention, int rows) {
     const AttentionSpec& layout = attention.layout;
