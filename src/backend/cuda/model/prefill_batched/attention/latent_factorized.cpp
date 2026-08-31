@@ -18,7 +18,6 @@ void run_factorized_latent_attention(
     CudaCompiledModel& model,
     AttentionLayer& attention,
     AttentionLayer& owner,
-    LayerCommon&,
     const CompiledLayerProgram& semantics,
     int rows) {
     require_factorized_latent_bindings(attention);
