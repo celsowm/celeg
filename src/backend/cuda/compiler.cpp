@@ -1,5 +1,6 @@
 #include "backend/cuda/compiler.hpp"
 
+#include "celeg/backend/attention_capabilities.hpp"
 #include "celeg/backend/moe_capabilities.hpp"
 
 #include <stdexcept>
@@ -8,24 +9,27 @@ namespace celeg {
 
 CompiledModelProgram CudaModelCompiler::compile(const ResolvedModel& model) const {
     CompiledModelProgram program = build_model_program(model);
+    validate_attention_backend_capabilities(program, "CUDA", {
+        true,  // full_causal
+        true,  // sliding_window
+        true,  // bidirectional
+        true,  // prefix_lm
+        true,  // block_sparse
+        true,  // dynamic_sparse
+        false, // external_memory
+        true,  // alibi
+        false, // relative_position_bias
+    });
+
     for (const auto& layer : program.layers) {
         const auto* compiled = std::get_if<CompiledAttentionProgram>(&layer.mixer);
         if (!compiled) continue;
         const AttentionSpec& attention = compiled->semantics;
-        if (attention.uses_external_memory()) {
-            throw std::invalid_argument(
-                "CUDA lowering currently supports self-attention sources only");
-        }
         const bool bidirectional =
             std::holds_alternative<BidirectionalPattern>(attention.pattern);
         const auto* prefix_lm = std::get_if<PrefixLmPattern>(&attention.pattern);
         const auto* block_sparse = std::get_if<BlockSparsePattern>(&attention.pattern);
         const auto* dynamic_sparse = std::get_if<DynamicSparsePattern>(&attention.pattern);
-        if (!attention.has_causal_pattern() && !bidirectional &&
-            !prefix_lm && !block_sparse && !dynamic_sparse) {
-            throw std::invalid_argument(
-                "CUDA lowering currently supports causal, bidirectional, prefix-LM, block-sparse, or dynamic-sparse attention patterns");
-        }
         if (prefix_lm && prefix_lm->prefix_length <= 0) {
             throw std::invalid_argument(
                 "CUDA prefix-LM attention requires a positive prefix length");
@@ -60,10 +64,6 @@ CompiledModelProgram CudaModelCompiler::compile(const ResolvedModel& model) cons
             !std::holds_alternative<NoPositionEncodingSpec>(attention.position)) {
             throw std::invalid_argument(
                 "CUDA lowering currently supports only RoPE or no position bias");
-        }
-        if (std::holds_alternative<RelativePositionBiasSpec>(attention.bias)) {
-            throw std::invalid_argument(
-                "CUDA lowering currently supports ALiBi but not relative-position tables");
         }
         if (compiled->execution.kind != AttentionExecutionKind::Standard) {
             const auto& latent = *attention.latent_state();
