@@ -50,6 +50,10 @@ void launch_gqa_decode_int8_batch_ptrs(const GqaBatchPtrInt8Args& args);
 
 void launch_gqa_decode_paged_batch(const GqaPagedArgs& args);
 void launch_gqa_decode_int8_paged_batch(const GqaPagedInt8Args& args);
+void launch_gqa_decode_block_sparse_paged(
+    const GqaPagedArgs& args, GqaBlockSparsePattern pattern);
+void launch_gqa_decode_block_sparse_int8_paged(
+    const GqaPagedInt8Args& args, GqaBlockSparsePattern pattern);
 void launch_gqa_decode_paged_segmented_batch(const GqaPagedSegmentedArgs& args);
 void launch_gqa_decode_int8_paged_segmented_batch(const GqaPagedSegmentedInt8Args& args);
 
