@@ -104,59 +104,36 @@ void bind_cuda_moe_feed_forward(CudaCompiledModel& model,
         }
 
         if (resources.options().expert_offload.backing == ExpertBackingMode::DiskCached) {
-            std::vector<ExpertLocation> catalog =
-                resources.weight_loader_->build_expert_catalog(
-                    repo, expert_names, expert_count, intermediate,
-                    resources.program_.hidden);
-            workspace.expert_catalog_[static_cast<size_t>(layer_index)] = catalog;
-            if (resources.weights_->expert_catalog[static_cast<size_t>(layer_index)].empty()) {
-                resources.weights_->expert_catalog[static_cast<size_t>(layer_index)] = catalog;
+            PreparedDiskExpertResidency prepared =
+                prepare_cuda_disk_expert_residency(
+                    model, repo, expert_names, layer_index,
+                    expert_count, intermediate);
+            ResidencyController& controller = *prepared.controller;
+            for (int seed = 0;
+                 seed < workspace.expert_offload_plan_.experts_per_layer;
+                 ++seed) {
+                const ExpertLocation& location =
+                    prepared.catalog[static_cast<size_t>(seed)];
+                ExpertHostLease lease = resources.weights_->host_expert_cache->acquire(
+                    layer_index, seed, [&](std::span<std::byte> payload) {
+                        if (!resources.weights_->expert_source) {
+                            throw std::runtime_error(
+                                "CUDA expert source is not initialized");
+                        }
+                        resources.weights_->expert_source->read(
+                            layer_index, seed, payload);
+                    });
+                promote_cuda_disk_expert_payload(
+                    controller, seed, location, lease.payload());
+                auto event = std::make_unique<CudaEvent>();
+                event->record(controller.transfer_stream->get());
+                controller.inflight_transfers.push_back(
+                    {std::move(lease), std::move(event)});
             }
-
-            const size_t gate_up_bytes =
-                2ull * static_cast<size_t>(intermediate) * resources.program_.hidden *
-                sizeof(__nv_bfloat16);
-            const size_t down_bytes =
-                static_cast<size_t>(resources.program_.hidden) * intermediate *
-                sizeof(__nv_bfloat16);
-            auto controller = std::make_unique<ResidencyController>(
-                expert_count, workspace.expert_offload_plan_.experts_per_layer,
-                gate_up_bytes, down_bytes,
-                resources.options().expert_offload.policy);
-            std::vector<const __nv_bfloat16*> empty_host_dev(
-                static_cast<size_t>(expert_count), nullptr);
-            controller->cache->set_host_sources(empty_host_dev, empty_host_dev);
-
-            if (workspace.expert_offload_plan_.experts_per_layer > 0) {
-                for (int seed = 0;
-                     seed < workspace.expert_offload_plan_.experts_per_layer;
-                     ++seed) {
-                    const ExpertLocation& location = catalog[static_cast<size_t>(seed)];
-                    ExpertHostLease lease = resources.weights_->host_expert_cache->acquire(
-                        layer_index, seed, [&](std::span<std::byte> payload) {
-                            if (!resources.weights_->expert_source) {
-                                throw std::runtime_error(
-                                    "CUDA expert source is not initialized");
-                            }
-                            resources.weights_->expert_source->read(
-                                layer_index, seed, payload);
-                        });
-                    controller->cache->promote(
-                        seed, seed,
-                        reinterpret_cast<const __nv_bfloat16*>(lease.payload()),
-                        reinterpret_cast<const __nv_bfloat16*>(
-                            lease.payload() + location.w1.bytes + location.w3.bytes),
-                        controller->transfer_stream->get());
-                    auto event = std::make_unique<CudaEvent>();
-                    event->record(controller->transfer_stream->get());
-                    controller->inflight_transfers.push_back(
-                        {std::move(lease), std::move(event)});
-                }
-            }
-            CELEG_CUDA(cudaStreamSynchronize(controller->transfer_stream->get()));
-            controller->inflight_transfers.clear();
+            CELEG_CUDA(cudaStreamSynchronize(controller.transfer_stream->get()));
+            controller.inflight_transfers.clear();
             moe_weights.storage = install_cuda_expert_controller(
-                model, layer_index, std::move(controller));
+                model, layer_index, std::move(prepared.controller));
         } else {
             moe_weights.storage = bind_cuda_host_expert_residency(
                 model, repo, expert_names, layer_index,
