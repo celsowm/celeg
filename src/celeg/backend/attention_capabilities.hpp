@@ -18,6 +18,12 @@ struct AttentionBackendCapabilities {
     bool external_memory = false;
     bool alibi = false;
     bool relative_position_bias = false;
+    bool no_position = false;
+    bool rope = false;
+    bool multi_axis_rope = false;
+    bool standard_execution = false;
+    bool latent_execution = false;
+    bool factorized_latent_execution = false;
 };
 
 inline void validate_attention_backend_capabilities(
@@ -54,6 +60,30 @@ inline void validate_attention_backend_capabilities(
         if (std::holds_alternative<RelativePositionBiasSpec>(attention.bias) &&
             !capabilities.relative_position_bias) {
             throw unsupported("relative-position attention bias");
+        }
+        if (std::holds_alternative<NoPositionEncodingSpec>(attention.position) &&
+            !capabilities.no_position) throw unsupported("attention without position encoding");
+        if (std::holds_alternative<RopePositionSpec>(attention.position) &&
+            !capabilities.rope) throw unsupported("RoPE attention position encoding");
+        if (std::holds_alternative<MultiAxisRopeSpec>(attention.position) &&
+            !capabilities.multi_axis_rope) throw unsupported("multi-axis RoPE attention position encoding");
+
+        switch (compiled->execution.kind) {
+        case AttentionExecutionKind::Standard:
+            if (!capabilities.standard_execution) {
+                throw unsupported("standard attention execution");
+            }
+            break;
+        case AttentionExecutionKind::Latent:
+            if (!capabilities.latent_execution) {
+                throw unsupported("latent attention execution");
+            }
+            break;
+        case AttentionExecutionKind::FactorizedLatent:
+            if (!capabilities.factorized_latent_execution) {
+                throw unsupported("factorized latent attention execution");
+            }
+            break;
         }
     }
 }
