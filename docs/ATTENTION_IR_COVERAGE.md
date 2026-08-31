@@ -29,11 +29,11 @@ That is not the same as saying the complete `AttentionSpec` IR is implemented en
 The largest remaining semantic gaps are:
 
 1. external-memory / cross-attention lifecycle and execution;
-2. CUDA relative-position bias tables;
+2. relative-position bias tables on CUDA and Metal;
 3. formal backend/mode coverage for non-decoder-oriented patterns, especially bidirectional and Prefix-LM;
-4. extending Metal beyond its now-explicit causal/sliding + RoPE + standard-attention contract.
+4. extending Metal beyond its now-explicit causal/sliding + RoPE + ALiBi + standard-attention contract.
 
-Metal is no longer treated as unaudited by default. Its runtime now has explicit full-causal and sliding-window paths over ordinary Q/K/V attention, while unsupported pattern, bias, multi-axis, sharing, transform, and latent semantics are rejected during model initialization rather than being silently executed as causal attention.
+Metal is no longer treated as unaudited by default. Its runtime now has explicit full-causal and sliding-window paths over ordinary Q/K/V attention, including ALiBi, while unsupported pattern, relative-bias, multi-axis, sharing, transform, and latent semantics are rejected during model initialization rather than being silently executed as causal attention.
 
 ## IR surface
 
@@ -91,7 +91,7 @@ The table below is deliberately conservative. `?` means "prove it" rather than "
 | Prefix-LM | ✓ | ✓ | △ | ✗ |
 | BlockSparse | ✓ | ✓ | △ | ✗ |
 | DynamicSparse | ✓ | ✓ | △ | ✗ |
-| ALiBi | ✓ | ✓ | ✓ | ✗ |
+| ALiBi | ✓ | ✓ | ✓ | ✓ |
 | Relative-position bias | ✓ | ✓ | ✗ | ✗ |
 | RoPE | ✓ | ✓ | ✓ | ✓ |
 | M-RoPE, ordinary attention | ✓ | ? | ✓ | ✗ |
@@ -145,6 +145,7 @@ The runtime now supports:
 
 - full causal attention;
 - sliding-window attention in token/decode and batched prefill paths;
+- ALiBi in both full-causal and sliding-window paths;
 - ordinary private KV state;
 - RoPE;
 - standard attention execution;
@@ -153,10 +154,12 @@ The runtime now supports:
 
 Sliding-window execution uses the compiled `SlidingWindowPattern::window` directly rather than copying it into `MetalModel::Impl::Layer`. Separate normal and cooperative kernels exist for both token/decode and batched prefill; each query reads keys starting at `max(0, sequence_length - window)`.
 
+ALiBi uses the same semantic formula as CPU, `-slope[head] * abs(query_position - key_position)`, and applies the bias before softmax. Per-head slopes are materialized once into a Metal-owned buffer and reused by decode and batched-prefill kernels rather than copied for every dispatch.
+
 The following semantics are explicitly rejected before device/pipeline setup rather than silently degrading to another attention mode:
 
 - bidirectional, Prefix-LM, BlockSparse, and DynamicSparse patterns;
-- ALiBi and relative-position bias;
+- relative-position bias;
 - no-position and M-RoPE modes;
 - external-memory sources;
 - shared KV publisher/consumer modes;
@@ -303,13 +306,12 @@ Extend it only by carrying each semantic fact through execution explicitly and t
 Suggested order:
 
 1. true layout/paging capability declaration;
-2. ALiBi;
-3. relative bias;
-4. M-RoPE;
-5. shared KV;
-6. sparse patterns;
-7. latent attention;
-8. external memory after the backend-neutral lifecycle exists.
+2. relative bias;
+3. M-RoPE;
+4. shared KV;
+5. sparse patterns;
+6. latent attention;
+7. external memory after the backend-neutral lifecycle exists.
 
 Every newly supported cell must move from `✗`/`△` to `✓` only with a named implementation path and test.
 
