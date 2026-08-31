@@ -55,10 +55,11 @@ const LinearWeight* WeightLoader::load_linear_weight(
     }
     const int rows = static_cast<int>(expected[0]);
     const int cols = static_cast<int>(expected[1]);
-    const MaterializationPlan plan = plan_linear_materialization(
-        *source, weight_mode, name, rows, cols);
     return commit_linear(
-        name, materialize_linear(plan, weights_->memory_kind), rows, cols);
+        name,
+        materialize_linear(*source, weight_mode, name, rows, cols,
+                           weights_->memory_kind),
+        rows, cols);
 }
 
 const LinearWeight* WeightLoader::load_concat_linear_weight(
