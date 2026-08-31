@@ -66,21 +66,6 @@ void CudaCompiledModel::run_token_latent_attention_paged(
 void CudaCompiledModel::run_token_attention(
     AttentionLayer& attention, const CompiledLayerProgram& semantics,
     int layer_index, const TokenKvPolicy& kv) {
-    const auto* compiled_attention =
-        std::get_if<CompiledAttentionProgram>(&semantics.mixer);
-    if (!compiled_attention) {
-        throw std::logic_error("CUDA token attention has no compiled attention program");
-    }
-
-    if (compiled_attention->execution.kind != AttentionExecutionKind::Standard) {
-        if (!kv.paged()) {
-            throw std::invalid_argument(
-                "CUDA latent attention is not implemented for contiguous host token execution");
-        }
-        run_token_latent_attention_paged(attention, semantics, layer_index, kv);
-        return;
-    }
-
     const CudaAttentionOwner resolved_owner = resolve_cuda_attention_owner(
         attention, layer_index, resources_.layers_);
     AttentionLayer& owner = *resolved_owner.layer;
