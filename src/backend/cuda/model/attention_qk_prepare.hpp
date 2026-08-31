@@ -30,6 +30,17 @@ struct CudaAttentionQkPreparation {
     cudaStream_t stream = nullptr;
 };
 
+struct CudaPrefillAttentionQkPreparation {
+    const AttentionSpec* layout = nullptr;
+    __nv_bfloat16* query = nullptr;
+    __nv_bfloat16* key = nullptr;
+    const __nv_bfloat16* query_norm = nullptr;
+    const __nv_bfloat16* key_norm = nullptr;
+    float fallback_norm_epsilon = 0.0f;
+    int rows = 0;
+    cudaStream_t stream = nullptr;
+};
+
 struct CudaLatentQkPreparation {
     const AttentionSpec* layout = nullptr;
     __nv_bfloat16* query_rope = nullptr;
@@ -42,6 +53,8 @@ struct CudaLatentQkPreparation {
 };
 
 void prepare_cuda_attention_qk(const CudaAttentionQkPreparation& preparation);
+void prepare_cuda_prefill_attention_qk(
+    const CudaPrefillAttentionQkPreparation& preparation);
 void prepare_cuda_latent_attention_qk(const CudaLatentQkPreparation& preparation);
 
 }
