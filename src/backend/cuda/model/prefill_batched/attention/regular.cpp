@@ -1,6 +1,6 @@
 #include "../../attention_output_gate.hpp"
 #include "../../attention_projection.hpp"
-#include "backend/cuda/attention_norm.hpp"
+#include "../../attention_qk_prepare.hpp"
 
 namespace celeg::prefill_detail {
 
@@ -23,7 +23,6 @@ void run_regular_attention(
     int rows) {
     require_regular_attention_bindings(attention);
 
-    auto& workspace = model.workspace_;
     auto& prof = prefill_phase_profile();
     const AttentionSpec& layout = attention.layout;
     const AttentionSpec& owner_layout = owner.layout;
@@ -34,34 +33,15 @@ void run_regular_attention(
 
     prof.begin(model.stream_.get());
     prepare_cuda_prefill_attention_gate(model, attention, rows);
-    const float qk_epsilon = layout.query_norm
-        ? layout.query_norm->epsilon
-        : (layout.key_norm
-            ? layout.key_norm->epsilon
-            : model.resources_.program_.final_norm.epsilon);
-    if (layout.has_query_key_norm()) {
-        launch_attention_qk_norm(
-            layout,
-            workspace.prefill_q_.data(),
-            attention.key ? workspace.prefill_k_.data() : nullptr,
-            attention.q_norm, attention.k_norm,
-            rows, model.stream_.get());
-    }
-    if (const auto* rope = layout.rope_position()) {
-        launch_dynamic_qk_norm_rope_prefill(
-            workspace.prefill_q_.data(),
-            attention.key ? workspace.prefill_k_.data() : nullptr,
-            nullptr, nullptr,
-            rows, layout.query_heads, layout.key_value_heads, layout.head_dim,
-            static_cast<float>(rope->theta),
-            static_cast<float>(rope->rotary_fraction),
-            qk_epsilon, false,
-            lower_cuda_rope_scaling(*rope), rope->pairing, model.stream_.get());
-    }
-    launch_scale(
-        workspace.prefill_q_.data(),
-        static_cast<size_t>(rows) * layout.query_width(),
-        cuda_query_prescale(layout), model.stream_.get());
+    prepare_cuda_prefill_attention_qk({
+        .layout = &layout,
+        .query = model.workspace_.prefill_q_.data(),
+        .key = attention.key ? model.workspace_.prefill_k_.data() : nullptr,
+        .query_norm = attention.q_norm,
+        .key_norm = attention.k_norm,
+        .fallback_norm_epsilon = model.resources_.program_.final_norm.epsilon,
+        .rows = rows,
+        .stream = model.stream_.get()});
     prof.end(PrefillPhase::RopeKv, model.stream_.get());
 
     prof.begin(model.stream_.get());
