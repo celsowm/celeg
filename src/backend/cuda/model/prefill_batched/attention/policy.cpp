@@ -9,7 +9,9 @@ AttentionCapability select_attention_plan(
         std::holds_alternative<BidirectionalPattern>(attention.layout.pattern);
     const bool prefix_lm =
         std::holds_alternative<PrefixLmPattern>(attention.layout.pattern);
-    const bool strict_visibility = bidirectional || prefix_lm;
+    const bool block_sparse =
+        std::holds_alternative<BlockSparsePattern>(attention.layout.pattern);
+    const bool strict_visibility = bidirectional || prefix_lm || block_sparse;
     AttentionRequest request;
     request.kv_format = model.resources_.options().kv_cache_mode;
     request.operation = AttentionOperation::Prefill;
@@ -38,6 +40,7 @@ void store_and_attend(
     const bool bidirectional =
         std::holds_alternative<BidirectionalPattern>(layout.pattern);
     const auto* prefix_lm = std::get_if<PrefixLmPattern>(&layout.pattern);
+    const auto* block_sparse = std::get_if<BlockSparsePattern>(&layout.pattern);
 
     if (attention.key && attention.value) {
         if (int8_kv) {
@@ -155,7 +158,29 @@ void store_and_attend(
         break;
     }
     case AttentionAlgorithm::Strict:
-        if (int8_kv) {
+        if (block_sparse) {
+            const GqaBlockSparsePattern sparse{
+                .block_size = block_sparse->block_size,
+                .local_blocks = block_sparse->local_blocks,
+                .global_blocks = block_sparse->global_blocks};
+            if (int8_kv) {
+                launch_gqa_prefill_block_sparse_int8({
+                    .query = model.workspace_.prefill_q_.data(),
+                    .kv = int8_kv_view,
+                    .out = model.workspace_.prefill_op_output_.data(),
+                    .geometry = geometry,
+                    .extent = extent,
+                    .stream = model.stream_.get()}, sparse);
+            } else {
+                launch_gqa_prefill_block_sparse({
+                    .query = model.workspace_.prefill_q_.data(),
+                    .kv = bf16_kv,
+                    .out = model.workspace_.prefill_op_output_.data(),
+                    .geometry = geometry,
+                    .extent = extent,
+                    .stream = model.stream_.get()}, sparse);
+            }
+        } else if (int8_kv) {
             launch_gqa_prefill_strict_int8({
                 .query = model.workspace_.prefill_q_.data(),
                 .kv = int8_kv_view,
