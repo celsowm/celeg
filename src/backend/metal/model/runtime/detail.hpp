@@ -281,10 +281,12 @@ struct MetalModel::Impl {
                                   Layer& layer);
     void encode_mamba2(id<MTLComputeCommandEncoder> encoder, Layer& layer);
     void encode_mamba2_layer(id<MTLComputeCommandEncoder> encoder, Layer& layer);
-    void encode_attention(id<MTLComputeCommandEncoder> encoder, Layer& layer);
+    void encode_attention(id<MTLComputeCommandEncoder> encoder, Layer& layer,
+                          const CompiledAttentionProgram& attention);
     void encode_attention_batch(id<MTLComputeCommandEncoder> encoder,
-                                Layer& layer, uint32_t rows,
-                                uint32_t base_position);
+                                Layer& layer,
+                                const CompiledAttentionProgram& attention,
+                                uint32_t rows, uint32_t base_position);
     void encode_dense_feed_forward(id<MTLComputeCommandEncoder> encoder,
                                    Layer& layer);
     void encode_dense_feed_forward_batch(id<MTLComputeCommandEncoder> encoder,
