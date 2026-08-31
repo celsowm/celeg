@@ -94,6 +94,84 @@ void project_cuda_latent_attention_qkv_impl(
     }
 }
 
+struct CudaFactorizedLatentProjectionBuffers {
+    const __nv_bfloat16* input = nullptr;
+    __nv_bfloat16* low_rank_query = nullptr;
+    __nv_bfloat16* query_projection = nullptr;
+    __nv_bfloat16* query_content = nullptr;
+    __nv_bfloat16* query_rope = nullptr;
+    __nv_bfloat16* key = nullptr;
+    __nv_bfloat16* value = nullptr;
+    __nv_bfloat16* key_rope = nullptr;
+    int rows = 1;
+};
+
+void project_cuda_factorized_latent_attention_qkv_impl(
+    CudaCompiledModel& model, AttentionLayer& attention,
+    const CudaFactorizedLatentProjectionBuffers& buffers) {
+    const AttentionSpec& layout = attention.layout;
+    const auto& latent = *layout.latent_state();
+    const auto& factorized = *latent.factorized_projection();
+    const auto& latent_expansion_storage =
+        std::get<Bf16LinearStorage>(attention.latent_expansion->storage);
+    const int hidden = model.resources_.program_.hidden;
+
+    auto native_fanout = model.native_fanout_scope(
+        buffers.input, buffers.rows, hidden);
+    model.linear(
+        buffers.input, *attention.latent_query_projection,
+        buffers.low_rank_query, buffers.rows, factorized.query_rank, hidden);
+    launch_rmsnorm(
+        buffers.low_rank_query, attention.latent_query_norm,
+        buffers.low_rank_query, buffers.rows, factorized.query_rank,
+        factorized.query_latent_norm.epsilon, model.stream_.get());
+    model.linear(
+        buffers.low_rank_query, *attention.latent_query_expansion,
+        buffers.query_projection, buffers.rows,
+        layout.query_heads * (latent.nope_head_dim + latent.rope_head_dim),
+        factorized.query_rank);
+    launch_factorized_latent_query({
+        .query_projection = buffers.query_projection,
+        .expansion = latent_expansion_storage.data,
+        .query_content = buffers.query_content,
+        .rows = buffers.rows,
+        .query_heads = layout.query_heads,
+        .query_nope = latent.nope_head_dim,
+        .query_rope_dim = latent.rope_head_dim,
+        .latent_rank = latent.latent_rank,
+        .stream = model.stream_.get()});
+    launch_factorized_latent_rope({
+        .query_projection = buffers.query_projection,
+        .query_rope = buffers.query_rope,
+        .rows = buffers.rows,
+        .query_heads = layout.query_heads,
+        .query_nope = latent.nope_head_dim,
+        .query_rope_dim = latent.rope_head_dim,
+        .stream = model.stream_.get()});
+    model.linear(
+        buffers.input, *attention.latent_key_projection,
+        buffers.query_projection, buffers.rows,
+        latent.latent_rank + latent.rope_head_dim, hidden);
+    launch_rmsnorm(
+        buffers.query_projection, attention.latent_key_norm,
+        buffers.key, buffers.rows, latent.latent_rank,
+        factorized.key_latent_norm.epsilon, model.stream_.get());
+    CELEG_CUDA(cudaMemcpyAsync(
+        buffers.value, buffers.key,
+        static_cast<size_t>(buffers.rows) * latent.latent_rank *
+            sizeof(__nv_bfloat16),
+        cudaMemcpyDeviceToDevice, model.stream_.get()));
+    CELEG_CUDA(cudaMemcpy2DAsync(
+        buffers.key_rope,
+        static_cast<size_t>(latent.rope_head_dim) * sizeof(__nv_bfloat16),
+        buffers.query_projection + latent.latent_rank,
+        static_cast<size_t>(latent.latent_rank + latent.rope_head_dim) *
+            sizeof(__nv_bfloat16),
+        static_cast<size_t>(latent.rope_head_dim) * sizeof(__nv_bfloat16),
+        static_cast<size_t>(buffers.rows), cudaMemcpyDeviceToDevice,
+        model.stream_.get()));
+}
+
 void project_cuda_prefill_attention_output_impl(
     CudaCompiledModel& model, AttentionLayer& attention,
     const CompiledLayerProgram& semantics, int rows, int input_width) {
@@ -171,6 +249,34 @@ void project_cuda_prefill_latent_attention_qkv(
     CudaCompiledModel& model, AttentionLayer& attention, int rows) {
     project_cuda_latent_attention_qkv_impl(model, attention, {
         .input = model.workspace_.prefill_normed_.data(),
+        .query_content = model.workspace_.prefill_latent_query_content_.data(),
+        .query_rope = model.workspace_.prefill_latent_query_rope_.data(),
+        .key = model.workspace_.prefill_latent_key_.data(),
+        .value = model.workspace_.prefill_latent_value_.data(),
+        .key_rope = model.workspace_.prefill_latent_key_rope_.data(),
+        .rows = rows});
+}
+
+void project_cuda_factorized_latent_attention_qkv(
+    CudaCompiledModel& model, AttentionLayer& attention) {
+    project_cuda_factorized_latent_attention_qkv_impl(model, attention, {
+        .input = model.workspace_.normed_.data(),
+        .low_rank_query = model.workspace_.latent_projection_.data(),
+        .query_projection = model.workspace_.qkv_output_.data(),
+        .query_content = model.workspace_.latent_query_content_.data(),
+        .query_rope = model.workspace_.latent_query_rope_.data(),
+        .key = model.workspace_.latent_key_.data(),
+        .value = model.workspace_.latent_value_.data(),
+        .key_rope = model.workspace_.latent_key_rope_.data(),
+        .rows = 1});
+}
+
+void project_cuda_prefill_factorized_latent_attention_qkv(
+    CudaCompiledModel& model, AttentionLayer& attention, int rows) {
+    project_cuda_factorized_latent_attention_qkv_impl(model, attention, {
+        .input = model.workspace_.prefill_normed_.data(),
+        .low_rank_query = model.workspace_.prefill_latent_projection_.data(),
+        .query_projection = model.workspace_.prefill_qkv_.data(),
         .query_content = model.workspace_.prefill_latent_query_content_.data(),
         .query_rope = model.workspace_.prefill_latent_query_rope_.data(),
         .key = model.workspace_.prefill_latent_key_.data(),
