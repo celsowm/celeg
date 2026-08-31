@@ -150,8 +150,8 @@ void MetalModel::Impl::encode_prefill_batch(
                              model.graph.embedding_transform.post_norm->epsilon);
         set_buffer(encoder, batch_normed, 0);
         set_buffer(encoder, batch_hidden, 1);
-        set_bytes(encoder, &hidden_width, sizeof(hidden_width), 2);
-        dispatch(encoder, "celeg_copy_batch", hidden_width);
+        set_bytes(encoder, &count, sizeof(count), 2);
+        dispatch(encoder, "celeg_copy_batch", count);
     }
 
     for (size_t layer_index = 0; layer_index < layers.size(); ++layer_index) {
