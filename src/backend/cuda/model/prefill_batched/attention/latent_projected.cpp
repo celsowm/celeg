@@ -12,7 +12,6 @@ void run_projected_latent_attention(
     auto& prof = prefill_phase_profile();
     const AttentionSpec& layout = attention.layout;
     const auto& latent = *layout.latent_state();
-    const int hidden = model.resources_.program_.hidden;
 
     prof.begin(model.stream_.get());
     project_cuda_prefill_latent_attention_qkv(model, attention, rows);
@@ -72,16 +71,8 @@ void run_projected_latent_attention(
     prof.end(PrefillPhase::Attention, model.stream_.get());
 
     prof.begin(model.stream_.get());
-    const bool fuse_residual = model.resources_.options().fused_residuals &&
-        !semantics.mixer_norm.after.has_value() &&
-        !std::holds_alternative<std::monostate>(semantics.feed_forward);
-    model.linear(
-        workspace.prefill_op_output_.data(), *attention.out,
-        workspace.prefill_hidden_.data(), rows, hidden,
-        layout.latent_query_content_width(), fuse_residual ? 1.0f : 0.0f);
-    launch_scale(
-        workspace.prefill_hidden_.data(), rows * hidden,
-        semantics.residual.multiplier, model.stream_.get());
+    project_cuda_prefill_latent_attention_output(
+        model, attention, semantics, rows);
     prof.end(PrefillPhase::AttnOut, model.stream_.get());
 }
 
