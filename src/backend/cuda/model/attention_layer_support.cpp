@@ -34,6 +34,30 @@ CudaQkvProjectionView make_cuda_qkv_projection_view(
         .query_projection_width = query_projection_width};
 }
 
+const __nv_bfloat16* require_cuda_factorized_latent_bindings(
+    const AttentionLayer& attention) {
+    const auto* latent = attention.layout.latent_state();
+    if (!latent || !latent->factorized_projection() ||
+        !attention.latent_query_projection ||
+        !attention.latent_query_expansion ||
+        !attention.latent_query_norm ||
+        !attention.latent_key_projection ||
+        !attention.latent_key_norm ||
+        !attention.latent_expansion ||
+        !attention.gate || !attention.out) {
+        throw std::logic_error(
+            "CUDA factorized latent attention has incomplete bindings");
+    }
+
+    const auto* expansion =
+        std::get_if<Bf16LinearStorage>(&attention.latent_expansion->storage);
+    if (!expansion || !expansion->data) {
+        throw std::logic_error(
+            "CUDA factorized latent attention requires BF16 latent expansion storage");
+    }
+    return expansion->data;
+}
+
 Bf16KvView cuda_bf16_kv_view(AttentionLayer& owner) {
     return {
         .keys = owner.key_cache_bf16(),
