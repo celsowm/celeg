@@ -139,7 +139,7 @@ bool CpuCapabilities::supports(CpuIsa isa) const {
         case CpuIsa::Avx2: return avx2;
         case CpuIsa::AvxVnni: return avx_vnni;
         case CpuIsa::Avx512Vnni:
-            return avx512f && avx512bw && avx512vl && avx512_vnni;
+            return avx2 && avx_vnni && avx512f && avx512bw && avx512vl && avx512_vnni;
         case CpuIsa::AmxInt8: return amx_tile && amx_int8;
         case CpuIsa::Neon: return neon;
         case CpuIsa::DotProd: return dotprod;
