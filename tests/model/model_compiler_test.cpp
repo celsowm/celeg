@@ -221,8 +221,14 @@ int main() {
     celeg::ResolvedModel unsupported_source = model;
     std::get<celeg::AttentionSpec>(unsupported_source.graph.layers[0].mixer).key_value_source =
         celeg::ExternalMemorySource{0};
-    const auto external_cpu = celeg::CpuModelCompiler{}.compile(unsupported_source);
-    CELEG_TEST_CHECK(compiled_attention(external_cpu.layers[0]).uses_external_memory());
+    bool cpu_external_rejected = false;
+    try { (void)celeg::CpuModelCompiler{}.compile(unsupported_source); }
+    catch (const std::invalid_argument&) { cpu_external_rejected = true; }
+    CELEG_TEST_CHECK(cpu_external_rejected);
+    bool cuda_external_rejected = false;
+    try { (void)celeg::CudaModelCompiler{}.compile(unsupported_source); }
+    catch (const std::invalid_argument&) { cuda_external_rejected = true; }
+    CELEG_TEST_CHECK(cuda_external_rejected);
 
     celeg::RopePositionSpec linear{10000.0, 1.0,
         celeg::LinearRopeScaling{2.0}};
