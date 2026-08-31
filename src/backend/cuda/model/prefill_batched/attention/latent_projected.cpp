@@ -1,3 +1,5 @@
+#include "../../attention_kv_store.hpp"
+#include "../../attention_latent_dispatch.hpp"
 #include "../../attention_projection.hpp"
 #include "../../attention_qk_prepare.hpp"
 
@@ -33,39 +35,8 @@ void run_projected_latent_attention(
     prof.end(PrefillPhase::RopeKv, model.stream_.get());
 
     prof.begin(model.stream_.get());
-    if (attention.latent_key) {
-        launch_store_latent_prefill(
-            workspace.prefill_latent_key_.data(),
-            workspace.prefill_latent_value_.data(),
-            attention.latent_key_rope && latent.decoupled_rope &&
-                    latent.rope_head_dim != 0
-                ? workspace.prefill_latent_key_rope_.data()
-                : nullptr,
-            owner.latent_key_cache_ptr(), owner.latent_value_cache_ptr(),
-            owner.latent_key_rope_cache_ptr(), rows, latent.latent_rank,
-            latent.decoupled_rope ? latent.rope_head_dim : 0,
-            model.stream_.get());
-    }
-    launch_latent_attention_prefill({
-        .query = {
-            .content = workspace.prefill_latent_query_content_.data(),
-            .rope = layout.latent_query_rope_width() != 0
-                ? workspace.prefill_latent_query_rope_.data()
-                : nullptr},
-        .kv = {
-            .keys = owner.latent_key_cache_ptr(),
-            .values = owner.latent_value_cache_ptr(),
-            .key_rope = owner.latent_key_rope_cache_ptr()},
-        .out = workspace.prefill_op_output_.data(),
-        .extent = {.rows = rows},
-        .alibi_slopes = attention.alibi_slopes.data(),
-        .geometry = {
-            .query_heads = layout.query_heads,
-            .latent_rank = latent.latent_rank,
-            .rotary_width = latent.decoupled_rope ? latent.rope_head_dim : 0,
-            .score_scale = layout.query_scale,
-            .sliding_window = layout.sliding_window_size()},
-        .stream = model.stream_.get()});
+    store_cuda_latent_kv_prefill(model, attention, owner, rows);
+    dispatch_cuda_latent_attention_prefill(model, attention, owner, rows);
     prof.end(PrefillPhase::Attention, model.stream_.get());
 
     prof.begin(model.stream_.get());
