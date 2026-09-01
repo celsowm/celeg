@@ -211,8 +211,10 @@ struct AttentionSpec {
     int query_width() const { return query_heads * head_dim; }
     int output_gate_width() const {
         if (!output_gate.has_value() || output_gate->packed_with_query) return 0;
-        return output_gate->granularity == AttentionGateGranularity::HeadWise
-            ? query_heads : query_width();
+        if (output_gate->granularity == AttentionGateGranularity::HeadWise) {
+            return query_heads;
+        }
+        return uses_latent_state() ? latent_output_width() : query_width();
     }
     int query_projection_width() const {
         return output_gate.has_value() && output_gate->packed_with_query
