@@ -19,6 +19,9 @@ celeg::CompiledLayerProgram layer_with(celeg::AttentionSpec attention) {
     celeg::CompiledAttentionProgram compiled;
     compiled.semantics = std::move(attention);
     compiled.execution.kind = celeg::AttentionExecutionKind::Standard;
+    compiled.execution.has_key_value =
+        !std::holds_alternative<celeg::SharedKvConsumer>(
+            compiled.semantics.kv_sharing);
     celeg::CompiledLayerProgram layer;
     layer.mixer = std::move(compiled);
     return layer;
@@ -62,13 +65,23 @@ int main() {
             attention_with_sharing(celeg::SharedKvPublisher{7})));
         program.layers.push_back(layer_with(
             attention_with_sharing(celeg::SharedKvConsumer{7})));
-        CELEG_TEST_CHECK(rejects(std::move(program)));
+        CELEG_TEST_CHECK(!rejects(std::move(program)));
     }
     {
         celeg::CompiledModelProgram program;
         auto publisher = attention_with_sharing(celeg::SharedKvPublisher{7});
         auto consumer = attention_with_sharing(celeg::SharedKvConsumer{7});
         consumer.key_value_heads = 2;
+        program.layers.push_back(layer_with(std::move(publisher)));
+        program.layers.push_back(layer_with(std::move(consumer)));
+        CELEG_TEST_CHECK(rejects(std::move(program)));
+    }
+    {
+        celeg::CompiledModelProgram program;
+        auto publisher = attention_with_sharing(celeg::SharedKvPublisher{7});
+        auto consumer = attention_with_sharing(celeg::SharedKvConsumer{7});
+        consumer.output_transform =
+            celeg::OrthogonalizeCurrentValueSpec{1.0e-6f};
         program.layers.push_back(layer_with(std::move(publisher)));
         program.layers.push_back(layer_with(std::move(consumer)));
         CELEG_TEST_CHECK(rejects(std::move(program)));
