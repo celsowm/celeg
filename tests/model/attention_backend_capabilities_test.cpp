@@ -199,7 +199,7 @@ int main() {
     CELEG_TEST_CHECK(metal_rejects([](auto& attention) {
         attention.key_value_source = celeg::ExternalMemorySource{0};
     }));
-    CELEG_TEST_CHECK(metal_rejects([](auto& attention) {
+    CELEG_TEST_CHECK(!metal_rejects([](auto& attention) {
         attention.kv_sharing = celeg::SharedKvPublisher{1};
     }));
     CELEG_TEST_CHECK(metal_rejects([](auto& attention) {
