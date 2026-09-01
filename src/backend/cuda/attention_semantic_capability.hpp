@@ -13,6 +13,13 @@ inline bool cuda_constrained_standard_pattern(const AttentionSpec& attention) {
            std::holds_alternative<DynamicSparsePattern>(attention.pattern);
 }
 
+inline bool cuda_constrained_pattern_bias_supported(
+    const AttentionSpec& attention) {
+    if (std::holds_alternative<NoAttentionBiasSpec>(attention.bias)) return true;
+    return std::holds_alternative<BidirectionalPattern>(attention.pattern) &&
+           std::holds_alternative<RelativePositionBiasSpec>(attention.bias);
+}
+
 inline void validate_cuda_attention_semantics(
     const CompiledAttentionProgram& compiled) {
     const AttentionSpec& attention = compiled.semantics;
@@ -41,9 +48,9 @@ inline void validate_cuda_attention_semantics(
     }
 
     if (cuda_constrained_standard_pattern(attention)) {
-        if (!std::holds_alternative<NoAttentionBiasSpec>(attention.bias)) {
+        if (!cuda_constrained_pattern_bias_supported(attention)) {
             throw std::invalid_argument(
-                "CUDA constrained attention patterns currently support no attention bias");
+                "CUDA constrained attention pattern does not support this attention bias");
         }
         if (compiled.execution.kind != AttentionExecutionKind::Standard) {
             throw std::invalid_argument(
@@ -51,16 +58,10 @@ inline void validate_cuda_attention_semantics(
         }
     }
 
-    if (const auto* relative =
-            std::get_if<RelativePositionBiasSpec>(&attention.bias)) {
-        if (relative->bidirectional) {
-            throw std::invalid_argument(
-                "CUDA relative-position bias currently supports unidirectional buckets only");
-        }
-        if (compiled.execution.kind != AttentionExecutionKind::Standard) {
-            throw std::invalid_argument(
-                "CUDA relative-position bias currently supports standard attention only");
-        }
+    if (std::holds_alternative<RelativePositionBiasSpec>(attention.bias) &&
+        compiled.execution.kind != AttentionExecutionKind::Standard) {
+        throw std::invalid_argument(
+            "CUDA relative-position bias currently supports standard attention only");
     }
 
     if (compiled.execution.kind != AttentionExecutionKind::Standard) {
