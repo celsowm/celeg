@@ -103,14 +103,19 @@ void MetalModel::prefill_session(const std::vector<int32_t>& tokens,
     id<MTLCommandBuffer> command_buffer = nil;
     id<MTLComputeCommandEncoder> encoder = nil;
     (*impl_).begin_commands(command_buffer, encoder);
-    for (size_t index = 0; index < tokens.size(); ++index) {
-        const int32_t token = tokens[index];
+    for (const int32_t token : tokens) {
         if (token < 0 || token >= (*impl_).model.topology.dims.vocab_size) {
             throw std::invalid_argument("Metal token out of range");
         }
         (*impl_).seen[static_cast<size_t>(token)] = 1;
-        (*impl_).encode_token(command_buffer, encoder, token,
-                              &embeddings.rope_positions[index]);
+    }
+    if ((*impl_).supports_prefill_batch()) {
+        (*impl_).encode_prefill_batch(encoder, tokens, embeddings.rope_positions);
+    } else {
+        for (size_t index = 0; index < tokens.size(); ++index) {
+            (*impl_).encode_token(command_buffer, encoder, tokens[index],
+                                  &embeddings.rope_positions[index]);
+        }
     }
     (*impl_).next_rope_position = embeddings.next_rope_position;
     (*impl_).finish_commands(command_buffer, encoder);
