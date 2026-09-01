@@ -18,7 +18,7 @@ CompiledModelProgram CudaModelCompiler::compile(const ResolvedModel& model) cons
          .dynamic_sparse = true,
          .external_memory = false,
          .alibi = true,
-         .relative_position_bias = false,
+         .relative_position_bias = true,
          .no_position = true,
          .rope = true,
          .multi_axis_rope = true,
