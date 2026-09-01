@@ -7,14 +7,16 @@ __global__ void gqa_decode_paged_batch_kernel(
     __nv_bfloat16* out, const int32_t* positions, int rows,
     int attention_slot, int page_tokens, size_t page_vector_elements,
     size_t layer_vector_offset,
-    int q_heads, int kv_heads, int head_dim, int sliding_window) {
+    int q_heads, int kv_heads, int head_dim, int sliding_window,
+    int prefix_length) {
     const int flat = blockIdx.x;
     const int row = flat / q_heads;
     const int query_head = flat % q_heads;
     if (row >= rows) return;
     const int lane = threadIdx.x;
     const int kv_head = query_head / (q_heads / kv_heads);
-    const int seq_len = positions[row] + 1;
+    const int seq_len = prefix_length > 0 && positions[row] < prefix_length
+        ? prefix_length : positions[row] + 1;
     const int first_token = sliding_window > 0 ? max(0, seq_len - sliding_window) : 0;
     const __nv_bfloat16* query = q +
         (static_cast<size_t>(row) * q_heads + query_head) * head_dim;
@@ -174,14 +176,16 @@ __global__ void gqa_decode_int8_paged_batch_kernel(
     int attention_slot, int page_tokens, size_t page_vector_elements,
     size_t layer_vector_offset, size_t page_scale_elements,
     size_t layer_scale_offset,
-    int q_heads, int kv_heads, int head_dim, int sliding_window) {
+    int q_heads, int kv_heads, int head_dim, int sliding_window,
+    int prefix_length) {
     const int flat = blockIdx.x;
     const int row = flat / q_heads;
     const int query_head = flat % q_heads;
     if (row >= rows) return;
     const int lane = threadIdx.x;
     const int kv_head = query_head / (q_heads / kv_heads);
-    const int seq_len = positions[row] + 1;
+    const int seq_len = prefix_length > 0 && positions[row] < prefix_length
+        ? prefix_length : positions[row] + 1;
     const int first_token = sliding_window > 0 ? max(0, seq_len - sliding_window) : 0;
     const __nv_bfloat16* query = q +
         (static_cast<size_t>(row) * q_heads + query_head) * head_dim;
@@ -495,14 +499,16 @@ void launch_gqa_decode_paged_batch(const GqaPagedArgs& args) {
             index.page_table_stride, args.out, args.positions, args.rows,
             index.attention_slot, index.page_tokens, index.page_vector_elements,
             index.layer_vector_offset,
-            g.q_heads, g.kv_heads, g.head_dim, g.sliding_window);
+            g.q_heads, g.kv_heads, g.head_dim, g.sliding_window,
+            g.prefix_length);
     } else {
         gqa_decode_paged_batch_kernel<true><<<args.rows * g.q_heads, 64, 0, args.stream>>>(
             args.query, args.kv.keys, args.kv.values, index.page_tables,
             index.page_table_stride, args.out, args.positions, args.rows,
             index.attention_slot, index.page_tokens, index.page_vector_elements,
             index.layer_vector_offset,
-            g.q_heads, g.kv_heads, g.head_dim, g.sliding_window);
+            g.q_heads, g.kv_heads, g.head_dim, g.sliding_window,
+            g.prefix_length);
     }
     CELEG_KERNEL_CHECK();
 }
@@ -519,7 +525,8 @@ void launch_gqa_decode_int8_paged_batch(const GqaPagedInt8Args& args) {
             index.page_tokens, index.page_vector_elements,
             index.layer_vector_offset, scales.page_scale_elements,
             scales.layer_scale_offset,
-            g.q_heads, g.kv_heads, g.head_dim, g.sliding_window);
+            g.q_heads, g.kv_heads, g.head_dim, g.sliding_window,
+            g.prefix_length);
     } else {
         gqa_decode_int8_paged_batch_kernel<true><<<args.rows * g.q_heads, 64, 0, args.stream>>>(
             args.query, args.kv.keys, args.kv.values, args.kv.key_scales,
@@ -528,7 +535,8 @@ void launch_gqa_decode_int8_paged_batch(const GqaPagedInt8Args& args) {
             index.page_tokens, index.page_vector_elements,
             index.layer_vector_offset, scales.page_scale_elements,
             scales.layer_scale_offset,
-            g.q_heads, g.kv_heads, g.head_dim, g.sliding_window);
+            g.q_heads, g.kv_heads, g.head_dim, g.sliding_window,
+            g.prefix_length);
     }
     CELEG_KERNEL_CHECK();
 }
