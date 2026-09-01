@@ -29,6 +29,7 @@ endforeach()
 
 foreach(test_name IN ITEMS
     attention_semantics_test
+    cpu_attention_gate_test
     cpu_expert_cache_test
     cpu_batch_scheduler_test
     cpu_moe_route_test)
