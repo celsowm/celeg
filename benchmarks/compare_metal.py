@@ -57,6 +57,7 @@ def parse_args():
         type=Path,
         default=Path("benchmarks/results/metal_llama_cpp_compare.json"),
     )
+    parser.add_argument("--model", dest="models", action="append", metavar="FILENAME")
     parser.add_argument("--workload", choices=["interactive", "throughput", "all"], default="all")
     parser.add_argument("--context", type=int)
     parser.add_argument("--prompt-tokens", type=int)
@@ -67,15 +68,19 @@ def parse_args():
     return parser.parse_args()
 
 
-def resolve_models(model_dir):
+def resolve_models(model_dir, requested):
     models = sorted(model_dir.glob("snapshots/*/*.gguf"))
     if not models:
         raise SystemExit(f"no GGUF files found under {model_dir}")
     names = {model.name for model in models}
-    missing = sorted(EXPECTED_MODELS - names)
+    selected = set(requested or EXPECTED_MODELS)
+    unknown = sorted(selected - EXPECTED_MODELS)
+    if unknown:
+        raise SystemExit(f"unsupported model selection: {', '.join(unknown)}")
+    missing = sorted(selected - names)
     if missing:
         raise SystemExit(f"missing expected GGUF files: {', '.join(missing)}")
-    return [model for model in models if model.name in EXPECTED_MODELS]
+    return [model for model in models if model.name in selected]
 
 
 def run_json(command):
@@ -124,9 +129,15 @@ def llama_rows(rows, prompt_tokens, decode_tokens):
     prompt = selected[(prompt_tokens, 0)]
     combined_ms = [value / 1.0e6 for value in combined["samples_ns"]]
     prompt_ms = [value / 1.0e6 for value in prompt["samples_ns"]]
+    if len(combined_ms) != len(prompt_ms):
+        raise RuntimeError("llama.cpp prompt and combined sample counts differ")
+    decode_ms = [total - prefill for total, prefill in zip(combined_ms, prompt_ms)]
+    if any(value <= 0.0 for value in decode_ms):
+        raise RuntimeError("llama.cpp decode measurement is not positive")
     return {
         "combined": distribution(combined_ms, prompt_tokens + decode_tokens),
         "prefill_batched": distribution(prompt_ms, prompt_tokens),
+        "decode": distribution(decode_ms, decode_tokens) if decode_tokens else None,
         "raw": rows,
     }
 
@@ -191,6 +202,7 @@ def collect_workload(model, args, workload):
     celeg_prefill = [sample["prefill"]["samples_milliseconds"][0] for sample in celeg_samples]
     celeg_decode = [sample["decode"]["samples_milliseconds"][0] for sample in celeg_samples]
     llama_prompt = [sample["prefill_batched"]["samples_milliseconds"][0] for sample in llama_samples]
+    llama_decode = [sample["decode"]["samples_milliseconds"][0] for sample in llama_samples]
     celeg_distribution = distribution(celeg_combined, prompt_tokens + decode_tokens)
     llama_distribution = distribution(llama_combined, prompt_tokens + decode_tokens)
     return {
@@ -205,6 +217,7 @@ def collect_workload(model, args, workload):
         "llama_cpp": {
             "combined": llama_distribution,
             "prefill_batched": distribution(llama_prompt, prompt_tokens),
+            "decode": distribution(llama_decode, decode_tokens),
             "samples": llama_samples,
         },
         "promotion": {
@@ -219,6 +232,14 @@ def collect_workload(model, args, workload):
             "q1_celeg_at_least_llama": (
                 celeg_distribution["lower_quartile_tokens_per_second"] >=
                 llama_distribution["lower_quartile_tokens_per_second"]
+            ),
+            "prefill_median_at_least_llama": (
+                distribution(celeg_prefill, prompt_tokens)["median_tokens_per_second"] >=
+                distribution(llama_prompt, prompt_tokens)["median_tokens_per_second"]
+            ),
+            "decode_median_at_least_llama": (
+                distribution(celeg_decode, decode_tokens)["median_tokens_per_second"] >=
+                distribution(llama_decode, decode_tokens)["median_tokens_per_second"]
             ),
         },
     }
@@ -246,7 +267,7 @@ def celeg_result(result):
 
 def main():
     args = parse_args()
-    models = resolve_models(args.model_dir)
+    models = resolve_models(args.model_dir, args.models)
     results = []
     workloads = workload_args(args)
     try:
@@ -285,7 +306,13 @@ def main():
             if entry["status"] == "ok":
                 celeg_rate = entry["celeg"]["combined"]["median_tokens_per_second"]
                 llama_rate = entry["llama_cpp"]["combined"]["median_tokens_per_second"]
-                print(f"{model.name} [{workload['name']}]: Celeg {celeg_rate:.2f} tok/s | llama.cpp {llama_rate:.2f}")
+                celeg_decode = entry["celeg"]["decode"]["median_tokens_per_second"]
+                llama_decode = entry["llama_cpp"]["decode"]["median_tokens_per_second"]
+                print(
+                    f"{model.name} [{workload['name']}]: "
+                    f"Celeg {celeg_rate:.2f} tok/s ({celeg_decode:.2f} decode) | "
+                    f"llama.cpp {llama_rate:.2f} tok/s ({llama_decode:.2f} decode)"
+                )
             else:
                 print(f"{model.name} [{workload['name']}]: ERROR {entry['error']}", file=sys.stderr)
 
@@ -299,6 +326,7 @@ def main():
             "warmup": args.warmup,
             "repetitions": args.repetitions,
             "storage_mode": args.storage_mode,
+            "models": [model.name for model in models],
             "llama_cpp": (
                 "-p <prompt> -n 0 -pg <prompt>,<decode> "
                 "-b <prompt> -ub <prompt> "

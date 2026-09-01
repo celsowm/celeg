@@ -99,8 +99,11 @@ MetalModel::MetalModel(const std::string& path, int context,
             newFunctionWithName:@"celeg_matmul_tensor_f16"];
         id<MTLFunction> bf16_function = [(*impl_).pipeline_cache.tensor_library
             newFunctionWithName:@"celeg_matmul_tensor_bf16"];
+        id<MTLFunction> q4k_function = [(*impl_).pipeline_cache.tensor_library
+            newFunctionWithName:@"celeg_matmul_tensor_q4k"];
         NSError* f16_error = nil;
         NSError* bf16_error = nil;
+        NSError* q4k_error = nil;
         if (f16_function) {
             id<MTLComputePipelineState> state =
                 [(*impl_).device newComputePipelineStateWithFunction:f16_function
@@ -119,12 +122,22 @@ MetalModel::MetalModel(const std::string& path, int context,
                 (*impl_).pipeline_cache.tensor_compile_error = ns_string(bf16_error.localizedDescription);
             }
         }
+        if (q4k_function) {
+            id<MTLComputePipelineState> state = [(*impl_).device
+                newComputePipelineStateWithFunction:q4k_function error:&q4k_error];
+            (*impl_).pipeline_cache.tensor_matmul_q4k = state != nil;
+            if (!state && q4k_error) {
+                (*impl_).pipeline_cache.tensor_compile_error = ns_string(q4k_error.localizedDescription);
+            }
+        }
         if (!(*impl_).pipeline_cache.tensor_matmul_f16 &&
-            !(*impl_).pipeline_cache.tensor_matmul_bf16) {
+            !(*impl_).pipeline_cache.tensor_matmul_bf16 &&
+            !(*impl_).pipeline_cache.tensor_matmul_q4k) {
             (*impl_).pipeline_cache.tensor_library = nil;
         }
         if ((*impl_).pipeline_cache.tensor_matmul_f16 ||
-            (*impl_).pipeline_cache.tensor_matmul_bf16) {
+            (*impl_).pipeline_cache.tensor_matmul_bf16 ||
+            (*impl_).pipeline_cache.tensor_matmul_q4k) {
             (*impl_).pipeline_cache.tensor_compile_error.clear();
         }
     }

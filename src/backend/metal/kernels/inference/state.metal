@@ -85,6 +85,43 @@ kernel void celeg_residual_rmsnorm(
     }
 }
 
+kernel void celeg_residual_rmsnorm_save(
+    device const float* input [[buffer(0)]],
+    device const float* residual [[buffer(1)]],
+    device const float* weight [[buffer(2)]],
+    device float* output [[buffer(3)]],
+    device float* next_residual [[buffer(4)]],
+    device float* normed [[buffer(5)]],
+    constant uint& width [[buffer(6)]],
+    constant float& multiplier [[buffer(7)]],
+    constant float& epsilon [[buffer(8)]],
+    uint index [[thread_index_in_threadgroup]],
+    uint lane [[thread_index_in_simdgroup]],
+    uint simd [[simdgroup_index_in_threadgroup]]) {
+    float sum = 0.0f;
+    for (uint i = index; i < width; i += 256) {
+        const float value = input[i] * multiplier + residual[i];
+        sum += value * value;
+    }
+    threadgroup float partial[8];
+    threadgroup float inverse;
+    const float reduced = simd_sum(sum);
+    if (lane == 0) partial[simd] = reduced;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    if (index == 0) {
+        float total = 0.0f;
+        for (uint group = 0; group < 8; ++group) total += partial[group];
+        inverse = rsqrt(total / static_cast<float>(width) + epsilon);
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    for (uint i = index; i < width; i += 256) {
+        const float value = input[i] * multiplier + residual[i];
+        output[i] = value;
+        next_residual[i] = value;
+        normed[i] = value * inverse * weight[i];
+    }
+}
+
 kernel void celeg_copy(device const float* input [[buffer(0)]],
                        device float* output [[buffer(1)]],
                        constant uint& count [[buffer(2)]],

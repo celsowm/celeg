@@ -20,8 +20,8 @@ std::optional<std::string_view> MetalModel::Impl::linear_kernel(
          "celeg_matmul_tensor_bf16", "celeg_embedding_bf16", "celeg_embedding_bf16_batch", nullptr},
         {"celeg_matvec_q4_0", "celeg_matvec_pair_q4_0", "celeg_matmul_q4_0", "celeg_matmul_pair_q4_0", nullptr,
          "celeg_embedding_q4_0", "celeg_embedding_q4_0_batch", nullptr},
-        {"celeg_matvec_q4k", "celeg_matvec_pair_q4k", "celeg_matmul_q4k", "celeg_matmul_pair_q4k", nullptr,
-         "celeg_embedding_q4k", "celeg_embedding_q4k_batch", nullptr},
+        {"celeg_matvec_q4k_blocked", "celeg_matvec_pair_q4k", "celeg_matmul_q4k", "celeg_matmul_pair_q4k", "celeg_matmul_tensor_q4k",
+         "celeg_embedding_q4k", "celeg_embedding_q4k_batch", "celeg_swiglu_matvec_q4k_blocked"},
         {"celeg_matvec_q5k", "celeg_matvec_pair_q5k", "celeg_matmul_q5k", "celeg_matmul_pair_q5k", nullptr,
          "celeg_embedding_q5k", "celeg_embedding_q5k_batch", nullptr},
         {"celeg_matvec_q6k", "celeg_matvec_pair_q6k", "celeg_matmul_q6k", "celeg_matmul_pair_q6k", nullptr,
@@ -218,6 +218,7 @@ bool MetalModel::Impl::encode_matvec_pair(
         first.row_bytes != second.row_bytes) {
         return false;
     }
+    if (first.storage == LinearStorage::Q4K) return false;
     set_buffer(encoder, first.buffer, 0);
     set_buffer(encoder, second.buffer, 1);
     set_buffer(encoder, input, 2);
@@ -247,6 +248,10 @@ bool MetalModel::Impl::encode_swiglu_matvec(
     set_bytes(encoder, &weight.rows, sizeof(weight.rows), 3);
     set_bytes(encoder, &weight.cols, sizeof(weight.cols), 4);
     set_bytes(encoder, &weight.row_bytes, sizeof(weight.row_bytes), 5);
+    if (kernel == "celeg_swiglu_matvec_q4k_blocked") {
+        dispatch_cooperative(encoder, kernel, (weight.rows + 7u) / 8u);
+        return true;
+    }
     id<MTLComputePipelineState> state = pipeline(kernel);
     [encoder setComputePipelineState:state];
     [encoder setThreadgroupMemoryLength:8u * sizeof(float) atIndex:0];
@@ -270,23 +275,28 @@ void MetalModel::Impl::encode_matmul(id<MTLComputeCommandEncoder> encoder,
     const uint32_t stride = output_stride == 0 ? weight.rows : output_stride;
     set_bytes(encoder, &stride, sizeof(stride), 6);
     const bool dense = weight.row_bytes == 0;
-    const bool tensor = dense &&
-        ((weight.storage == LinearStorage::Float16 && pipeline_cache.tensor_matmul_f16) ||
-         (weight.storage == LinearStorage::BFloat16 && pipeline_cache.tensor_matmul_bf16));
+    if (!dense) set_bytes(encoder, &weight.row_bytes, sizeof(weight.row_bytes), 7);
+    const bool tensor =
+        (weight.storage == LinearStorage::Float16 && pipeline_cache.tensor_matmul_f16) ||
+        (weight.storage == LinearStorage::BFloat16 && pipeline_cache.tensor_matmul_bf16) ||
+        (weight.storage == LinearStorage::Q4K && pipeline_cache.tensor_matmul_q4k && rows >= 16);
     if (tensor) {
         const auto kernel = linear_kernel(weight.storage,
                                            LinearOperationKind::MatMulTensor, false);
         if (!kernel) throw std::runtime_error("unsupported Metal tensor matmul binding");
         id<MTLComputePipelineState> state = tensor_pipeline(*kernel);
         [encoder setComputePipelineState:state];
-        [encoder setThreadgroupMemoryLength:64u * 32u * sizeof(uint16_t) atIndex:0];
+        const NSUInteger tile_rows = 64u;
+        const NSUInteger tile_tokens = 128u;
+        const NSUInteger tile_k = 32u;
+        [encoder setThreadgroupMemoryLength:tile_rows * tile_k * sizeof(uint16_t) atIndex:0];
         [encoder dispatchThreadgroups:MTLSizeMake(
-            (weight.rows + 63u) / 64u, (rows + 127u) / 128u, 1)
+            (weight.rows + tile_rows - 1u) / tile_rows,
+            (rows + tile_tokens - 1u) / tile_tokens, 1)
          threadsPerThreadgroup:MTLSizeMake(128, 1, 1)];
         ++command_dispatches;
         return;
     }
-    if (!dense) set_bytes(encoder, &weight.row_bytes, sizeof(weight.row_bytes), 7);
     const auto kernel = linear_kernel(weight.storage, LinearOperationKind::MatMul, false);
     if (!kernel) throw std::runtime_error("unsupported Metal matmul binding");
     const NSUInteger groups = (weight.rows + 7u) / 8u;
@@ -306,6 +316,7 @@ bool MetalModel::Impl::encode_matmul_pair(
         first.row_bytes != second.row_bytes) {
         return false;
     }
+    if (first.storage == LinearStorage::Q4K) return false;
     set_buffer(encoder, first.buffer, 0);
     set_buffer(encoder, second.buffer, 1);
     set_buffer(encoder, input, 2);
@@ -395,6 +406,23 @@ void MetalModel::Impl::encode_residual_rmsnorm(
     set_bytes(encoder, &multiplier, sizeof(multiplier), 6);
     set_bytes(encoder, &epsilon, sizeof(epsilon), 7);
     dispatch_cooperative(encoder, "celeg_residual_rmsnorm", 1);
+}
+
+void MetalModel::Impl::encode_residual_rmsnorm_save(
+    id<MTLComputeCommandEncoder> encoder, id<MTLBuffer> input,
+    id<MTLBuffer> residual, id<MTLBuffer> weight, id<MTLBuffer> output,
+    id<MTLBuffer> next_residual, id<MTLBuffer> normed, uint32_t width,
+    float multiplier, float epsilon) {
+    set_buffer(encoder, input, 0);
+    set_buffer(encoder, residual, 1);
+    set_buffer(encoder, weight, 2);
+    set_buffer(encoder, output, 3);
+    set_buffer(encoder, next_residual, 4);
+    set_buffer(encoder, normed, 5);
+    set_bytes(encoder, &width, sizeof(width), 6);
+    set_bytes(encoder, &multiplier, sizeof(multiplier), 7);
+    set_bytes(encoder, &epsilon, sizeof(epsilon), 8);
+    dispatch_cooperative(encoder, "celeg_residual_rmsnorm_save", 1);
 }
 
 void MetalModel::Impl::encode_rmsnorm_batch(id<MTLComputeCommandEncoder> encoder,

@@ -177,6 +177,7 @@ std::string MetalModel::backend_description() const {
     return std::string("metal-native device=") + (*impl_).device.name.UTF8String +
         " tensor_f16=" + ((*impl_).pipeline_cache.tensor_matmul_f16 ? "yes" : "no") +
         " tensor_bf16=" + ((*impl_).pipeline_cache.tensor_matmul_bf16 ? "yes" : "no") +
+        " tensor_q4k=" + ((*impl_).pipeline_cache.tensor_matmul_q4k ? "yes" : "no") +
         ((*impl_).pipeline_cache.tensor_compile_error.empty()
             ? std::string{} : " tensor_error=" + (*impl_).pipeline_cache.tensor_compile_error);
 }

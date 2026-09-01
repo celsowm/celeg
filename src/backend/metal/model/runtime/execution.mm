@@ -29,11 +29,15 @@ void MetalModel::Impl::encode_token(id<MTLCommandBuffer>& command_buffer,
             dispatch(encoder, "celeg_copy", hidden_width);
         }
 
+        bool normed_ready = false;
         for (size_t layer_index = 0; layer_index < layers.size(); ++layer_index) {
             Layer& layer = layers[layer_index];
             const CompiledLayerProgram& program_layer = program.layers[layer_index];
-            encode_rmsnorm_save(encoder, hidden, residual, layer.operator_norm, normed,
-                           hidden_width, model.graph.final_norm.epsilon);
+            if (!normed_ready) {
+                encode_rmsnorm_save(encoder, hidden, residual, layer.operator_norm, normed,
+                               hidden_width, model.graph.final_norm.epsilon);
+            }
+            normed_ready = false;
 
             switch (layer.mixer_kind) {
                 case Layer::MixerKind::ShortConvolution:
@@ -55,13 +59,20 @@ void MetalModel::Impl::encode_token(id<MTLCommandBuffer>& command_buffer,
 
             const uint32_t count = hidden_width;
             const float mixer_multiplier = 1.0f;
+            const bool last_layer = layer_index + 1 == layers.size();
             if (std::holds_alternative<std::monostate>(program_layer.feed_forward)) {
-                set_buffer(encoder, hidden, 0);
-                set_buffer(encoder, residual, 1);
-                set_buffer(encoder, hidden, 2);
-                set_bytes(encoder, &count, sizeof(count), 3);
-                set_bytes(encoder, &mixer_multiplier, sizeof(mixer_multiplier), 4);
-                dispatch(encoder, "celeg_residual", count);
+                if (last_layer) {
+                    encode_residual_rmsnorm(encoder, hidden, residual, final_norm, hidden,
+                                            normed, hidden_width, mixer_multiplier,
+                                            program.final_norm.epsilon);
+                } else {
+                    Layer& next_layer = layers[layer_index + 1];
+                    encode_residual_rmsnorm_save(
+                        encoder, hidden, residual, next_layer.operator_norm, hidden,
+                        residual, normed, hidden_width, mixer_multiplier,
+                        model.graph.final_norm.epsilon);
+                }
+                normed_ready = true;
                 continue;
             }
 
@@ -73,16 +84,25 @@ void MetalModel::Impl::encode_token(id<MTLCommandBuffer>& command_buffer,
             } else {
                 encode_dense_feed_forward(encoder, layer);
             }
-            set_buffer(encoder, layer.moe ? moe_output : operation, 0);
-            set_buffer(encoder, hidden, 1);
-            set_buffer(encoder, hidden, 2);
-            set_bytes(encoder, &count, sizeof(count), 3);
-            set_bytes(encoder, &mixer_multiplier, sizeof(mixer_multiplier), 4);
-            dispatch(encoder, "celeg_residual", count);
+            id<MTLBuffer> feed_forward_output = layer.moe ? moe_output : operation;
+            if (last_layer) {
+                encode_residual_rmsnorm(encoder, feed_forward_output, hidden, final_norm,
+                                        hidden, normed, hidden_width, mixer_multiplier,
+                                        program.final_norm.epsilon);
+            } else {
+                Layer& next_layer = layers[layer_index + 1];
+                encode_residual_rmsnorm_save(
+                    encoder, feed_forward_output, hidden, next_layer.operator_norm, hidden,
+                    residual, normed, hidden_width, mixer_multiplier,
+                    model.graph.final_norm.epsilon);
+            }
+            normed_ready = true;
         }
 
-        encode_rmsnorm(encoder, hidden, final_norm, normed, hidden_width,
-                       program.final_norm.epsilon);
+        if (!normed_ready) {
+            encode_rmsnorm(encoder, hidden, final_norm, normed, hidden_width,
+                           program.final_norm.epsilon);
+        }
         encode_matvec(encoder, embedding, normed, logits);
         ++position;
 }

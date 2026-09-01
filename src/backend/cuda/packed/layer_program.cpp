@@ -1,5 +1,5 @@
-#include "packed/layer_program.hpp"
-#include "packed/attention_capability.hpp"
+#include "backend/cuda/packed/layer_program.hpp"
+#include "backend/cuda/packed/attention_capability.hpp"
 
 #include <stdexcept>
 #include <type_traits>

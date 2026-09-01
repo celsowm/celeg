@@ -42,6 +42,7 @@ struct MetalPipelineCache {
     id<MTLLibrary> tensor_library = nil;
     bool tensor_matmul_f16 = false;
     bool tensor_matmul_bf16 = false;
+    bool tensor_matmul_q4k = false;
     std::string tensor_compile_error;
     std::unordered_map<std::string, id<MTLComputePipelineState>> pipelines;
 
@@ -265,6 +266,12 @@ struct MetalModel::Impl {
                                  id<MTLBuffer> weight, id<MTLBuffer> output,
                                  id<MTLBuffer> normed, uint32_t width,
                                  float multiplier, float epsilon);
+    void encode_residual_rmsnorm_save(id<MTLComputeCommandEncoder> encoder,
+                                      id<MTLBuffer> input, id<MTLBuffer> residual,
+                                      id<MTLBuffer> weight, id<MTLBuffer> output,
+                                      id<MTLBuffer> next_residual,
+                                      id<MTLBuffer> normed, uint32_t width,
+                                      float multiplier, float epsilon);
     void encode_rmsnorm_batch(id<MTLComputeCommandEncoder> encoder, id<MTLBuffer> input,
                               id<MTLBuffer> weight, id<MTLBuffer> output,
                               uint32_t rows, uint32_t width, float epsilon);
