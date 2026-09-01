@@ -5,6 +5,7 @@ foreach(test_name IN ITEMS
     automatic_inference_test
     layer_dispatch_exhaustiveness_test
     layer_inference_rule_test
+    metal_shared_kv_capability_test
     model_compiler_test
     policy_test
     program_fingerprint_test
