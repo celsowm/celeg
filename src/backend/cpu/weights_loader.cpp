@@ -230,9 +230,11 @@ void CpuCompiledModel::Shared::load_weights() {
                     layer.out = load_matrix(source, reader.get(), writer.get(),
                         tensor_name(weight_requests, TensorRole::AttentionLatentOutput, index),
                         {program.hidden, attention.latent_output_width()});
-                    layer.gate = load_matrix(source, reader.get(), writer.get(),
-                        tensor_name(weight_requests, TensorRole::AttentionGate, index),
-                        {attention.output_gate_width(), program.hidden});
+                    if (attention.output_gate.has_value()) {
+                        layer.gate = load_matrix(source, reader.get(), writer.get(),
+                            tensor_name(weight_requests, TensorRole::AttentionGate, index),
+                            {attention.output_gate_width(), program.hidden});
+                    }
                     return layer;
                 }
                 layer.q = load_matrix(source, reader.get(), writer.get(),
@@ -666,7 +668,9 @@ void CpuCompiledModel::Shared::load_weights() {
             require_matrix(attention.latent_q_expansion, label + ".latent_q_expansion");
             require_matrix(attention.latent_k_projection, label + ".latent_k_projection");
             require_matrix(attention.latent_expansion, label + ".latent_expansion");
-            require_matrix(attention.gate, label + ".gate");
+            if (semantics.output_gate.has_value()) {
+                require_matrix(attention.gate, label + ".gate");
+            }
         } else {
             require_matrix(attention.q, label + ".q");
             const bool owns_key_value =
