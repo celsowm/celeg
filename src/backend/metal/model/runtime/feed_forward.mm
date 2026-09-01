@@ -3,13 +3,15 @@
 namespace celeg {
 
 void MetalModel::Impl::encode_dense_feed_forward(
-    id<MTLComputeCommandEncoder> encoder, Layer& layer) {
+    id<MTLComputeCommandEncoder> encoder, Layer& layer, bool gate_up_ready) {
     const uint32_t intermediate = static_cast<uint32_t>(layer.intermediate);
-    if (!encode_matvec_pair(encoder, layer.ffn_gate, layer.ffn_up, normed,
-                            gate_up, intermediate)) {
-        encode_matvec(encoder, layer.ffn_gate, normed, gate_up, 0);
-        encode_matvec(encoder, layer.ffn_up, normed, gate_up,
-                      static_cast<NSUInteger>(layer.intermediate) * sizeof(float));
+    if (!gate_up_ready) {
+        if (!encode_matvec_pair(encoder, layer.ffn_gate, layer.ffn_up, normed,
+                                gate_up, intermediate)) {
+            encode_matvec(encoder, layer.ffn_gate, normed, gate_up, 0);
+            encode_matvec(encoder, layer.ffn_up, normed, gate_up,
+                          static_cast<NSUInteger>(layer.intermediate) * sizeof(float));
+        }
     }
     if (!encode_swiglu_matvec(encoder, layer.ffn_down, gate_up, operation)) {
         set_buffer(encoder, gate_up, 0);

@@ -530,7 +530,7 @@ void MetalModel::Impl::encode_attention_batch(
             [encoder setComputePipelineState:state];
             [encoder dispatchThreadgroups:MTLSizeMake(query_heads, rows, 1)
                threadsPerThreadgroup:MTLSizeMake(32, 1, 1)];
-            ++command_dispatches;
+            record_dispatch("celeg_attention_batch_relative_bias");
         } else {
             dispatch(encoder, "celeg_attention_batch_relative_bias",
                      static_cast<NSUInteger>(rows) * query_heads * head_dim);
@@ -544,7 +544,7 @@ void MetalModel::Impl::encode_attention_batch(
             [encoder setComputePipelineState:state];
             [encoder dispatchThreadgroups:MTLSizeMake(query_heads, rows, 1)
                threadsPerThreadgroup:MTLSizeMake(32, 1, 1)];
-            ++command_dispatches;
+            record_dispatch("celeg_attention_batch_alibi");
         } else {
             dispatch(encoder, "celeg_attention_batch_alibi",
                      static_cast<NSUInteger>(rows) * query_heads * head_dim);
@@ -557,7 +557,7 @@ void MetalModel::Impl::encode_attention_batch(
             [encoder setComputePipelineState:state];
             [encoder dispatchThreadgroups:MTLSizeMake(query_heads, rows, 1)
                threadsPerThreadgroup:MTLSizeMake(32, 1, 1)];
-            ++command_dispatches;
+            record_dispatch("celeg_attention_batch_sliding");
         } else {
             dispatch(encoder, "celeg_attention_batch_sliding",
                      static_cast<NSUInteger>(rows) * query_heads * head_dim);
@@ -567,7 +567,7 @@ void MetalModel::Impl::encode_attention_batch(
         [encoder setComputePipelineState:state];
         [encoder dispatchThreadgroups:MTLSizeMake(query_heads, rows, 1)
            threadsPerThreadgroup:MTLSizeMake(32, 1, 1)];
-        ++command_dispatches;
+        record_dispatch("celeg_attention_batch");
     } else {
         dispatch(encoder, "celeg_attention_batch",
                  static_cast<NSUInteger>(rows) * query_heads * head_dim);

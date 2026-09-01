@@ -76,13 +76,20 @@ void MetalModel::Impl::encode_token(id<MTLCommandBuffer>& command_buffer,
                 continue;
             }
 
-            encode_residual_rmsnorm(encoder, hidden, residual, layer.ffn_norm, hidden,
-                                    normed, hidden_width, mixer_multiplier,
-                                    program.final_norm.epsilon);
+            const bool gate_up_ready = !layer.moe &&
+                encode_residual_matvec_pair_qk(
+                    encoder, layer.ffn_gate, layer.ffn_up, hidden, residual,
+                    layer.ffn_norm, hidden, gate_up, hidden_width, mixer_multiplier,
+                    program.final_norm.epsilon);
+            if (!gate_up_ready) {
+                encode_residual_rmsnorm(encoder, hidden, residual, layer.ffn_norm, hidden,
+                                        normed, hidden_width, mixer_multiplier,
+                                        program.final_norm.epsilon);
+            }
             if (layer.moe) {
                 encode_moe(command_buffer, encoder, layer);
             } else {
-                encode_dense_feed_forward(encoder, layer);
+                encode_dense_feed_forward(encoder, layer, gate_up_ready);
             }
             id<MTLBuffer> feed_forward_output = layer.moe ? moe_output : operation;
             if (last_layer) {

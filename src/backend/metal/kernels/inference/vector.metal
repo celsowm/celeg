@@ -617,7 +617,9 @@ kernel void celeg_swiglu_matvec_##NAME( \
             sums[1] += DECODE(second, within) * activated; \
         } \
     } \
-    if (lane == 0) { partial[simd * 2] = simd_sum(sums[0]); partial[simd * 2 + 1] = simd_sum(sums[1]); } \
+    const float reduced0 = simd_sum(sums[0]); \
+    const float reduced1 = simd_sum(sums[1]); \
+    if (lane == 0) { partial[simd * 2] = reduced0; partial[simd * 2 + 1] = reduced1; } \
     threadgroup_barrier(mem_flags::mem_threadgroup); \
     if (simd == 0 && lane < 2) { \
         float total = partial[lane]; \

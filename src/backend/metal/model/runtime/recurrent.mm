@@ -103,7 +103,7 @@ void MetalModel::Impl::encode_short_convolution_batch(
     [encoder setComputePipelineState:state];
     [encoder dispatchThreadgroups:MTLSizeMake((hidden_width + 255) / 256, 1, 1)
        threadsPerThreadgroup:MTLSizeMake(256, 1, 1)];
-    ++command_dispatches;
+    record_dispatch("celeg_shortconv_batch");
     encode_matmul(encoder, layer.mixer_out, batch_operation, batch_hidden, rows);
 }
 

@@ -43,6 +43,8 @@ struct MetalPipelineCache {
     bool tensor_matmul_f16 = false;
     bool tensor_matmul_bf16 = false;
     bool tensor_matmul_q4k = false;
+    bool tensor_matmul_q5k = false;
+    bool tensor_matmul_q6k = false;
     std::string tensor_compile_error;
     std::unordered_map<std::string, id<MTLComputePipelineState>> pipelines;
 
@@ -203,6 +205,7 @@ struct MetalModel::Impl {
     MetalExecutionMetrics execution_metrics;
     std::chrono::steady_clock::time_point command_started;
     uint64_t command_dispatches = 0;
+    std::unordered_map<std::string, uint64_t> dispatch_histogram;
 
     id<MTLBuffer> buffer(const std::vector<float>& values);
     id<MTLBuffer> immutable_buffer(const void* data, size_t bytes) const;
@@ -229,6 +232,7 @@ struct MetalModel::Impl {
                   NSUInteger count);
     void dispatch_cooperative(id<MTLComputeCommandEncoder> encoder, std::string_view name,
                               NSUInteger groups);
+    void record_dispatch(std::string_view name);
     void set_buffer(id<MTLComputeCommandEncoder> encoder, id<MTLBuffer> value,
                     NSUInteger index, NSUInteger offset = 0);
     void set_bytes(id<MTLComputeCommandEncoder> encoder, const void* value,
@@ -243,6 +247,12 @@ struct MetalModel::Impl {
                             const Linear& first, const Linear& second,
                             id<MTLBuffer> input, id<MTLBuffer> output,
                             uint32_t width);
+    bool encode_residual_matvec_pair_qk(
+        id<MTLComputeCommandEncoder> encoder, const Linear& first,
+        const Linear& second, id<MTLBuffer> input, id<MTLBuffer> residual,
+        id<MTLBuffer> norm_weight, id<MTLBuffer> combined_output,
+        id<MTLBuffer> output, uint32_t width,
+        float multiplier, float epsilon);
     void encode_matmul(id<MTLComputeCommandEncoder> encoder, const Linear& weight,
                        id<MTLBuffer> input, id<MTLBuffer> output, uint32_t rows,
                        NSUInteger input_offset = 0, NSUInteger output_offset = 0,
@@ -303,7 +313,7 @@ struct MetalModel::Impl {
                                 const CompiledAttentionProgram& attention,
                                 uint32_t rows, uint32_t base_position);
     void encode_dense_feed_forward(id<MTLComputeCommandEncoder> encoder,
-                                   Layer& layer);
+                                   Layer& layer, bool gate_up_ready = false);
     void encode_dense_feed_forward_batch(id<MTLComputeCommandEncoder> encoder,
                                          Layer& layer, uint32_t rows);
     void encode_moe(id<MTLCommandBuffer>& command_buffer,
