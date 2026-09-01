@@ -66,6 +66,19 @@ CudaSchedulerDriver::CudaSchedulerDriver(std::string model_path,
         std::filesystem::path(model_path_), *runtime_);
     topology_ = bootstrap.model.topology;
     program_ = build_model_program(bootstrap.model);
+    const int required_initial_span = program_.required_initial_attention_span();
+    if (required_initial_span > max_context_) {
+        throw std::invalid_argument(
+            "attention prefix length exceeds max_context");
+    }
+    if (required_initial_span > 0 && !engine_options_.packed_decode) {
+        throw std::invalid_argument(
+            "CUDA concurrent Prefix-LM execution requires packed_decode");
+    }
+    if (required_initial_span > engine_options_.max_batched_tokens) {
+        throw std::invalid_argument(
+            "CUDA Prefix-LM prefix exceeds max_batched_tokens capacity");
+    }
     if (engine_options_.packed_decode) {
         paged_kv_ = std::make_unique<PhysicalPagedKvCache>(
             total_pages, engine_options_.page_tokens, max_context_,
