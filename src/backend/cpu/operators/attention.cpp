@@ -1,5 +1,6 @@
 #include "attention.hpp"
 #include "celeg/model/position.hpp"
+#include "celeg/model/weights/quantization.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -109,6 +110,34 @@ void apply_cpu_attention_qk(const AttentionSpec& layout,
     const float query_scale = query_scale_ratio *
         rope_attention_scale(*rope, scalar_position);
     for (int i = 0; i < q_width; ++i) query[i] *= query_scale;
+}
+
+void load_cpu_attention_current_value(
+    const CpuCompiledModel::Shared& shared,
+    const CpuCompiledModel::AttentionState& state,
+    int position, float* output, size_t width) {
+    if (position < 0 || !output || width == 0) {
+        throw std::invalid_argument("invalid CPU attention current-value request");
+    }
+    const CpuKvPagePool& pool = *shared.kv_pools.at(state.pool_index);
+    const size_t position_value = static_cast<size_t>(position);
+    if (position_value >= state.token_count) {
+        throw std::out_of_range("CPU attention current value is not committed");
+    }
+    const size_t page_index = position_value / pool.page_tokens();
+    const size_t token_offset = position_value % pool.page_tokens();
+    if (page_index >= state.pages.size()) {
+        throw std::out_of_range("CPU attention current value page is missing");
+    }
+    if (pool.mode() == CpuKvCacheMode::Fp32) {
+        std::copy_n(pool.value_fp32(state.pages[page_index], token_offset),
+                    width, output);
+        return;
+    }
+    const uint16_t* value = pool.value_bf16(state.pages[page_index], token_offset);
+    for (size_t index = 0; index < width; ++index) {
+        output[index] = bf16_bits_to_float(value[index]);
+    }
 }
 
 void apply_cpu_attention_output_transform(const AttentionSpec& layout,
