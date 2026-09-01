@@ -15,17 +15,29 @@ void dispatch_cuda_standard_attention_contiguous(
     const AttentionSpec& layout = attention.layout;
     const AttentionSpec& owner_layout = owner.layout;
     const auto* block_sparse = std::get_if<BlockSparsePattern>(&layout.pattern);
+    const bool biased_attention =
+        plan.algorithm == AttentionAlgorithm::Alibi ||
+        plan.algorithm == AttentionAlgorithm::RelativeBias;
+    const bool needs_device_position = biased_attention || block_sparse != nullptr;
+    if (needs_device_position) {
+        CELEG_CUDA(cudaMemcpyAsync(
+            model.position_device_.data(), &model.session_.position_,
+            sizeof(model.session_.position_), cudaMemcpyHostToDevice,
+            model.stream_.get()));
+    }
 
     dispatch_cuda_contiguous_decode_attention({
         .plan = plan,
-        .position_mode = CudaDecodePositionMode::HostScalar,
+        .position_mode = biased_attention
+            ? CudaDecodePositionMode::DeviceCounter
+            : CudaDecodePositionMode::HostScalar,
         .block_sparse = block_sparse,
         .query = query,
         .bf16_kv = cuda_bf16_kv_view(owner),
         .int8_kv = cuda_int8_kv_view(owner),
         .out = model.workspace_.op_output_.data(),
         .geometry = make_cuda_gqa_geometry(layout, owner_layout),
-        .extent = block_sparse
+        .extent = needs_device_position
             ? AttentionExtent{.position = model.position_device_.data()}
             : AttentionExtent{.seq_len = model.session_.position_ + 1},
         .alibi_slopes = attention.alibi_slopes.data(),
