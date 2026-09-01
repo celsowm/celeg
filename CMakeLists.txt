@@ -309,6 +309,11 @@ if(CELEG_ENABLE_METAL)
     target_link_libraries(celeg-metal-run PRIVATE celeg_serve_metal)
     add_executable(celeg-metal-bench ${CELEG_METAL_APP_SOURCES})
     target_link_libraries(celeg-metal-bench PRIVATE celeg_serve_metal)
+    add_executable(celeg-metal-kernel-benchmark apps/benchmark/metal/kernels.mm)
+    target_include_directories(celeg-metal-kernel-benchmark PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+        "${CMAKE_CURRENT_BINARY_DIR}/generated")
+    target_link_libraries(celeg-metal-kernel-benchmark PRIVATE celeg_serve_metal)
 endif()
 
 add_library(celeg_serve_core src/serve/generation_dispatcher.cpp)
@@ -574,7 +579,8 @@ foreach(_celeg_internal_consumer IN ITEMS
     celeg-cpu-prefix-cache-benchmark celeg-cpu-compare-reference celeg-bench
     celeg-download celeg-compare-logits celeg-pack-experts celeg-run
     celeg-concurrent-benchmark celeg-prefix-cache-benchmark
-    celeg-decode-gemv-benchmark celeg-serve celeg-metal-run celeg-metal-bench)
+    celeg-decode-gemv-benchmark celeg-serve celeg-metal-run celeg-metal-bench
+    celeg-metal-kernel-benchmark)
     if(TARGET ${_celeg_internal_consumer})
         target_include_directories(${_celeg_internal_consumer} PRIVATE
             ${CMAKE_CURRENT_SOURCE_DIR}/src)
@@ -597,7 +603,7 @@ if(CELEG_ENABLE_SERVE)
 endif()
 if(CELEG_METAL_AVAILABLE)
     list(APPEND CELEG_INSTALL_TARGETS celeg_metal_backend celeg_serve_metal
-        celeg-metal-run celeg-metal-bench)
+        celeg-metal-run celeg-metal-bench celeg-metal-kernel-benchmark)
 endif()
 install(TARGETS ${CELEG_INSTALL_TARGETS}
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}

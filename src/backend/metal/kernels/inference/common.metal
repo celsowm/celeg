@@ -74,6 +74,188 @@ int celeg_q6k_value(device const uchar* block, uint column) {
     return (ql[lane + 32] >> 4) | (((qh[lane] >> 6) & 3) << 4);
 }
 
+/**
+ * @brief Widest head dimension the attention core keeps in registers.
+ *
+ * Each lane of a simdgroup owns every 32nd dimension of the head, so the
+ * per-lane query and accumulator vectors need `head_dim / 32` slots. Eight
+ * slots cover every head dimension the supported architectures use; the host
+ * rejects wider heads rather than silently truncating them.
+ */
+constant uint kCelegAttentionSlots = 8;
+
+/// @brief Bias-free score policy for ordinary causal and sliding-window heads.
+struct CelegAttentionNoBias {
+    float value(uint, uint, uint) const { return 0.0f; }
+};
+
+/// @brief Linear distance penalty applied by ALiBi heads.
+struct CelegAttentionAlibiBias {
+    constant float* slopes;
+
+    float value(uint head, uint query_position, uint position) const {
+        return -slopes[head] * static_cast<float>(
+            abs(static_cast<int>(query_position) - static_cast<int>(position)));
+    }
+};
+
+/// @brief Geometry of the one query row a threadgroup attends for.
+struct CelegAttentionSpan {
+    size_t query_base;
+    size_t output_base;
+    uint head;
+    uint key_head;
+    uint key_heads;
+    uint head_dim;
+    uint sequence_length;
+    uint start;
+    uint query_position;
+    uint page_tokens;
+    float scale;
+};
+
+/**
+ * @brief Attention for a single query row over an unbounded key/value history.
+ *
+ * One threadgroup serves one `(row, head)` pair. The simdgroups partition the
+ * key positions and each keeps a running `(maximum, denominator, accumulator)`
+ * triple that is rescaled whenever a larger score appears, so no score array is
+ * materialized, `exp` is evaluated once per position rather than once per
+ * position and dimension, and the sequence length is bounded only by the KV
+ * cache. Simdgroup 0 merges the partial triples through @p shared, which must
+ * provide `2 * simdgroups + simdgroups * head_dim` floats.
+ */
+template <typename Bias>
+void celeg_attention_span(device const float* query,
+                          device const float* key_cache,
+                          device const float* value_cache,
+                          device float* output,
+                          CelegAttentionSpan span,
+                          Bias bias,
+                          threadgroup float* shared,
+                          uint lane,
+                          uint simd,
+                          uint simd_count) {
+    const uint head_dim = span.head_dim;
+    const size_t key_width = static_cast<size_t>(span.key_heads) * head_dim;
+    const size_t key_offset = static_cast<size_t>(span.key_head) * head_dim;
+
+    float query_values[kCelegAttentionSlots];
+    float accumulator[kCelegAttentionSlots];
+    for (uint slot = 0; slot < kCelegAttentionSlots; ++slot) {
+        const uint dimension = lane + slot * 32u;
+        query_values[slot] = dimension < head_dim ? query[span.query_base + dimension] : 0.0f;
+        accumulator[slot] = 0.0f;
+    }
+
+    float maximum = -INFINITY;
+    float denominator = 0.0f;
+    for (uint position = span.start + simd; position < span.sequence_length;
+         position += simd_count) {
+        const size_t key_base =
+            (static_cast<size_t>(position / span.page_tokens) * span.page_tokens +
+             position % span.page_tokens) * key_width + key_offset;
+        float partial = 0.0f;
+        for (uint slot = 0; slot < kCelegAttentionSlots; ++slot) {
+            const uint dimension = lane + slot * 32u;
+            if (dimension < head_dim) {
+                partial += query_values[slot] * key_cache[key_base + dimension];
+            }
+        }
+        const float score = simd_sum(partial) * span.scale +
+            bias.value(span.head, span.query_position, position);
+        const float updated = max(maximum, score);
+        const float correction = exp(maximum - updated);
+        const float weight = exp(score - updated);
+        denominator = denominator * correction + weight;
+        for (uint slot = 0; slot < kCelegAttentionSlots; ++slot) {
+            const uint dimension = lane + slot * 32u;
+            if (dimension < head_dim) {
+                accumulator[slot] = accumulator[slot] * correction +
+                    weight * value_cache[key_base + dimension];
+            }
+        }
+        maximum = updated;
+    }
+
+    threadgroup float* shared_maximum = shared;
+    threadgroup float* shared_denominator = shared + simd_count;
+    threadgroup float* shared_accumulator = shared + 2u * simd_count;
+    if (lane == 0) {
+        shared_maximum[simd] = maximum;
+        shared_denominator[simd] = denominator;
+    }
+    for (uint slot = 0; slot < kCelegAttentionSlots; ++slot) {
+        const uint dimension = lane + slot * 32u;
+        if (dimension < head_dim) {
+            shared_accumulator[simd * head_dim + dimension] = accumulator[slot];
+        }
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    if (simd != 0) return;
+
+    float global_maximum = -INFINITY;
+    for (uint group = 0; group < simd_count; ++group) {
+        global_maximum = max(global_maximum, shared_maximum[group]);
+    }
+    float total = 0.0f;
+    for (uint group = 0; group < simd_count; ++group) {
+        total += shared_denominator[group] * exp(shared_maximum[group] - global_maximum);
+    }
+    for (uint slot = 0; slot < kCelegAttentionSlots; ++slot) {
+        const uint dimension = lane + slot * 32u;
+        if (dimension >= head_dim) continue;
+        float value = 0.0f;
+        for (uint group = 0; group < simd_count; ++group) {
+            value += shared_accumulator[group * head_dim + dimension] *
+                exp(shared_maximum[group] - global_maximum);
+        }
+        output[span.output_base + dimension] = value / total;
+    }
+}
+
+/// @brief Builds the span a decode threadgroup attends for.
+CelegAttentionSpan celeg_attention_decode_span(uint head, uint query_heads, uint key_heads,
+                                               uint head_dim, uint sequence_length,
+                                               uint start, uint page_tokens, float scale) {
+    CelegAttentionSpan span;
+    span.query_base = static_cast<size_t>(head) * head_dim;
+    span.output_base = span.query_base;
+    span.head = head;
+    span.key_head = head / (query_heads / key_heads);
+    span.key_heads = key_heads;
+    span.head_dim = head_dim;
+    span.sequence_length = sequence_length;
+    span.start = start;
+    span.query_position = sequence_length - 1;
+    span.page_tokens = page_tokens;
+    span.scale = scale;
+    return span;
+}
+
+/// @brief Builds the span a batched-prefill threadgroup attends for.
+CelegAttentionSpan celeg_attention_batch_span(uint head, uint row, uint base_position,
+                                              uint query_heads, uint key_heads,
+                                              uint head_dim, uint start_window,
+                                              uint page_tokens, float scale) {
+    const uint query_position = base_position + row;
+    const size_t query_width = static_cast<size_t>(query_heads) * head_dim;
+    CelegAttentionSpan span;
+    span.query_base = static_cast<size_t>(row) * query_width +
+        static_cast<size_t>(head) * head_dim;
+    span.output_base = span.query_base;
+    span.head = head;
+    span.key_head = head / (query_heads / key_heads);
+    span.key_heads = key_heads;
+    span.head_dim = head_dim;
+    span.sequence_length = query_position + 1;
+    span.start = start_window;
+    span.query_position = query_position;
+    span.page_tokens = page_tokens;
+    span.scale = scale;
+    return span;
+}
+
 kernel void celeg_attention_sliding(
     device const float* query [[buffer(0)]],
     device const float* key_cache [[buffer(1)]],
@@ -86,92 +268,18 @@ kernel void celeg_attention_sliding(
     constant float& scale [[buffer(8)]],
     constant uint& page_tokens [[buffer(9)]],
     constant uint& window_size [[buffer(10)]],
-    uint index [[thread_position_in_grid]]) {
-    const uint width = query_heads * head_dim;
-    if (index >= width) return;
-    const uint head = index / head_dim;
-    const uint dimension = index % head_dim;
-    const uint key_head = head / (query_heads / key_heads);
-    const size_t query_base = static_cast<size_t>(head) * head_dim;
-    const size_t key_width = static_cast<size_t>(key_heads) * head_dim;
-    const uint start = sequence_length > window_size ? sequence_length - window_size : 0;
-    float maximum = -INFINITY;
-    for (uint position = start; position < sequence_length; ++position) {
-        const size_t key_base = (static_cast<size_t>(position / page_tokens) * page_tokens +
-            position % page_tokens) * key_width + static_cast<size_t>(key_head) * head_dim;
-        float score = 0.0f;
-        for (uint d = 0; d < head_dim; ++d) score += query[query_base + d] * key_cache[key_base + d];
-        maximum = max(maximum, score * scale);
-    }
-    float denominator = 0.0f;
-    for (uint position = start; position < sequence_length; ++position) {
-        const size_t key_base = (static_cast<size_t>(position / page_tokens) * page_tokens +
-            position % page_tokens) * key_width + static_cast<size_t>(key_head) * head_dim;
-        float score = 0.0f;
-        for (uint d = 0; d < head_dim; ++d) score += query[query_base + d] * key_cache[key_base + d];
-        denominator += exp(score * scale - maximum);
-    }
-    float value = 0.0f;
-    for (uint position = start; position < sequence_length; ++position) {
-        const size_t key_base = (static_cast<size_t>(position / page_tokens) * page_tokens +
-            position % page_tokens) * key_width + static_cast<size_t>(key_head) * head_dim;
-        float score = 0.0f;
-        for (uint d = 0; d < head_dim; ++d) score += query[query_base + d] * key_cache[key_base + d];
-        value += exp(score * scale - maximum) * value_cache[key_base + dimension];
-    }
-    output[index] = value / denominator;
-}
-
-kernel void celeg_attention_sliding_cooperative(
-    device const float* query [[buffer(0)]],
-    device const float* key_cache [[buffer(1)]],
-    device const float* value_cache [[buffer(2)]],
-    device float* output [[buffer(3)]],
-    constant uint& sequence_length [[buffer(4)]],
-    constant uint& query_heads [[buffer(5)]],
-    constant uint& key_heads [[buffer(6)]],
-    constant uint& head_dim [[buffer(7)]],
-    constant float& scale [[buffer(8)]],
-    constant uint& page_tokens [[buffer(9)]],
-    constant uint& window_size [[buffer(10)]],
+    threadgroup float* shared [[threadgroup(0)]],
     uint lane [[thread_index_in_simdgroup]],
+    uint simd [[simdgroup_index_in_threadgroup]],
+    uint simd_count [[simdgroups_per_threadgroup]],
     uint2 grid [[threadgroup_position_in_grid]]) {
-    const uint head = grid.x;
-    if (head >= query_heads || sequence_length > 1024) return;
-    const uint key_head = head / (query_heads / key_heads);
-    const size_t query_base = static_cast<size_t>(head) * head_dim;
-    const size_t key_width = static_cast<size_t>(key_heads) * head_dim;
+    if (grid.x >= query_heads) return;
     const uint start = sequence_length > window_size ? sequence_length - window_size : 0;
-    threadgroup float scores[1024];
-    for (uint position = start; position < sequence_length; ++position) {
-        const size_t key_base = (static_cast<size_t>(position / page_tokens) * page_tokens +
-            position % page_tokens) * key_width + static_cast<size_t>(key_head) * head_dim;
-        float partial = 0.0f;
-        for (uint d = lane; d < head_dim; d += 32) partial += query[query_base + d] * key_cache[key_base + d];
-        const float score = simd_sum(partial) * scale;
-        if (lane == 0) scores[position] = score;
-    }
-    threadgroup_barrier(mem_flags::mem_threadgroup);
-    threadgroup float maximum;
-    threadgroup float denominator;
-    if (lane == 0) {
-        float maximum_value = -INFINITY;
-        for (uint position = start; position < sequence_length; ++position) maximum_value = max(maximum_value, scores[position]);
-        maximum = maximum_value;
-        float denominator_value = 0.0f;
-        for (uint position = start; position < sequence_length; ++position) denominator_value += exp(scores[position] - maximum_value);
-        denominator = denominator_value;
-    }
-    threadgroup_barrier(mem_flags::mem_threadgroup);
-    for (uint dimension = lane; dimension < head_dim; dimension += 32) {
-        float value = 0.0f;
-        for (uint position = start; position < sequence_length; ++position) {
-            const size_t key_base = (static_cast<size_t>(position / page_tokens) * page_tokens +
-                position % page_tokens) * key_width + static_cast<size_t>(key_head) * head_dim;
-            value += exp(scores[position] - maximum) / denominator * value_cache[key_base + dimension];
-        }
-        output[query_base + dimension] = value;
-    }
+    celeg_attention_span(query, key_cache, value_cache, output,
+                         celeg_attention_decode_span(grid.x, query_heads, key_heads,
+                                                     head_dim, sequence_length, start,
+                                                     page_tokens, scale),
+                         CelegAttentionNoBias{}, shared, lane, simd, simd_count);
 }
 
 kernel void celeg_attention_batch_sliding(
@@ -187,94 +295,19 @@ kernel void celeg_attention_batch_sliding(
     constant float& scale [[buffer(9)]],
     constant uint& page_tokens [[buffer(10)]],
     constant uint& window_size [[buffer(11)]],
-    uint index [[thread_position_in_grid]]) {
-    const uint width = query_heads * head_dim;
-    const uint row = index / width;
-    const uint dimension = index % width;
-    if (row >= rows) return;
-    const uint head = dimension / head_dim;
-    const uint key_head = head / (query_heads / key_heads);
-    const uint sequence_length = base_position + row + 1;
-    const uint start = sequence_length > window_size ? sequence_length - window_size : 0;
-    const size_t query_base = static_cast<size_t>(row) * width + static_cast<size_t>(head) * head_dim;
-    const size_t key_width = static_cast<size_t>(key_heads) * head_dim;
-    float maximum = -INFINITY;
-    for (uint position = start; position < sequence_length; ++position) {
-        const size_t key_base = (static_cast<size_t>(position / page_tokens) * page_tokens + position % page_tokens) * key_width + static_cast<size_t>(key_head) * head_dim;
-        float score = 0.0f;
-        for (uint d = 0; d < head_dim; ++d) score += query[query_base + d] * key_cache[key_base + d];
-        maximum = max(maximum, score * scale);
-    }
-    float denominator = 0.0f;
-    for (uint position = start; position < sequence_length; ++position) {
-        const size_t key_base = (static_cast<size_t>(position / page_tokens) * page_tokens + position % page_tokens) * key_width + static_cast<size_t>(key_head) * head_dim;
-        float score = 0.0f;
-        for (uint d = 0; d < head_dim; ++d) score += query[query_base + d] * key_cache[key_base + d];
-        denominator += exp(score * scale - maximum);
-    }
-    float value_sum = 0.0f;
-    for (uint position = start; position < sequence_length; ++position) {
-        const size_t key_base = (static_cast<size_t>(position / page_tokens) * page_tokens + position % page_tokens) * key_width + static_cast<size_t>(key_head) * head_dim;
-        float score = 0.0f;
-        for (uint d = 0; d < head_dim; ++d) score += query[query_base + d] * key_cache[key_base + d];
-        const float probability = exp(score * scale - maximum) / denominator;
-        value_sum += probability * value_cache[key_base + (dimension % head_dim)];
-    }
-    output[static_cast<size_t>(row) * width + dimension] = value_sum;
-}
-
-kernel void celeg_attention_batch_sliding_cooperative(
-    device const float* query [[buffer(0)]],
-    device const float* key_cache [[buffer(1)]],
-    device const float* value_cache [[buffer(2)]],
-    device float* output [[buffer(3)]],
-    constant uint& rows [[buffer(4)]],
-    constant uint& base_position [[buffer(5)]],
-    constant uint& query_heads [[buffer(6)]],
-    constant uint& key_heads [[buffer(7)]],
-    constant uint& head_dim [[buffer(8)]],
-    constant float& scale [[buffer(9)]],
-    constant uint& page_tokens [[buffer(10)]],
-    constant uint& window_size [[buffer(11)]],
+    threadgroup float* shared [[threadgroup(0)]],
     uint lane [[thread_index_in_simdgroup]],
+    uint simd [[simdgroup_index_in_threadgroup]],
+    uint simd_count [[simdgroups_per_threadgroup]],
     uint2 grid [[threadgroup_position_in_grid]]) {
-    const uint row = grid.y;
-    const uint head = grid.x;
-    if (row >= rows || head >= query_heads || base_position + row + 1 > 1024) return;
-    const uint key_head = head / (query_heads / key_heads);
-    const size_t query_width = static_cast<size_t>(query_heads) * head_dim;
-    const size_t query_base = static_cast<size_t>(row) * query_width + static_cast<size_t>(head) * head_dim;
-    const size_t key_width = static_cast<size_t>(key_heads) * head_dim;
-    const uint sequence_length = base_position + row + 1;
+    if (grid.x >= query_heads || grid.y >= rows) return;
+    const uint sequence_length = base_position + grid.y + 1;
     const uint start = sequence_length > window_size ? sequence_length - window_size : 0;
-    threadgroup float scores[1024];
-    for (uint position = start; position < sequence_length; ++position) {
-        const size_t key_base = (static_cast<size_t>(position / page_tokens) * page_tokens + position % page_tokens) * key_width + static_cast<size_t>(key_head) * head_dim;
-        float partial = 0.0f;
-        for (uint d = lane; d < head_dim; d += 32) partial += query[query_base + d] * key_cache[key_base + d];
-        const float score = simd_sum(partial) * scale;
-        if (lane == 0) scores[position] = score;
-    }
-    threadgroup_barrier(mem_flags::mem_threadgroup);
-    threadgroup float maximum;
-    threadgroup float denominator;
-    if (lane == 0) {
-        float maximum_value = -INFINITY;
-        for (uint position = start; position < sequence_length; ++position) maximum_value = max(maximum_value, scores[position]);
-        maximum = maximum_value;
-        float denominator_value = 0.0f;
-        for (uint position = start; position < sequence_length; ++position) denominator_value += exp(scores[position] - maximum_value);
-        denominator = denominator_value;
-    }
-    threadgroup_barrier(mem_flags::mem_threadgroup);
-    for (uint dimension = lane; dimension < head_dim; dimension += 32) {
-        float value = 0.0f;
-        for (uint position = start; position < sequence_length; ++position) {
-            const size_t key_base = (static_cast<size_t>(position / page_tokens) * page_tokens + position % page_tokens) * key_width + static_cast<size_t>(key_head) * head_dim;
-            value += exp(scores[position] - maximum) / denominator * value_cache[key_base + dimension];
-        }
-        output[static_cast<size_t>(row) * query_width + static_cast<size_t>(head) * head_dim + dimension] = value;
-    }
+    celeg_attention_span(query, key_cache, value_cache, output,
+                         celeg_attention_batch_span(grid.x, grid.y, base_position,
+                                                    query_heads, key_heads, head_dim,
+                                                    start, page_tokens, scale),
+                         CelegAttentionNoBias{}, shared, lane, simd, simd_count);
 }
 
 kernel void celeg_attention_alibi(
@@ -290,105 +323,19 @@ kernel void celeg_attention_alibi(
     constant uint& page_tokens [[buffer(9)]],
     constant uint& window_size [[buffer(10)]],
     constant float* slopes [[buffer(11)]],
-    uint index [[thread_position_in_grid]]) {
-    const uint width = query_heads * head_dim;
-    if (index >= width) return;
-    const uint head = index / head_dim;
-    const uint dimension = index % head_dim;
-    const uint key_head = head / (query_heads / key_heads);
-    const uint query_position = sequence_length - 1;
-    const uint start = window_size > 0 && sequence_length > window_size
-        ? sequence_length - window_size : 0;
-    const size_t query_base = static_cast<size_t>(head) * head_dim;
-    const size_t key_width = static_cast<size_t>(key_heads) * head_dim;
-    float maximum = -INFINITY;
-    for (uint position = start; position < sequence_length; ++position) {
-        const size_t key_base = (static_cast<size_t>(position / page_tokens) * page_tokens +
-            position % page_tokens) * key_width + static_cast<size_t>(key_head) * head_dim;
-        float score = 0.0f;
-        for (uint d = 0; d < head_dim; ++d) score += query[query_base + d] * key_cache[key_base + d];
-        const float biased = score * scale - slopes[head] *
-            static_cast<float>(abs(static_cast<int>(query_position) - static_cast<int>(position)));
-        maximum = max(maximum, biased);
-    }
-    float denominator = 0.0f;
-    for (uint position = start; position < sequence_length; ++position) {
-        const size_t key_base = (static_cast<size_t>(position / page_tokens) * page_tokens +
-            position % page_tokens) * key_width + static_cast<size_t>(key_head) * head_dim;
-        float score = 0.0f;
-        for (uint d = 0; d < head_dim; ++d) score += query[query_base + d] * key_cache[key_base + d];
-        const float biased = score * scale - slopes[head] *
-            static_cast<float>(abs(static_cast<int>(query_position) - static_cast<int>(position)));
-        denominator += exp(biased - maximum);
-    }
-    float value = 0.0f;
-    for (uint position = start; position < sequence_length; ++position) {
-        const size_t key_base = (static_cast<size_t>(position / page_tokens) * page_tokens +
-            position % page_tokens) * key_width + static_cast<size_t>(key_head) * head_dim;
-        float score = 0.0f;
-        for (uint d = 0; d < head_dim; ++d) score += query[query_base + d] * key_cache[key_base + d];
-        const float biased = score * scale - slopes[head] *
-            static_cast<float>(abs(static_cast<int>(query_position) - static_cast<int>(position)));
-        value += exp(biased - maximum) * value_cache[key_base + dimension];
-    }
-    output[index] = value / denominator;
-}
-
-kernel void celeg_attention_alibi_cooperative(
-    device const float* query [[buffer(0)]],
-    device const float* key_cache [[buffer(1)]],
-    device const float* value_cache [[buffer(2)]],
-    device float* output [[buffer(3)]],
-    constant uint& sequence_length [[buffer(4)]],
-    constant uint& query_heads [[buffer(5)]],
-    constant uint& key_heads [[buffer(6)]],
-    constant uint& head_dim [[buffer(7)]],
-    constant float& scale [[buffer(8)]],
-    constant uint& page_tokens [[buffer(9)]],
-    constant uint& window_size [[buffer(10)]],
-    constant float* slopes [[buffer(11)]],
+    threadgroup float* shared [[threadgroup(0)]],
     uint lane [[thread_index_in_simdgroup]],
+    uint simd [[simdgroup_index_in_threadgroup]],
+    uint simd_count [[simdgroups_per_threadgroup]],
     uint2 grid [[threadgroup_position_in_grid]]) {
-    const uint head = grid.x;
-    if (head >= query_heads || sequence_length > 1024) return;
-    const uint key_head = head / (query_heads / key_heads);
-    const uint query_position = sequence_length - 1;
+    if (grid.x >= query_heads) return;
     const uint start = window_size > 0 && sequence_length > window_size
         ? sequence_length - window_size : 0;
-    const size_t query_base = static_cast<size_t>(head) * head_dim;
-    const size_t key_width = static_cast<size_t>(key_heads) * head_dim;
-    threadgroup float scores[1024];
-    for (uint position = start; position < sequence_length; ++position) {
-        const size_t key_base = (static_cast<size_t>(position / page_tokens) * page_tokens +
-            position % page_tokens) * key_width + static_cast<size_t>(key_head) * head_dim;
-        float partial = 0.0f;
-        for (uint d = lane; d < head_dim; d += 32) partial += query[query_base + d] * key_cache[key_base + d];
-        const float bias = -slopes[head] *
-            static_cast<float>(abs(static_cast<int>(query_position) - static_cast<int>(position)));
-        const float score = simd_sum(partial) * scale + bias;
-        if (lane == 0) scores[position] = score;
-    }
-    threadgroup_barrier(mem_flags::mem_threadgroup);
-    threadgroup float maximum;
-    threadgroup float denominator;
-    if (lane == 0) {
-        float maximum_value = -INFINITY;
-        for (uint position = start; position < sequence_length; ++position) maximum_value = max(maximum_value, scores[position]);
-        maximum = maximum_value;
-        float denominator_value = 0.0f;
-        for (uint position = start; position < sequence_length; ++position) denominator_value += exp(scores[position] - maximum_value);
-        denominator = denominator_value;
-    }
-    threadgroup_barrier(mem_flags::mem_threadgroup);
-    for (uint dimension = lane; dimension < head_dim; dimension += 32) {
-        float value = 0.0f;
-        for (uint position = start; position < sequence_length; ++position) {
-            const size_t key_base = (static_cast<size_t>(position / page_tokens) * page_tokens +
-                position % page_tokens) * key_width + static_cast<size_t>(key_head) * head_dim;
-            value += exp(scores[position] - maximum) / denominator * value_cache[key_base + dimension];
-        }
-        output[query_base + dimension] = value;
-    }
+    celeg_attention_span(query, key_cache, value_cache, output,
+                         celeg_attention_decode_span(grid.x, query_heads, key_heads,
+                                                     head_dim, sequence_length, start,
+                                                     page_tokens, scale),
+                         CelegAttentionAlibiBias{slopes}, shared, lane, simd, simd_count);
 }
 
 kernel void celeg_attention_batch_alibi(
@@ -405,105 +352,18 @@ kernel void celeg_attention_batch_alibi(
     constant uint& page_tokens [[buffer(10)]],
     constant uint& window_size [[buffer(11)]],
     constant float* slopes [[buffer(12)]],
-    uint index [[thread_position_in_grid]]) {
-    const uint width = query_heads * head_dim;
-    const uint row = index / width;
-    const uint dimension = index % width;
-    if (row >= rows) return;
-    const uint head = dimension / head_dim;
-    const uint key_head = head / (query_heads / key_heads);
-    const uint query_position = base_position + row;
-    const uint sequence_length = query_position + 1;
-    const uint start = window_size > 0 && sequence_length > window_size
-        ? sequence_length - window_size : 0;
-    const size_t query_base = static_cast<size_t>(row) * width + static_cast<size_t>(head) * head_dim;
-    const size_t key_width = static_cast<size_t>(key_heads) * head_dim;
-    float maximum = -INFINITY;
-    for (uint position = start; position < sequence_length; ++position) {
-        const size_t key_base = (static_cast<size_t>(position / page_tokens) * page_tokens + position % page_tokens) * key_width + static_cast<size_t>(key_head) * head_dim;
-        float score = 0.0f;
-        for (uint d = 0; d < head_dim; ++d) score += query[query_base + d] * key_cache[key_base + d];
-        const float biased = score * scale - slopes[head] *
-            static_cast<float>(abs(static_cast<int>(query_position) - static_cast<int>(position)));
-        maximum = max(maximum, biased);
-    }
-    float denominator = 0.0f;
-    for (uint position = start; position < sequence_length; ++position) {
-        const size_t key_base = (static_cast<size_t>(position / page_tokens) * page_tokens + position % page_tokens) * key_width + static_cast<size_t>(key_head) * head_dim;
-        float score = 0.0f;
-        for (uint d = 0; d < head_dim; ++d) score += query[query_base + d] * key_cache[key_base + d];
-        const float biased = score * scale - slopes[head] *
-            static_cast<float>(abs(static_cast<int>(query_position) - static_cast<int>(position)));
-        denominator += exp(biased - maximum);
-    }
-    float value_sum = 0.0f;
-    for (uint position = start; position < sequence_length; ++position) {
-        const size_t key_base = (static_cast<size_t>(position / page_tokens) * page_tokens + position % page_tokens) * key_width + static_cast<size_t>(key_head) * head_dim;
-        float score = 0.0f;
-        for (uint d = 0; d < head_dim; ++d) score += query[query_base + d] * key_cache[key_base + d];
-        const float biased = score * scale - slopes[head] *
-            static_cast<float>(abs(static_cast<int>(query_position) - static_cast<int>(position)));
-        const float probability = exp(biased - maximum) / denominator;
-        value_sum += probability * value_cache[key_base + (dimension % head_dim)];
-    }
-    output[static_cast<size_t>(row) * width + dimension] = value_sum;
-}
-
-kernel void celeg_attention_batch_alibi_cooperative(
-    device const float* query [[buffer(0)]],
-    device const float* key_cache [[buffer(1)]],
-    device const float* value_cache [[buffer(2)]],
-    device float* output [[buffer(3)]],
-    constant uint& rows [[buffer(4)]],
-    constant uint& base_position [[buffer(5)]],
-    constant uint& query_heads [[buffer(6)]],
-    constant uint& key_heads [[buffer(7)]],
-    constant uint& head_dim [[buffer(8)]],
-    constant float& scale [[buffer(9)]],
-    constant uint& page_tokens [[buffer(10)]],
-    constant uint& window_size [[buffer(11)]],
-    constant float* slopes [[buffer(12)]],
+    threadgroup float* shared [[threadgroup(0)]],
     uint lane [[thread_index_in_simdgroup]],
+    uint simd [[simdgroup_index_in_threadgroup]],
+    uint simd_count [[simdgroups_per_threadgroup]],
     uint2 grid [[threadgroup_position_in_grid]]) {
-    const uint row = grid.y;
-    const uint head = grid.x;
-    if (row >= rows || head >= query_heads || base_position + row + 1 > 1024) return;
-    const uint key_head = head / (query_heads / key_heads);
-    const uint query_position = base_position + row;
-    const uint sequence_length = query_position + 1;
+    if (grid.x >= query_heads || grid.y >= rows) return;
+    const uint sequence_length = base_position + grid.y + 1;
     const uint start = window_size > 0 && sequence_length > window_size
         ? sequence_length - window_size : 0;
-    const size_t query_width = static_cast<size_t>(query_heads) * head_dim;
-    const size_t query_base = static_cast<size_t>(row) * query_width + static_cast<size_t>(head) * head_dim;
-    const size_t key_width = static_cast<size_t>(key_heads) * head_dim;
-    threadgroup float scores[1024];
-    for (uint position = start; position < sequence_length; ++position) {
-        const size_t key_base = (static_cast<size_t>(position / page_tokens) * page_tokens + position % page_tokens) * key_width + static_cast<size_t>(key_head) * head_dim;
-        float partial = 0.0f;
-        for (uint d = lane; d < head_dim; d += 32) partial += query[query_base + d] * key_cache[key_base + d];
-        const float bias = -slopes[head] *
-            static_cast<float>(abs(static_cast<int>(query_position) - static_cast<int>(position)));
-        const float score = simd_sum(partial) * scale + bias;
-        if (lane == 0) scores[position] = score;
-    }
-    threadgroup_barrier(mem_flags::mem_threadgroup);
-    threadgroup float maximum;
-    threadgroup float denominator;
-    if (lane == 0) {
-        float maximum_value = -INFINITY;
-        for (uint position = start; position < sequence_length; ++position) maximum_value = max(maximum_value, scores[position]);
-        maximum = maximum_value;
-        float denominator_value = 0.0f;
-        for (uint position = start; position < sequence_length; ++position) denominator_value += exp(scores[position] - maximum_value);
-        denominator = denominator_value;
-    }
-    threadgroup_barrier(mem_flags::mem_threadgroup);
-    for (uint dimension = lane; dimension < head_dim; dimension += 32) {
-        float value = 0.0f;
-        for (uint position = start; position < sequence_length; ++position) {
-            const size_t key_base = (static_cast<size_t>(position / page_tokens) * page_tokens + position % page_tokens) * key_width + static_cast<size_t>(key_head) * head_dim;
-            value += exp(scores[position] - maximum) / denominator * value_cache[key_base + dimension];
-        }
-        output[static_cast<size_t>(row) * query_width + static_cast<size_t>(head) * head_dim + dimension] = value;
-    }
+    celeg_attention_span(query, key_cache, value_cache, output,
+                         celeg_attention_batch_span(grid.x, grid.y, base_position,
+                                                    query_heads, key_heads, head_dim,
+                                                    start, page_tokens, scale),
+                         CelegAttentionAlibiBias{slopes}, shared, lane, simd, simd_count);
 }

@@ -36,6 +36,12 @@ bool no_position_encoding(const CompiledAttentionProgram& attention) {
     return std::holds_alternative<NoPositionEncodingSpec>(attention.semantics.position);
 }
 
+/// @brief Simdgroups per attention threadgroup; see @c celeg_attention_span.
+constexpr uint32_t kAttentionSimdgroups = 8;
+
+/// @brief Widest head dimension @c celeg_attention_span keeps in registers.
+constexpr uint32_t kAttentionMaxHeadDim = 32 * 8;
+
 bool split_half_rope(const CompiledAttentionProgram& attention) {
     const RopePositionSpec* rope = attention.semantics.rope_position();
     return rope && rope->pairing == RopePairingKind::SplitHalf;
@@ -75,6 +81,28 @@ void bind_shared_kv(Layer& layer,
     throw std::logic_error("Metal shared KV consumer has no runtime publisher");
 }
 
+}
+
+void MetalModel::Impl::encode_attention_span(
+    id<MTLComputeCommandEncoder> encoder, std::string_view name,
+    uint32_t query_heads, uint32_t rows, uint32_t head_dim) {
+    if (head_dim > kAttentionMaxHeadDim) {
+        throw std::runtime_error(
+            "Metal attention supports head dimensions up to " +
+            std::to_string(kAttentionMaxHeadDim) + ", got " + std::to_string(head_dim));
+    }
+    id<MTLComputePipelineState> state = pipeline(name);
+    constexpr NSUInteger threads = 32 * kAttentionSimdgroups;
+    if (state.maxTotalThreadsPerThreadgroup < threads) {
+        throw std::runtime_error("Metal pipeline cannot run the attention kernel");
+    }
+    const NSUInteger shared_floats =
+        2u * kAttentionSimdgroups + kAttentionSimdgroups * head_dim;
+    [encoder setComputePipelineState:state];
+    [encoder setThreadgroupMemoryLength:shared_floats * sizeof(float) atIndex:0];
+    [encoder dispatchThreadgroups:MTLSizeMake(query_heads, rows, 1)
+            threadsPerThreadgroup:MTLSizeMake(threads, 1, 1)];
+    record_dispatch(name);
 }
 
 void MetalModel::Impl::encode_attention(
@@ -269,6 +297,7 @@ void MetalModel::Impl::encode_attention(
     set_bytes(encoder, &head_dim, sizeof(head_dim), 7);
     set_bytes(encoder, &attention_scale, sizeof(attention_scale), 8);
     set_bytes(encoder, &page_tokens, sizeof(page_tokens), 9);
+    std::string_view attention_kernel = "celeg_attention";
     if (relative) {
         const uint32_t bucket_count = static_cast<uint32_t>(relative->bucket_count);
         const uint32_t max_distance = static_cast<uint32_t>(relative->max_distance);
@@ -278,35 +307,16 @@ void MetalModel::Impl::encode_attention(
         set_bytes(encoder, &bucket_count, sizeof(bucket_count), 12);
         set_bytes(encoder, &max_distance, sizeof(max_distance), 13);
         set_bytes(encoder, &bidirectional, sizeof(bidirectional), 14);
-        if (sequence_length <= 1024) {
-            dispatch_cooperative(
-                encoder, "celeg_attention_relative_bias_cooperative", query_heads);
-        } else {
-            dispatch(encoder, "celeg_attention_relative_bias",
-                     query_heads * head_dim);
-        }
+        attention_kernel = "celeg_attention_relative_bias";
     } else if (alibi) {
         set_bytes(encoder, &window_size, sizeof(window_size), 10);
         set_buffer(encoder, layer.alibi_slopes, 11);
-        if (sequence_length <= 1024) {
-            dispatch_cooperative(encoder, "celeg_attention_alibi_cooperative",
-                                 query_heads);
-        } else {
-            dispatch(encoder, "celeg_attention_alibi", query_heads * head_dim);
-        }
+        attention_kernel = "celeg_attention_alibi";
     } else if (window_size > 0) {
         set_bytes(encoder, &window_size, sizeof(window_size), 10);
-        if (sequence_length <= 1024) {
-            dispatch_cooperative(
-                encoder, "celeg_attention_sliding_cooperative", query_heads);
-        } else {
-            dispatch(encoder, "celeg_attention_sliding", query_heads * head_dim);
-        }
-    } else if (sequence_length <= 1024) {
-        dispatch_cooperative(encoder, "celeg_attention_cooperative", query_heads);
-    } else {
-        dispatch(encoder, "celeg_attention", query_heads * head_dim);
+        attention_kernel = "celeg_attention_sliding";
     }
+    encode_attention_span(encoder, attention_kernel, query_heads, 1, head_dim);
 
     if (const auto* transform = attention_output_transform(attention)) {
         const uint32_t rows = 1;
@@ -515,6 +525,7 @@ void MetalModel::Impl::encode_attention_batch(
     set_bytes(encoder, &head_dim, sizeof(head_dim), 8);
     set_bytes(encoder, &attention_scale, sizeof(attention_scale), 9);
     set_bytes(encoder, &page_tokens, sizeof(page_tokens), 10);
+    std::string_view attention_kernel = "celeg_attention_batch";
     if (relative) {
         const uint32_t bucket_count = static_cast<uint32_t>(relative->bucket_count);
         const uint32_t max_distance = static_cast<uint32_t>(relative->max_distance);
@@ -524,54 +535,16 @@ void MetalModel::Impl::encode_attention_batch(
         set_bytes(encoder, &bucket_count, sizeof(bucket_count), 13);
         set_bytes(encoder, &max_distance, sizeof(max_distance), 14);
         set_bytes(encoder, &bidirectional, sizeof(bidirectional), 15);
-        if (base_position + rows <= 1024) {
-            id<MTLComputePipelineState> state =
-                pipeline("celeg_attention_batch_relative_bias_cooperative");
-            [encoder setComputePipelineState:state];
-            [encoder dispatchThreadgroups:MTLSizeMake(query_heads, rows, 1)
-               threadsPerThreadgroup:MTLSizeMake(32, 1, 1)];
-            record_dispatch("celeg_attention_batch_relative_bias");
-        } else {
-            dispatch(encoder, "celeg_attention_batch_relative_bias",
-                     static_cast<NSUInteger>(rows) * query_heads * head_dim);
-        }
+        attention_kernel = "celeg_attention_batch_relative_bias";
     } else if (alibi) {
         set_bytes(encoder, &window_size, sizeof(window_size), 11);
         set_buffer(encoder, layer.alibi_slopes, 12);
-        if (base_position + rows <= 1024) {
-            id<MTLComputePipelineState> state =
-                pipeline("celeg_attention_batch_alibi_cooperative");
-            [encoder setComputePipelineState:state];
-            [encoder dispatchThreadgroups:MTLSizeMake(query_heads, rows, 1)
-               threadsPerThreadgroup:MTLSizeMake(32, 1, 1)];
-            record_dispatch("celeg_attention_batch_alibi");
-        } else {
-            dispatch(encoder, "celeg_attention_batch_alibi",
-                     static_cast<NSUInteger>(rows) * query_heads * head_dim);
-        }
+        attention_kernel = "celeg_attention_batch_alibi";
     } else if (window_size > 0) {
         set_bytes(encoder, &window_size, sizeof(window_size), 11);
-        if (base_position + rows <= 1024) {
-            id<MTLComputePipelineState> state =
-                pipeline("celeg_attention_batch_sliding_cooperative");
-            [encoder setComputePipelineState:state];
-            [encoder dispatchThreadgroups:MTLSizeMake(query_heads, rows, 1)
-               threadsPerThreadgroup:MTLSizeMake(32, 1, 1)];
-            record_dispatch("celeg_attention_batch_sliding");
-        } else {
-            dispatch(encoder, "celeg_attention_batch_sliding",
-                     static_cast<NSUInteger>(rows) * query_heads * head_dim);
-        }
-    } else if (base_position + rows <= 1024) {
-        id<MTLComputePipelineState> state = pipeline("celeg_attention_batch_cooperative");
-        [encoder setComputePipelineState:state];
-        [encoder dispatchThreadgroups:MTLSizeMake(query_heads, rows, 1)
-           threadsPerThreadgroup:MTLSizeMake(32, 1, 1)];
-        record_dispatch("celeg_attention_batch");
-    } else {
-        dispatch(encoder, "celeg_attention_batch",
-                 static_cast<NSUInteger>(rows) * query_heads * head_dim);
+        attention_kernel = "celeg_attention_batch_sliding";
     }
+    encode_attention_span(encoder, attention_kernel, query_heads, rows, head_dim);
 
     if (const auto* transform = attention_output_transform(attention)) {
         set_buffer(encoder, batch_operation, 0);

@@ -303,6 +303,9 @@ struct MetalModel::Impl {
                                   Layer& layer);
     void encode_mamba2(id<MTLComputeCommandEncoder> encoder, Layer& layer);
     void encode_mamba2_layer(id<MTLComputeCommandEncoder> encoder, Layer& layer);
+    void encode_attention_span(id<MTLComputeCommandEncoder> encoder,
+                               std::string_view name, uint32_t query_heads,
+                               uint32_t rows, uint32_t head_dim);
     void encode_attention(id<MTLComputeCommandEncoder> encoder, Layer& layer,
                           const CompiledAttentionProgram& attention,
                           const std::array<int32_t, 3>* rope_position = nullptr);
