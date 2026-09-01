@@ -188,8 +188,10 @@ int main() {
     std::get<celeg::OrdinaryKvStateSpec>(
         std::get<celeg::AttentionSpec>(int8_state.graph.layers[0].mixer).state)
         .storage.key = celeg::StateScalarType::INT8;
-    const auto int8_program = celeg::CpuModelCompiler{}.compile(int8_state);
-    CELEG_TEST_CHECK(int8_program.semantic_fingerprint != cpu.semantic_fingerprint);
+    bool cpu_int8_rejected = false;
+    try { (void)celeg::CpuModelCompiler{}.compile(int8_state); }
+    catch (const std::invalid_argument&) { cpu_int8_rejected = true; }
+    CELEG_TEST_CHECK(cpu_int8_rejected);
 
     celeg::ResolvedModel latent_state = model;
     std::get<celeg::AttentionSpec>(latent_state.graph.layers[0].mixer).state =
@@ -201,6 +203,34 @@ int main() {
     const auto cuda_latent = celeg::CudaModelCompiler{}.compile(latent_state);
     CELEG_TEST_CHECK(std::holds_alternative<celeg::CompiledLatentStateLayout>(
         compiled_attention_state(cuda_latent.layers[0])));
+
+    celeg::ResolvedModel cpu_latent_mrope = latent_state;
+    auto& cpu_latent_mrope_attention = std::get<celeg::AttentionSpec>(
+        cpu_latent_mrope.graph.layers[0].mixer);
+    celeg::MultiAxisRopeSpec cpu_latent_multi;
+    cpu_latent_multi.base = celeg::RopePositionSpec{10000.0, 1.0, {}};
+    cpu_latent_multi.sections = {2, 1, 1};
+    cpu_latent_multi.interleaved = true;
+    cpu_latent_multi.axes = 3;
+    cpu_latent_mrope_attention.position = cpu_latent_multi;
+    bool cpu_latent_mrope_rejected = false;
+    try { (void)celeg::CpuModelCompiler{}.compile(cpu_latent_mrope); }
+    catch (const std::invalid_argument&) { cpu_latent_mrope_rejected = true; }
+    CELEG_TEST_CHECK(cpu_latent_mrope_rejected);
+
+    celeg::ResolvedModel packed_head_gate = model;
+    auto& packed_head_attention = std::get<celeg::AttentionSpec>(
+        packed_head_gate.graph.layers[0].mixer);
+    packed_head_attention.output_gate = celeg::SigmoidAttentionGateSpec{
+        true, celeg::AttentionGateGranularity::HeadWise};
+    bool packed_head_cpu_rejected = false;
+    try { (void)celeg::CpuModelCompiler{}.compile(packed_head_gate); }
+    catch (const std::invalid_argument&) { packed_head_cpu_rejected = true; }
+    CELEG_TEST_CHECK(packed_head_cpu_rejected);
+    bool packed_head_cuda_rejected = false;
+    try { (void)celeg::CudaModelCompiler{}.compile(packed_head_gate); }
+    catch (const std::invalid_argument&) { packed_head_cuda_rejected = true; }
+    CELEG_TEST_CHECK(packed_head_cuda_rejected);
 
     celeg::ResolvedModel latent_gate = latent_state;
     std::get<celeg::AttentionSpec>(latent_gate.graph.layers[0].mixer).output_gate =
