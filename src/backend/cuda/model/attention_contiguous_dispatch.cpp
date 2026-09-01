@@ -28,6 +28,8 @@ void dispatch_cuda_standard_attention_contiguous(
         .extent = block_sparse
             ? AttentionExtent{.position = model.position_device_.data()}
             : AttentionExtent{.seq_len = model.session_.position_ + 1},
+        .alibi_slopes = attention.alibi_slopes.data(),
+        .relative_bias = cuda_relative_position_bias_view(attention),
         .stream = model.stream_.get()});
 }
 
