@@ -5,6 +5,8 @@ bool CudaSchedulerDriver::run_prefill_work() {
     struct Work { Lane* lane; RequestId id; size_t begin; size_t count; bool first; bool final; };
     std::vector<Work> work;
     int token_budget = engine_options_.max_batched_tokens;
+    const size_t required_initial_span = static_cast<size_t>(
+        program_.required_initial_attention_span());
     {
         std::lock_guard<std::mutex> lock(mutex_);
         int decode_reservation = 0;
@@ -29,11 +31,31 @@ bool CudaSchedulerDriver::run_prefill_work() {
             }
             const size_t remaining = request.prompt.size() - request.prefill_offset;
             const bool embedded = !request.options.prompt_embedding.empty();
-            const size_t count = embedded
-                ? remaining
-                : std::min<size_t>(remaining, std::min(
-                    engine_options_.prefill_chunk_tokens,
-                    token_budget));
+            size_t count = 0;
+            if (embedded) {
+                count = remaining;
+            } else if (request.prefill_offset == 0 && required_initial_span != 0) {
+                if (remaining < required_initial_span) {
+                    finish_request_locked(
+                        request, RequestStatus::Failed,
+                        "CUDA Prefix-LM prompt is shorter than the required prefix");
+                    continue;
+                }
+                if (!work.empty() &&
+                    token_budget < static_cast<int>(required_initial_span)) {
+                    continue;
+                }
+                const size_t ordinary = std::min<size_t>(
+                    remaining,
+                    static_cast<size_t>(std::max(
+                        0, std::min(engine_options_.prefill_chunk_tokens,
+                                    token_budget))));
+                count = std::max(required_initial_span, ordinary);
+            } else {
+                count = std::min<size_t>(remaining, static_cast<size_t>(std::max(
+                    0, std::min(engine_options_.prefill_chunk_tokens,
+                                token_budget))));
+            }
             if (count == 0) continue;
             work.push_back({&lane, request.id, request.prefill_offset, count,
                             request.prefill_offset == 0,
@@ -42,13 +64,18 @@ bool CudaSchedulerDriver::run_prefill_work() {
                 token_budget = 0;
                 break;
             }
-            token_budget -= static_cast<int>(count);
+            token_budget = std::max(0, token_budget - static_cast<int>(count));
+            if (token_budget == 0) break;
         }
     }
     const bool has_embedded = std::any_of(work.begin(), work.end(), [&](const Work& item) {
         std::lock_guard<std::mutex> lock(mutex_);
         return !registry_.at(item.id).options.prompt_embedding.empty();
     });
+    const bool requires_atomic_prefix = required_initial_span != 0 &&
+        std::any_of(work.begin(), work.end(), [](const Work& item) {
+            return item.first;
+        });
     const bool requires_attention_transform = !has_embedded && packed_executor_ &&
         std::any_of(work.begin(), work.end(), [](const Work& item) {
             const PackedSessionContext context = packed_session_context(*item.lane->model);
@@ -63,7 +90,7 @@ bool CudaSchedulerDriver::run_prefill_work() {
         });
     const bool use_packed_prefill = !has_embedded && engine_options_.packed_decode &&
         packed_executor_ &&
-        (requires_attention_transform ||
+        (requires_atomic_prefix || requires_attention_transform ||
          (engine_options_.ragged_packed_prefill &&
           work.size() >= static_cast<size_t>(engine_options_.ragged_prefill_min_batch)));
     if (use_packed_prefill) {
