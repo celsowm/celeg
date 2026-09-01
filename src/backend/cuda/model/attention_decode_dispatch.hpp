@@ -28,6 +28,7 @@ struct CudaContiguousDecodeDispatch {
     AttentionExtent extent{};
     AttentionDecodeSegmentation segmentation{};
     const float* alibi_slopes = nullptr;
+    RelativePositionBiasDeviceView relative_bias{};
     cudaStream_t stream = nullptr;
 };
 
@@ -45,6 +46,7 @@ struct CudaPagedDecodeDispatch {
     GqaGeometry geometry{};
     AttentionSegmentation segmentation{};
     const float* alibi_slopes = nullptr;
+    RelativePositionBiasDeviceView relative_bias{};
     cudaStream_t stream = nullptr;
 };
 
@@ -55,7 +57,6 @@ CudaDecodeAttentionPolicy plan_cuda_decode_attention(
     AttentionPositionSource position_source,
     bool fast_attention,
     bool segmented_attention,
-    bool has_alibi,
     int owner_head_dim);
 
 GqaGeometry make_cuda_gqa_geometry(
