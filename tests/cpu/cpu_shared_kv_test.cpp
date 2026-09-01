@@ -2,105 +2,19 @@
 #include "celeg/model/architecture.hpp"
 #include "celeg/model/resolved.hpp"
 #include "celeg/runtime/context.hpp"
+#include "cpu/support/synthetic_checkpoint.hpp"
 #include "support/assertions.hpp"
 
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
-#include <cstring>
 #include <filesystem>
-#include <fstream>
 #include <memory>
-#include <sstream>
 #include <string>
 #include <utility>
 #include <vector>
 
 namespace {
-
-struct Tensor {
-    std::string name;
-    std::vector<int> shape;
-    std::vector<std::uint16_t> values;
-};
-
-std::uint16_t bf16(float value) {
-    std::uint32_t bits = 0;
-    std::memcpy(&bits, &value, sizeof(bits));
-    return static_cast<std::uint16_t>((bits + 0x8000u) >> 16);
-}
-
-std::size_t element_count(const std::vector<int>& shape) {
-    std::size_t count = 1;
-    for (const int dimension : shape) {
-        count *= static_cast<std::size_t>(dimension);
-    }
-    return count;
-}
-
-void add_pattern_tensor(std::vector<Tensor>& tensors, std::string name,
-                        std::vector<int> shape, float base, float step) {
-    Tensor tensor{std::move(name), std::move(shape), {}};
-    tensor.values.resize(element_count(tensor.shape));
-    for (std::size_t index = 0; index < tensor.values.size(); ++index) {
-        tensor.values[index] = bf16(
-            base + static_cast<float>((index * 7 + 3) % 17) * step);
-    }
-    tensors.push_back(std::move(tensor));
-}
-
-void add_constant_tensor(std::vector<Tensor>& tensors, std::string name,
-                         std::vector<int> shape, float value) {
-    Tensor tensor{std::move(name), std::move(shape), {}};
-    tensor.values.assign(element_count(tensor.shape), bf16(value));
-    tensors.push_back(std::move(tensor));
-}
-
-void write_checkpoint(const std::filesystem::path& directory) {
-    std::filesystem::create_directories(directory);
-    std::ofstream config(directory / "config.json");
-    config << R"({"model_type":"celeg_cpu_shared_kv_fixture"})";
-
-    std::vector<Tensor> tensors;
-    add_pattern_tensor(tensors, "embed", {8, 4}, 0.02f, 0.003f);
-    add_pattern_tensor(tensors, "l0.q", {4, 4}, 0.01f, 0.002f);
-    add_pattern_tensor(tensors, "l0.k", {4, 4}, 0.03f, 0.0015f);
-    add_pattern_tensor(tensors, "l0.v", {4, 4}, 0.04f, 0.0013f);
-    add_constant_tensor(tensors, "l0.out", {4, 4}, 0.0f);
-    add_pattern_tensor(tensors, "l1.q", {4, 4}, 0.05f, 0.0017f);
-    add_pattern_tensor(tensors, "l1.k", {4, 4}, 0.03f, 0.0015f);
-    add_pattern_tensor(tensors, "l1.v", {4, 4}, 0.04f, 0.0013f);
-    add_pattern_tensor(tensors, "l1.out", {4, 4}, 0.02f, 0.0021f);
-
-    std::ostringstream header;
-    header << '{';
-    std::size_t offset = 0;
-    for (std::size_t index = 0; index < tensors.size(); ++index) {
-        if (index != 0) header << ',';
-        const Tensor& tensor = tensors[index];
-        header << '"' << tensor.name << "\":{";
-        header << "\"dtype\":\"BF16\",\"shape\":[";
-        for (std::size_t dimension = 0; dimension < tensor.shape.size(); ++dimension) {
-            if (dimension != 0) header << ',';
-            header << tensor.shape[dimension];
-        }
-        header << "],\"data_offsets\":[" << offset << ','
-               << offset + tensor.values.size() * sizeof(std::uint16_t) << "]}";
-        offset += tensor.values.size() * sizeof(std::uint16_t);
-    }
-    header << '}';
-
-    const std::string header_text = header.str();
-    std::ofstream weights(directory / "model.safetensors", std::ios::binary);
-    const std::uint64_t header_size = static_cast<std::uint64_t>(header_text.size());
-    weights.write(reinterpret_cast<const char*>(&header_size), sizeof(header_size));
-    weights.write(header_text.data(), static_cast<std::streamsize>(header_text.size()));
-    for (const Tensor& tensor : tensors) {
-        weights.write(reinterpret_cast<const char*>(tensor.values.data()),
-                      static_cast<std::streamsize>(
-                          tensor.values.size() * sizeof(std::uint16_t)));
-    }
-}
 
 celeg::TensorRequest request(celeg::TensorRole role, int layer,
                              std::string name, std::vector<int64_t> shape) {
@@ -205,7 +119,18 @@ void compare_logits(const std::vector<float>& expected,
 int main() {
     const std::filesystem::path directory =
         std::filesystem::temp_directory_path() / "celeg-cpu-shared-kv-test";
-    write_checkpoint(directory);
+    celeg::test_support::write_safetensors_checkpoint(
+        directory, "celeg_cpu_shared_kv_fixture", {
+            celeg::test_support::pattern_tensor("embed", {8, 4}, 0.02f, 0.003f),
+            celeg::test_support::pattern_tensor("l0.q", {4, 4}, 0.01f, 0.002f),
+            celeg::test_support::pattern_tensor("l0.k", {4, 4}, 0.03f, 0.0015f),
+            celeg::test_support::pattern_tensor("l0.v", {4, 4}, 0.04f, 0.0013f),
+            celeg::test_support::constant_tensor("l0.out", {4, 4}, 0.0f),
+            celeg::test_support::pattern_tensor("l1.q", {4, 4}, 0.05f, 0.0017f),
+            celeg::test_support::pattern_tensor("l1.k", {4, 4}, 0.03f, 0.0015f),
+            celeg::test_support::pattern_tensor("l1.v", {4, 4}, 0.04f, 0.0013f),
+            celeg::test_support::pattern_tensor("l1.out", {4, 4}, 0.02f, 0.0021f),
+        });
 
     celeg::CpuModelOptions scalar_options;
     scalar_options.use_pack_cache = false;
