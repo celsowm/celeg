@@ -529,6 +529,129 @@ kernel void celeg_matvec_q4k_tuned(device const uchar* weights [[buffer(0)]],
 
 
 
+/**
+ * @brief Output rows each simdgroup accumulates in one matvec pass.
+ *
+ * Holding several rows keeps the activation values in registers across them, so
+ * the activation loads, the SwiGLU evaluation and the index arithmetic are paid
+ * once per group of rows instead of once per row.
+ */
+constant uint kCelegMatvecRows = 4;
+
+/// @brief Reads the matrix-vector input straight from a dense float vector.
+struct CelegDenseInput {
+    device const float* values;
+
+    float at(uint column) const { return values[column]; }
+};
+
+/**
+ * @brief Applies SwiGLU to a packed gate/up pair and feeds the result in.
+ *
+ * Fusing the activation into the down projection removes both the separate
+ * elementwise dispatch and the round trip of the intermediate vector through
+ * device memory.
+ */
+struct CelegSwigluInput {
+    device const float* gate_up;
+    uint cols;
+
+    float at(uint column) const {
+        const float gate = gate_up[column];
+        return gate / (1.0f + exp(-gate)) * gate_up[cols + column];
+    }
+};
+
+/**
+ * @brief Per-lane slice of one 256-value Q6_K super-block.
+ *
+ * A lane owns four consecutive `ql` bytes, which carry eight values: the four
+ * low nibbles form one run of four columns and the four high nibbles form a
+ * second run 64 columns later. Both runs are four-column aligned, so each sits
+ * entirely inside one 16-value scale group. The two runs share the same four
+ * `qh` bytes, differing only in which bit pair supplies the high two bits, so
+ * eight values cost four `ql` bytes, four `qh` bytes and two scale bytes rather
+ * than the two block-header decodes per value the scalar form paid.
+ */
+struct CelegQ6kLane {
+    uint ql_offset;
+    uint qh_offset;
+    uint low_column;
+    uint high_column;
+    uint low_shift;
+    uint high_shift;
+};
+
+CelegQ6kLane celeg_q6k_lane(uint lane) {
+    const uint ql_byte = lane * 4u;
+    const uint half_index = ql_byte >> 6;
+    const uint within_half = ql_byte & 63u;
+    const uint upper = within_half >> 5;
+    const uint slot = within_half & 31u;
+    CelegQ6kLane result;
+    result.ql_offset = half_index * 64u + within_half;
+    result.qh_offset = 128u + half_index * 32u + slot;
+    result.low_column = half_index * 128u + upper * 32u + slot;
+    result.high_column = result.low_column + 64u;
+    result.low_shift = upper * 2u;
+    result.high_shift = result.low_shift + 4u;
+    return result;
+}
+
+template <typename Input>
+void celeg_matvec_q6k_core(device const uchar* weights, Input input, device float* output,
+                           uint rows, uint cols, uint row_bytes, uint lane, uint simd,
+                           uint simd_count, uint group) {
+    const uint first_row = (group * simd_count + simd) * kCelegMatvecRows;
+    if (first_row >= rows) return;
+    const CelegQ6kLane slice = celeg_q6k_lane(lane);
+    const uint low_scale = slice.low_column >> 4;
+    const uint high_scale = slice.high_column >> 4;
+
+    float sums[kCelegMatvecRows] = {0.0f, 0.0f, 0.0f, 0.0f};
+    const uint blocks = cols / 256u;
+    for (uint block = 0; block < blocks; ++block) {
+        const uint base = block * 256u;
+        float low_input[4];
+        float high_input[4];
+        for (uint step = 0; step < 4u; ++step) {
+            low_input[step] = input.at(base + slice.low_column + step);
+            high_input[step] = input.at(base + slice.high_column + step);
+        }
+        for (uint index = 0; index < kCelegMatvecRows; ++index) {
+            const uint row = first_row + index;
+            if (row >= rows) break;
+            const device uchar* data = weights + static_cast<size_t>(row) * row_bytes +
+                static_cast<size_t>(block) * 210u;
+            const float d = celeg_half_to_float(static_cast<ushort>(data[208]) |
+                                                (static_cast<ushort>(data[209]) << 8));
+            const float low_factor = d * static_cast<float>(
+                static_cast<char>(data[192 + low_scale]));
+            const float high_factor = d * static_cast<float>(
+                static_cast<char>(data[192 + high_scale]));
+            device const uchar* ql = data + slice.ql_offset;
+            device const uchar* qh = data + slice.qh_offset;
+            float low_sum = 0.0f;
+            float high_sum = 0.0f;
+            for (uint step = 0; step < 4u; ++step) {
+                const uint packed = ql[step];
+                const uint high_bits = qh[step];
+                const int low_value = static_cast<int>(
+                    (packed & 0x0fu) | (((high_bits >> slice.low_shift) & 3u) << 4)) - 32;
+                const int high_value = static_cast<int>(
+                    (packed >> 4) | (((high_bits >> slice.high_shift) & 3u) << 4)) - 32;
+                low_sum += static_cast<float>(low_value) * low_input[step];
+                high_sum += static_cast<float>(high_value) * high_input[step];
+            }
+            sums[index] += low_factor * low_sum + high_factor * high_sum;
+        }
+    }
+    for (uint index = 0; index < kCelegMatvecRows; ++index) {
+        const float reduced = simd_sum(sums[index]);
+        if (lane == 0 && first_row + index < rows) output[first_row + index] = reduced;
+    }
+}
+
 kernel void celeg_matvec_q6k(device const uchar* weights [[buffer(0)]],
                              device const float* input [[buffer(1)]],
                              device float* output [[buffer(2)]],
@@ -537,71 +660,24 @@ kernel void celeg_matvec_q6k(device const uchar* weights [[buffer(0)]],
                              constant uint& row_bytes [[buffer(5)]],
                              uint lane [[thread_index_in_simdgroup]],
                              uint simd [[simdgroup_index_in_threadgroup]],
+                             uint simd_count [[simdgroups_per_threadgroup]],
                              uint group [[threadgroup_position_in_grid]]) {
-    const uint row = group * 8 + simd;
-    if (row >= rows) return;
-    float sum = 0.0f;
-    const device uchar* row_data = weights + static_cast<size_t>(row) * row_bytes;
-    for (uint column = lane; column < cols; column += 32) {
-        const uint block_index = column / 256;
-        const device uchar* block = row_data + static_cast<size_t>(block_index) * 210;
-        const float d = celeg_half_to_float(static_cast<ushort>(block[208]) |
-                                            (static_cast<ushort>(block[209]) << 8));
-        const uint within = column & 255;
-        const float scale = d * static_cast<float>(
-            static_cast<char>(block[192 + within / 16]));
-        sum += scale * static_cast<float>(celeg_q6k_value(block, within) - 32) * input[column];
-    }
-    const float reduced = simd_sum(sum);
-    if (lane == 0) output[row] = reduced;
+    celeg_matvec_q6k_core(weights, CelegDenseInput{input}, output, rows, cols, row_bytes,
+                          lane, simd, simd_count, group);
 }
 
-kernel void celeg_matvec_q6k_tuned(device const uchar* weights [[buffer(0)]],
-                                   device const float* input [[buffer(1)]],
-                                   device float* output [[buffer(2)]],
-                                   constant uint& rows [[buffer(3)]],
-                                   constant uint& cols [[buffer(4)]],
-                                   constant uint& row_bytes [[buffer(5)]],
-                                   threadgroup float* partial [[threadgroup(0)]],
-                                   uint lane [[thread_index_in_simdgroup]],
-                                   uint simd [[simdgroup_index_in_threadgroup]],
-                                   uint group [[threadgroup_position_in_grid]]) {
-    const uint row = group * 2;
-    if (row >= rows) return;
-    float sums[2] = {0.0f, 0.0f};
-    for (uint column = simd * 32 + lane; column < cols; column += 128) {
-        const uint within = column & 255;
-        const device uchar* first = weights + static_cast<size_t>(row) * row_bytes +
-            static_cast<size_t>(column / 256) * 210;
-        const float first_d = celeg_half_to_float(static_cast<ushort>(first[208]) |
-                                                   (static_cast<ushort>(first[209]) << 8));
-        const float first_scale = first_d * static_cast<float>(
-            static_cast<char>(first[192 + within / 16]));
-        sums[0] += first_scale * static_cast<float>(celeg_q6k_value(first, within) - 32) *
-            input[column];
-        if (row + 1 < rows) {
-            const device uchar* second = weights + static_cast<size_t>(row + 1) * row_bytes +
-                static_cast<size_t>(column / 256) * 210;
-            const float second_d = celeg_half_to_float(static_cast<ushort>(second[208]) |
-                                                        (static_cast<ushort>(second[209]) << 8));
-            const float second_scale = second_d * static_cast<float>(
-                static_cast<char>(second[192 + within / 16]));
-            sums[1] += second_scale *
-                static_cast<float>(celeg_q6k_value(second, within) - 32) * input[column];
-        }
-    }
-    const float reduced0 = simd_sum(sums[0]);
-    const float reduced1 = simd_sum(sums[1]);
-    if (lane == 0) {
-        partial[simd * 2] = reduced0;
-        partial[simd * 2 + 1] = reduced1;
-    }
-    threadgroup_barrier(mem_flags::mem_threadgroup);
-    if (simd == 0 && lane < 2) {
-        float total = partial[lane];
-        for (uint other = 1; other < 4; ++other) total += partial[other * 2 + lane];
-        if (row + lane < rows) output[row + lane] = total;
-    }
+kernel void celeg_swiglu_matvec_q6k(device const uchar* weights [[buffer(0)]],
+                                    device const float* gate_up [[buffer(1)]],
+                                    device float* output [[buffer(2)]],
+                                    constant uint& rows [[buffer(3)]],
+                                    constant uint& cols [[buffer(4)]],
+                                    constant uint& row_bytes [[buffer(5)]],
+                                    uint lane [[thread_index_in_simdgroup]],
+                                    uint simd [[simdgroup_index_in_threadgroup]],
+                                    uint simd_count [[simdgroups_per_threadgroup]],
+                                    uint group [[threadgroup_position_in_grid]]) {
+    celeg_matvec_q6k_core(weights, CelegSwigluInput{gate_up, cols}, output, rows, cols,
+                          row_bytes, lane, simd, simd_count, group);
 }
 
 float celeg_swiglu_activation(device const float* gate_up, uint cols, uint column) {
@@ -631,13 +707,6 @@ float celeg_swiglu_q5k_weight(device const uchar* block, uint within) {
                                            (static_cast<ushort>(block[3]) << 8));
     return d * static_cast<float>(scale) * celeg_q5k_value(block, within) -
            dmin * static_cast<float>(minimum);
-}
-
-float celeg_swiglu_q6k_weight(device const uchar* block, uint within) {
-    const float d = celeg_half_to_float(static_cast<ushort>(block[208]) |
-                                        (static_cast<ushort>(block[209]) << 8));
-    return d * static_cast<float>(static_cast<char>(block[192 + within / 16])) *
-           static_cast<float>(celeg_q6k_value(block, within) - 32);
 }
 
 #define CELEG_SWIGLU_MATVEC(NAME, BLOCK_BYTES, DECODE) \
@@ -675,7 +744,6 @@ kernel void celeg_swiglu_matvec_##NAME( \
 
 CELEG_SWIGLU_MATVEC(q4k, 144, celeg_swiglu_q4k_weight)
 CELEG_SWIGLU_MATVEC(q5k, 176, celeg_swiglu_q5k_weight)
-CELEG_SWIGLU_MATVEC(q6k, 210, celeg_swiglu_q6k_weight)
 #undef CELEG_SWIGLU_MATVEC
 
 kernel void celeg_embedding_q4k(device const uchar* weights [[buffer(0)]],

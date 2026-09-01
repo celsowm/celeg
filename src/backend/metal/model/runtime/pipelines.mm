@@ -25,7 +25,7 @@ std::optional<std::string_view> MetalModel::Impl::linear_kernel(
          "celeg_embedding_q4k", "celeg_embedding_q4k_batch", "celeg_swiglu_matvec_q4k_blocked"},
         {"celeg_matvec_q5k", "celeg_matvec_pair_q5k", "celeg_matmul_q5k", "celeg_matmul_pair_q5k", "celeg_matmul_tensor_q5k",
          "celeg_embedding_q5k", "celeg_embedding_q5k_batch", "celeg_swiglu_matvec_q5k"},
-        {"celeg_matvec_q6k", "celeg_matvec_pair_q6k", "celeg_matmul_q6k", "celeg_matmul_pair_q6k", "celeg_matmul_tensor_q6k",
+        {nullptr, "celeg_matvec_pair_q6k", "celeg_matmul_q6k", "celeg_matmul_pair_q6k", "celeg_matmul_tensor_q6k",
          "celeg_embedding_q6k", "celeg_embedding_q6k_batch", "celeg_swiglu_matvec_q6k"},
         {"celeg_matvec_q8_0", "celeg_matvec_pair_q8_0", "celeg_matmul_q8_0", "celeg_matmul_pair_q8_0", "celeg_matmul_tensor_q8_0",
          "celeg_embedding_q8_0", "celeg_embedding_q8_0_batch", nullptr},
@@ -37,7 +37,7 @@ std::optional<std::string_view> MetalModel::Impl::linear_kernel(
         {"celeg_matvec_q4_0_tuned", nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr},
         {"celeg_matvec_q4k_packed", nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr},
         {"celeg_matvec_q5k_tuned", nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr},
-        {"celeg_matvec_q6k_tuned", nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr},
+        {nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr},
         {nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr},
     };
     const auto storage_index = static_cast<std::size_t>(storage);
@@ -48,6 +48,42 @@ std::optional<std::string_view> MetalModel::Impl::linear_kernel(
         : kGeneric[storage_index][operation_index];
     if (name == nullptr) return std::nullopt;
     return std::string_view{name};
+}
+
+/**
+ * @brief Kernel and launch geometry for the decode matrix-vector product.
+ *
+ * Rewritten kernels accumulate @c kCelegMatvecRows rows per simdgroup across
+ * four simdgroups and need no threadgroup scratch; the remaining formats keep
+ * their original one-row-per-simdgroup shape until they are converted.
+ */
+MetalMatvecKernel MetalModel::Impl::matvec_kernel(LinearStorage storage) const {
+    switch (storage) {
+        case LinearStorage::Float32: return {"celeg_matvec", 8, 256, 0};
+        case LinearStorage::Float16: return {"celeg_matvec_tuned_f16", 2, 128, 8};
+        case LinearStorage::BFloat16: return {"celeg_matvec_tuned_bf16", 2, 128, 8};
+        case LinearStorage::Q4_0: return {"celeg_matvec_q4_0_tuned", 2, 128, 8};
+        case LinearStorage::Q4K: return {"celeg_matvec_q4k_packed", 8, 256, 0};
+        case LinearStorage::Q5K: return {"celeg_matvec_q5k_tuned", 2, 128, 8};
+        case LinearStorage::Q6K: return {"celeg_matvec_q6k", 16, 128, 0};
+        case LinearStorage::Q8_0: return {"celeg_matvec_q8_0", 8, 256, 0};
+    }
+    return {};
+}
+
+/**
+ * @brief Kernel and launch geometry for the fused SwiGLU down projection.
+ *
+ * Formats without an entry fall back to a separate elementwise SwiGLU dispatch
+ * followed by an ordinary matrix-vector product.
+ */
+MetalMatvecKernel MetalModel::Impl::swiglu_matvec_kernel(LinearStorage storage) const {
+    switch (storage) {
+        case LinearStorage::Q4K: return {"celeg_swiglu_matvec_q4k_blocked", 8, 256, 0};
+        case LinearStorage::Q5K: return {"celeg_swiglu_matvec_q5k", 2, 128, 8};
+        case LinearStorage::Q6K: return {"celeg_swiglu_matvec_q6k", 16, 128, 0};
+        default: return {};
+    }
 }
 
 void MetalModel::Impl::begin_commands(
@@ -212,21 +248,19 @@ void MetalModel::Impl::encode_matvec(id<MTLComputeCommandEncoder> encoder,
     if (weight.row_bytes != 0) {
         set_bytes(encoder, &weight.row_bytes, sizeof(weight.row_bytes), 5);
     }
-    const bool tuned = std::getenv("CELEG_METAL_TUNED_DISABLE") == nullptr;
-    const auto selected = linear_kernel(weight.storage, LinearOperationKind::MatVec, tuned);
-    if (!selected) throw std::runtime_error("unsupported Metal matvec binding");
-    const std::string_view kernel = *selected;
-    const NSUInteger groups = (weight.rows + 7u) / 8u;
-    if (kernel.find("tuned") == std::string_view::npos) {
-        dispatch_cooperative(encoder, kernel, groups);
-        return;
-    }
-    id<MTLComputePipelineState> state = pipeline(kernel);
+    const MetalMatvecKernel selected = matvec_kernel(weight.storage);
+    if (!selected.name) throw std::runtime_error("unsupported Metal matvec binding");
+    id<MTLComputePipelineState> state = pipeline(selected.name);
     [encoder setComputePipelineState:state];
-    [encoder setThreadgroupMemoryLength:8u * sizeof(float) atIndex:0];
-    [encoder dispatchThreadgroups:MTLSizeMake((weight.rows + 1u) / 2u, 1, 1)
-             threadsPerThreadgroup:MTLSizeMake(128, 1, 1)];
-    record_dispatch(kernel);
+    if (selected.threadgroup_floats != 0) {
+        [encoder setThreadgroupMemoryLength:selected.threadgroup_floats * sizeof(float)
+                                    atIndex:0];
+    }
+    const NSUInteger groups =
+        (weight.rows + selected.rows_per_threadgroup - 1u) / selected.rows_per_threadgroup;
+    [encoder dispatchThreadgroups:MTLSizeMake(groups, 1, 1)
+            threadsPerThreadgroup:MTLSizeMake(selected.threads, 1, 1)];
+    record_dispatch(selected.name);
 }
 
 bool MetalModel::Impl::encode_matvec_pair(
@@ -257,27 +291,25 @@ bool MetalModel::Impl::encode_matvec_pair(
 bool MetalModel::Impl::encode_swiglu_matvec(
     id<MTLComputeCommandEncoder> encoder, const Linear& weight,
     id<MTLBuffer> gate_up, id<MTLBuffer> output) {
-    if (std::getenv("CELEG_METAL_TUNED_DISABLE")) return false;
-    const auto selected = linear_kernel(weight.storage,
-                                        LinearOperationKind::SwiGluMatVec, true);
-    if (!selected) return false;
-    const std::string_view kernel = *selected;
+    const MetalMatvecKernel selected = swiglu_matvec_kernel(weight.storage);
+    if (!selected.name) return false;
     set_buffer(encoder, weight.buffer, 0);
     set_buffer(encoder, gate_up, 1);
     set_buffer(encoder, output, 2);
     set_bytes(encoder, &weight.rows, sizeof(weight.rows), 3);
     set_bytes(encoder, &weight.cols, sizeof(weight.cols), 4);
     set_bytes(encoder, &weight.row_bytes, sizeof(weight.row_bytes), 5);
-    if (kernel == "celeg_swiglu_matvec_q4k_blocked") {
-        dispatch_cooperative(encoder, kernel, (weight.rows + 7u) / 8u);
-        return true;
-    }
-    id<MTLComputePipelineState> state = pipeline(kernel);
+    id<MTLComputePipelineState> state = pipeline(selected.name);
     [encoder setComputePipelineState:state];
-    [encoder setThreadgroupMemoryLength:8u * sizeof(float) atIndex:0];
-    [encoder dispatchThreadgroups:MTLSizeMake((weight.rows + 1u) / 2u, 1, 1)
-       threadsPerThreadgroup:MTLSizeMake(128, 1, 1)];
-    record_dispatch(kernel);
+    if (selected.threadgroup_floats != 0) {
+        [encoder setThreadgroupMemoryLength:selected.threadgroup_floats * sizeof(float)
+                                    atIndex:0];
+    }
+    const NSUInteger groups =
+        (weight.rows + selected.rows_per_threadgroup - 1u) / selected.rows_per_threadgroup;
+    [encoder dispatchThreadgroups:MTLSizeMake(groups, 1, 1)
+            threadsPerThreadgroup:MTLSizeMake(selected.threads, 1, 1)];
+    record_dispatch(selected.name);
     return true;
 }
 

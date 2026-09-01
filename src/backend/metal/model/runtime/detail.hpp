@@ -56,6 +56,14 @@ struct MetalPipelineCache {
     id<MTLComputePipelineState> tensor_pipeline(std::string_view name);
 };
 
+/// @brief Kernel name and launch geometry for one matrix-vector binding.
+struct MetalMatvecKernel {
+    const char* name = nullptr;
+    uint32_t rows_per_threadgroup = 0;
+    uint32_t threads = 0;
+    uint32_t threadgroup_floats = 0;
+};
+
 struct MetalModel::Impl {
     using LinearStorage = metal_model_detail::MetalLinearStorage;
 
@@ -228,6 +236,8 @@ struct MetalModel::Impl {
     id<MTLComputePipelineState> tensor_pipeline(std::string_view name);
     std::optional<std::string_view> linear_kernel(
         LinearStorage storage, LinearOperationKind operation, bool tuned) const;
+    MetalMatvecKernel matvec_kernel(LinearStorage storage) const;
+    MetalMatvecKernel swiglu_matvec_kernel(LinearStorage storage) const;
     void begin_commands(id<MTLCommandBuffer>& command_buffer,
                         id<MTLComputeCommandEncoder>& encoder);
     void finish_commands(id<MTLCommandBuffer>& command_buffer,

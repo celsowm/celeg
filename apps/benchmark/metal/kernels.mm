@@ -49,20 +49,24 @@ constexpr Shape kShapes[] = {
     {"lm_head_65536x1024", 65536, 1024},
 };
 
+/// Mirrors the launch geometry of `MetalModel::Impl::matvec_kernel`.
 struct Binding {
     const char* label;
     celeg::GgmlType type;
     const char* matvec;
+    uint32_t rows_per_threadgroup;
+    uint32_t threads;
+    uint32_t threadgroup_floats;
 };
 
 constexpr Binding kBindings[] = {
-    {"bf16", celeg::GgmlType::BF16, "celeg_matvec_tuned_bf16"},
-    {"f16", celeg::GgmlType::F16, "celeg_matvec_tuned_f16"},
-    {"q8_0", celeg::GgmlType::Q8_0, "celeg_matvec_q8_0"},
-    {"q6_k", celeg::GgmlType::Q6_K, "celeg_matvec_q6k_tuned"},
-    {"q5_k", celeg::GgmlType::Q5_K, "celeg_matvec_q5k_tuned"},
-    {"q4_k", celeg::GgmlType::Q4_K, "celeg_matvec_q4k_packed"},
-    {"q4_0", celeg::GgmlType::Q4_0, "celeg_matvec_q4_0_tuned"},
+    {"bf16", celeg::GgmlType::BF16, "celeg_matvec_tuned_bf16", 2, 128, 8},
+    {"f16", celeg::GgmlType::F16, "celeg_matvec_tuned_f16", 2, 128, 8},
+    {"q8_0", celeg::GgmlType::Q8_0, "celeg_matvec_q8_0", 8, 256, 0},
+    {"q6_k", celeg::GgmlType::Q6_K, "celeg_matvec_q6k", 16, 128, 0},
+    {"q5_k", celeg::GgmlType::Q5_K, "celeg_matvec_q5k_tuned", 2, 128, 8},
+    {"q4_k", celeg::GgmlType::Q4_K, "celeg_matvec_q4k_packed", 8, 256, 0},
+    {"q4_0", celeg::GgmlType::Q4_0, "celeg_matvec_q4_0_tuned", 2, 128, 8},
 };
 
 constexpr uint32_t kAttentionDepths[] = {96, 960, 1984, 4096};
@@ -181,8 +185,6 @@ std::vector<Row> measure_matvec(Harness& harness) {
         const celeg::GgmlTypeTrait trait = celeg::ggml_type_trait(binding.type);
         if (trait.block_size == 0) continue;
         id<MTLComputePipelineState> state = harness.pipeline(binding.matvec);
-        const bool tuned = std::string(binding.matvec).find("tuned") != std::string::npos ||
-                           std::string(binding.matvec).find("packed") != std::string::npos;
         for (const Shape& shape : kShapes) {
             const uint32_t row_bytes =
                 shape.cols / trait.block_size * trait.type_size;
@@ -203,14 +205,15 @@ std::vector<Row> measure_matvec(Harness& harness) {
                     [encoder setBytes:&rows_value length:sizeof(rows_value) atIndex:3];
                     [encoder setBytes:&cols_value length:sizeof(cols_value) atIndex:4];
                     [encoder setBytes:&row_bytes_value length:sizeof(row_bytes_value) atIndex:5];
-                    if (tuned) {
-                        [encoder setThreadgroupMemoryLength:8u * sizeof(float) atIndex:0];
-                        [encoder dispatchThreadgroups:MTLSizeMake((rows_value + 1u) / 2u, 1, 1)
-                                threadsPerThreadgroup:MTLSizeMake(128, 1, 1)];
-                    } else {
-                        [encoder dispatchThreadgroups:MTLSizeMake((rows_value + 7u) / 8u, 1, 1)
-                                threadsPerThreadgroup:MTLSizeMake(256, 1, 1)];
+                    if (binding.threadgroup_floats != 0) {
+                        [encoder setThreadgroupMemoryLength:binding.threadgroup_floats *
+                                                           sizeof(float)
+                                                    atIndex:0];
                     }
+                    [encoder dispatchThreadgroups:MTLSizeMake(
+                        (rows_value + binding.rows_per_threadgroup - 1u) /
+                            binding.rows_per_threadgroup, 1, 1)
+                            threadsPerThreadgroup:MTLSizeMake(binding.threads, 1, 1)];
                 });
             rows.push_back({binding.matvec, shape.label, weight_bytes, milliseconds,
                             static_cast<double>(weight_bytes) / (milliseconds * 1.0e6)});

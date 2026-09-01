@@ -97,9 +97,7 @@ std::vector<float> run_matvec(id<MTLDevice> device,
         case celeg::GgmlType::Q5_K:
             kernel = tuned ? "celeg_matvec_q5k_tuned" : "celeg_matvec_q5k";
             break;
-        case celeg::GgmlType::Q6_K:
-            kernel = tuned ? "celeg_matvec_q6k_tuned" : "celeg_matvec_q6k";
-            break;
+        case celeg::GgmlType::Q6_K: kernel = "celeg_matvec_q6k"; break;
         case celeg::GgmlType::Q8_0: kernel = "celeg_matvec_q8_0"; break;
         default: throw std::runtime_error("unsupported Metal matvec test type");
     }
@@ -131,7 +129,10 @@ std::vector<float> run_matvec(id<MTLDevice> device,
     [encoder setBytes:&rows length:sizeof(rows) atIndex:3];
     [encoder setBytes:&cols length:sizeof(cols) atIndex:4];
     [encoder setBytes:&row_bytes length:sizeof(row_bytes) atIndex:5];
-    if (tuned) {
+    if (tensor.type == celeg::GgmlType::Q6_K) {
+        [encoder dispatchThreadgroups:MTLSizeMake((rows + 15u) / 16u, 1, 1)
+                 threadsPerThreadgroup:MTLSizeMake(128, 1, 1)];
+    } else if (tuned) {
         [encoder setThreadgroupMemoryLength:8u * sizeof(float) atIndex:0];
         [encoder dispatchThreadgroups:MTLSizeMake((rows + 1u) / 2u, 1, 1)
                  threadsPerThreadgroup:MTLSizeMake(128, 1, 1)];
@@ -319,6 +320,20 @@ std::vector<float> run_residual_matvec_pair_quantized(
     return output;
 }
 
+/// Mirrors `MetalModel::Impl::swiglu_matvec_kernel` so the test exercises the
+/// same launch geometry the runtime uses.
+struct Geometry {
+    uint32_t rows_per_threadgroup;
+    uint32_t threads;
+    uint32_t threadgroup_floats;
+};
+
+Geometry swiglu_geometry(const char* kernel_name) {
+    if (std::strcmp(kernel_name, "celeg_swiglu_matvec_q4k_blocked") == 0) return {8, 256, 0};
+    if (std::strcmp(kernel_name, "celeg_swiglu_matvec_q6k") == 0) return {16, 128, 0};
+    return {2, 128, 8};
+}
+
 std::vector<float> run_swiglu_matvec(id<MTLDevice> device,
                                      const celeg::GgufTensorView& tensor,
                                      uint32_t rows,
@@ -356,13 +371,15 @@ std::vector<float> run_swiglu_matvec(id<MTLDevice> device,
     [encoder setBytes:&rows length:sizeof(rows) atIndex:3];
     [encoder setBytes:&cols length:sizeof(cols) atIndex:4];
     [encoder setBytes:&row_bytes length:sizeof(row_bytes) atIndex:5];
-    if (std::strcmp(kernel_name, "celeg_swiglu_matvec_q4k_blocked") != 0) {
-        [encoder setThreadgroupMemoryLength:8u * sizeof(float) atIndex:0];
+    const Geometry geometry = swiglu_geometry(kernel_name);
+    if (geometry.threadgroup_floats != 0) {
+        [encoder setThreadgroupMemoryLength:geometry.threadgroup_floats * sizeof(float)
+                                    atIndex:0];
     }
-    const uint32_t groups = std::strcmp(kernel_name, "celeg_swiglu_matvec_q4k_blocked") == 0
-        ? (rows + 7u) / 8u : (rows + 1u) / 2u;
+    const uint32_t groups =
+        (rows + geometry.rows_per_threadgroup - 1u) / geometry.rows_per_threadgroup;
     [encoder dispatchThreadgroups:MTLSizeMake(groups, 1, 1)
-             threadsPerThreadgroup:MTLSizeMake(256, 1, 1)];
+             threadsPerThreadgroup:MTLSizeMake(geometry.threads, 1, 1)];
     [encoder endEncoding];
     [command_buffer commit];
     [command_buffer waitUntilCompleted];
