@@ -5,6 +5,35 @@
 #include <iostream>
 #include <stdexcept>
 
+namespace {
+
+celeg::ModelGraph attention_graph() {
+    celeg::ModelGraph graph;
+    graph.hidden = 8;
+    celeg::LayerSpec layer;
+    celeg::AttentionSpec attention;
+    attention.query_heads = 2;
+    attention.key_value_heads = 1;
+    attention.head_dim = 4;
+    attention.position = celeg::NoPositionEncodingSpec{};
+    layer.mixer = attention;
+    layer.feed_forward = celeg::DenseFeedForwardSpec{
+        16, celeg::ActivationKind::SwiGLU};
+    graph.layers.push_back(std::move(layer));
+    return graph;
+}
+
+bool graph_rejected(celeg::ModelGraph graph) {
+    try {
+        graph.validate();
+    } catch (const std::runtime_error&) {
+        return true;
+    }
+    return false;
+}
+
+}
+
 int main() {
     celeg::TokenPolicy tokens;
     tokens.bos_token_id = 1;
@@ -71,6 +100,29 @@ int main() {
         rejected_token_range = true;
     }
     CELEG_TEST_CHECK(rejected_token_range);
+
+    celeg::ModelGraph packed_elementwise = attention_graph();
+    auto& packed_elementwise_attention = std::get<celeg::AttentionSpec>(
+        packed_elementwise.layers[0].mixer);
+    packed_elementwise_attention.output_gate = celeg::SigmoidAttentionGateSpec{
+        true, celeg::AttentionGateGranularity::ElementWise};
+    packed_elementwise.validate();
+
+    celeg::ModelGraph packed_headwise = attention_graph();
+    auto& packed_headwise_attention = std::get<celeg::AttentionSpec>(
+        packed_headwise.layers[0].mixer);
+    packed_headwise_attention.output_gate = celeg::SigmoidAttentionGateSpec{
+        true, celeg::AttentionGateGranularity::HeadWise};
+    CELEG_TEST_CHECK(graph_rejected(std::move(packed_headwise)));
+
+    celeg::ModelGraph packed_latent = attention_graph();
+    auto& packed_latent_attention = std::get<celeg::AttentionSpec>(
+        packed_latent.layers[0].mixer);
+    packed_latent_attention.state = celeg::LatentAttentionStateSpec{
+        4, 0, 4, false};
+    packed_latent_attention.output_gate = celeg::SigmoidAttentionGateSpec{
+        true, celeg::AttentionGateGranularity::ElementWise};
+    CELEG_TEST_CHECK(graph_rejected(std::move(packed_latent)));
 
     std::cout << "policy_test: ok\n";
     return 0;
