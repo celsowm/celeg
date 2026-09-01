@@ -62,9 +62,9 @@ void validate_cpu_attention_semantics(const CompiledModelProgram& program) {
                 throw std::invalid_argument(
                     "CPU external attention currently requires pre-positioned memory and no query position encoding");
             }
-            if (attention.has_query_key_norm()) {
+            if (attention.key_norm.has_value()) {
                 throw std::invalid_argument(
-                    "CPU external attention currently requires pre-normalized memory and no QK normalization");
+                    "CPU external attention currently requires pre-normalized external keys");
             }
             if (attention.output_gate.has_value() &&
                 attention.output_gate->packed_with_query) {
