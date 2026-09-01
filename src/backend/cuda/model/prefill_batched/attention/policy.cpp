@@ -111,23 +111,33 @@ void store_and_attend(
         break;
     case AttentionAlgorithm::RelativeBias:
         if (int8_kv) {
-            launch_gqa_prefill_relative_int8({
+            const GqaContiguousInt8Args args{
                 .query = model.workspace_.prefill_q_.data(),
                 .kv = int8_kv_view,
                 .out = model.workspace_.prefill_op_output_.data(),
                 .geometry = geometry,
                 .extent = extent,
                 .relative_bias = cuda_relative_position_bias_view(attention),
-                .stream = model.stream_.get()});
+                .stream = model.stream_.get()};
+            if (bidirectional) {
+                launch_gqa_prefill_relative_bidirectional_int8(args);
+            } else {
+                launch_gqa_prefill_relative_int8(args);
+            }
         } else {
-            launch_gqa_prefill_relative({
+            const GqaContiguousArgs args{
                 .query = model.workspace_.prefill_q_.data(),
                 .kv = bf16_kv,
                 .out = model.workspace_.prefill_op_output_.data(),
                 .geometry = geometry,
                 .extent = extent,
                 .relative_bias = cuda_relative_position_bias_view(attention),
-                .stream = model.stream_.get()});
+                .stream = model.stream_.get()};
+            if (bidirectional) {
+                launch_gqa_prefill_relative_bidirectional(args);
+            } else {
+                launch_gqa_prefill_relative(args);
+            }
         }
         break;
     case AttentionAlgorithm::Online:
