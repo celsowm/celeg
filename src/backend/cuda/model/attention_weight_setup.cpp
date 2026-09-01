@@ -44,6 +44,15 @@ bool bind_cuda_attention_layer(CudaCompiledModel& model,
             attention_layer.alibi_slopes.data(), alibi->slopes.data(),
             attention_layer.alibi_slopes.bytes(), cudaMemcpyHostToDevice));
     }
+    if (const auto* relative =
+            std::get_if<RelativePositionBiasSpec>(&layout.bias)) {
+        attention_layer.relative_bias = resources.weight_loader_->load_f32_weight(
+            repo,
+            cuda_tensor_name(resources.model_.weight_plan.requests,
+                             TensorRole::AttentionRelativePositionBias,
+                             layer_index),
+            {layout.query_heads * relative->bucket_count});
+    }
 
     if (layout.uses_latent_state()) {
         if (resources.options().kv_cache_mode == KvCacheMode::Int8) {
