@@ -101,6 +101,21 @@ int main() {
         attention.position = multi;
     }));
     CELEG_TEST_CHECK(metal_rejects([](auto& attention) {
+        auto multi = valid_mrope();
+        multi.base.rotary_fraction = 0.5;
+        attention.position = multi;
+    }));
+    CELEG_TEST_CHECK(metal_rejects([](auto& attention) {
+        auto multi = valid_mrope();
+        multi.base.scaling = celeg::LinearRopeScaling{2.0};
+        attention.position = multi;
+    }));
+    CELEG_TEST_CHECK(metal_rejects([](auto& attention) {
+        auto multi = valid_mrope();
+        multi.base.theta = 500000.0;
+        attention.position = multi;
+    }));
+    CELEG_TEST_CHECK(metal_rejects([](auto& attention) {
         auto& rope = std::get<celeg::RopePositionSpec>(attention.position);
         rope.rotary_fraction = 0.5;
     }));
