@@ -16,7 +16,7 @@ PackedLayerProgram PackedLayerProgram::compile(const CompiledModelProgram& progr
         std::visit([&](const auto& mixer) {
             using Mixer = std::decay_t<decltype(mixer)>;
             if constexpr (std::is_same_v<Mixer, CompiledAttentionProgram>) {
-                validate_cuda_packed_prefill_attention(mixer.semantics);
+                validate_cuda_packed_attention(mixer.semantics);
                 layers.push_back({PackedLayerKind::Attention});
             } else if constexpr (std::is_same_v<Mixer, ShortConvolutionSpec>) {
                 layers.push_back({PackedLayerKind::ShortConvolution});
