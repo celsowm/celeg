@@ -16,7 +16,7 @@ A feature must not be called implemented merely because its variant exists in `g
 | Symbol | Meaning |
 |---|---|
 | `✓` | implementation is present for the stated scope |
-| `△` | implementation exists with explicit restrictions or incomplete mode coverage |
+| `△` | implementation exists with explicit restrictions or incomplete mode/test coverage |
 | `✗` | backend explicitly rejects the feature or the required runtime owner is absent |
 | `?` | not yet audited strongly enough to claim support or absence |
 
@@ -28,12 +28,14 @@ That is not the same as saying the complete `AttentionSpec` IR is implemented en
 
 The largest remaining semantic gaps are:
 
-1. external-memory / cross-attention lifecycle and execution;
+1. a backend-neutral external-memory / cross-attention lifecycle beyond the scoped CPU preprojected-K/V baseline;
 2. CUDA relative-position bias tables;
 3. formal backend/mode coverage for bidirectional and Prefix-LM;
-4. Metal sparse patterns, latent attention, general layout/paging ownership, and the unresolved packed-HeadWise gate representation.
+4. Metal sparse patterns, latent attention, and general layout/paging ownership.
 
-Metal is no longer treated as unaudited. Its runtime has explicit full-causal and sliding-window paths over ordinary Q/K/V attention, ALiBi, relative-position bias, no-position attention, standard RoPE, ordinary three-axis interleaved M-RoPE in token/decode and batched prefill, all currently modeled Q/K normalization modes, current-value orthogonalization, ordinary sigmoid output gates, and shared-KV publisher/consumer execution. Unsupported pattern, latent, partial-width/scaled M-RoPE, RoPE-scaling, and packed-HeadWise gate semantics are rejected before execution rather than silently approximated.
+Metal is no longer treated as unaudited. Its runtime has explicit full-causal and sliding-window paths over ordinary Q/K/V attention, ALiBi, relative-position bias, no-position attention, standard RoPE, ordinary three-axis interleaved M-RoPE in token/decode and batched prefill, all currently modeled Q/K normalization modes, current-value orthogonalization, ordinary sigmoid output gates, and shared-KV publisher/consumer execution. Unsupported pattern, latent, partial-width/scaled M-RoPE, and RoPE-scaling semantics are rejected before execution rather than silently approximated.
+
+Packed HeadWise attention gates are not a Metal limitation: the IR now rejects that combination globally because the packed projection is head-dimension-wide while HeadWise semantics require one scalar per head. Packed gates therefore have a canonical representation only for OutputWise/ElementWise semantics.
 
 ## IR surface
 
@@ -95,28 +97,28 @@ The table is deliberately conservative. `?` means prove it rather than probably 
 | Relative-position bias | ✓ | ✓ | ✗ | ✓ |
 | No position encoding | ✓ | ✓ | ✓ | ✓ |
 | RoPE | ✓ | ✓ | ✓ | ✓ |
-| M-RoPE, ordinary attention | ✓ | ? | ✓ | △ |
-| M-RoPE, latent attention | ✓ | ? | ✗ | ✗ |
+| M-RoPE, ordinary attention | ✓ | ✓ | ✓ | △ |
+| M-RoPE, latent attention | ✓ | ✗ | ✗ | ✗ |
 | Private KV | ✓ | ✓ | ✓ | ✓ |
-| Shared KV publisher/consumer | ✓ | ? | ✓ | ✓ |
+| Shared KV publisher/consumer | ✓ | △ | ✓ | ✓ |
 | Contiguous ordinary KV | ✓ | ✓ | ✓ | △ |
 | Paged ordinary KV | ✓ | ✓ | ✓ | △ |
 | BF16 ordinary KV | ✓ | ✓ | ✓ | ✓ |
-| INT8 ordinary KV | ✓ | ? | ✓ | ✗ |
-| Projected latent attention | ✓ | ? | ✓ | ✗ |
-| Factorized latent attention | ✓ | ? | ✓ | ✗ |
+| INT8 ordinary KV | ✓ | ✗ | ✓ | ✗ |
+| Projected latent attention | ✓ | △ | ✓ | ✗ |
+| Factorized latent attention | ✓ | △ | ✓ | ✗ |
 | Q/K normalization | ✓ | ✓ | ✓ | ✓ |
-| Output gate | ✓ | ? | ✓ | △ |
+| Output gate | ✓ | △ | ✓ | ✓ |
 | Current-value orthogonalization | ✓ | ✓ | ✓ | ✓ |
-| External-memory / cross-attention | IR only | ✗ | ✗ | ✗ |
+| External-memory / cross-attention | IR only | △ | ✗ | ✗ |
 
 Metal ordinary KV storage remains `△` for contiguous/paged because the runtime uses an internal page-sized physical layout without yet exposing the same general page-table/layout capability surface as CUDA/CPU.
 
-Metal ordinary M-RoPE remains `△` because token/decode and batched prefill now execute explicit three-axis positions, but the backend deliberately requires three interleaved axes, split-half pairing, full-width rotation, no RoPE scaling, and theta 10000. Unsupported forms are rejected before dispatch.
+Metal ordinary M-RoPE remains `△` because token/decode and batched prefill execute explicit three-axis positions, but the backend deliberately requires three interleaved axes, split-half pairing, full-width rotation, no RoPE scaling, and theta 10000. Unsupported forms are rejected before dispatch.
 
 Metal shared KV is `✓` for the ordinary BF16 attention surface currently supported by Metal. Publisher/consumer execution works in token/decode and batched prefill, including current-value orthogonalization on consumers sourced directly from the publisher-owned value cache.
 
-Metal output gates remain `△` because unpacked OutputWise, ElementWise, and HeadWise gates are supported, as are packed OutputWise/ElementWise gates, but packed HeadWise is rejected until that checkpoint representation has an unambiguous semantic contract.
+Metal output gates are `✓` for the representable gate surface of ordinary Metal attention: unpacked OutputWise, ElementWise, and HeadWise gates plus packed OutputWise/ElementWise gates execute in token/decode and batched prefill. Packed HeadWise is excluded by the IR representation contract before backend capability validation.
 
 ## CUDA restrictions that matter
 
@@ -139,7 +141,19 @@ Therefore CUDA bidirectional, Prefix-LM, BlockSparse, and DynamicSparse remain `
 
 The CPU attention policy has explicit semantics for all six pattern variants in `CpuAttentionPattern::allows()`, including future-read semantics for bidirectional and Prefix-LM.
 
-CPU also lowers and scores ALiBi and `RelativePositionBiasSpec`, including bidirectional relative buckets. CPU and CUDA reject external-memory attention until a real external-memory lifecycle exists.
+CPU lowers and scores ALiBi and `RelativePositionBiasSpec`, including bidirectional relative buckets. Independent query-only, key-only, and mixed Q/K normalization are handled without assuming that both norms exist.
+
+Ordinary M-RoPE has an end-to-end CPU fixture that compares scalar prefill with chunked prefill, explicit three-axis prompt positions, prefix snapshots, and decode behavior.
+
+CPU shared-KV has explicit publisher/consumer topology and execution ownership. The common attention contract now requires one earlier publisher per group and matching KV state geometry/storage before backend execution. Token, chunk, and packed paths all skip consumer K/V projection and address the publisher-owned state. It remains `△` until a dedicated end-to-end shared-KV model fixture covers those paths numerically.
+
+CPU ordinary state intentionally accepts FP32/BF16 storage semantics and rejects INT8 before execution, so INT8 is `✗`, not unaudited.
+
+Projected and factorized latent attention both have concrete CPU execution paths. Factorized output decompression no longer assumes an output gate exists: the gate projection/sigmoid is applied only when `output_gate` is present. Normal and packed prefill deliberately fall back to token-wise execution for factorized latent attention while the chunk fast path still assumes the older gated shape. Projected/factorized latent therefore move from `?` to `△` pending dedicated end-to-end fixtures and chunk-path parity.
+
+CPU output gates are implemented for ordinary attention and optional factorized-latent output. Direct projected-latent output gates are explicitly rejected, so the aggregate CPU gate cell remains `△`.
+
+CPU now also has a scoped external-memory execution baseline. It binds a non-empty `CpuExternalAttentionMemory` by stable slot, validates projected KV width at execution, does not materialize local K/V weights, and executes full-memory bidirectional attention over the bound pages. The current compiler deliberately requires ordinary projected KV, private ownership, no position encoding, no bias, no Q/K norm, no current-value transform, and an unpacked gate when gating is requested. This is real execution, but it is not yet the general cross-attention lifecycle represented by the IR, so the cell is `△`.
 
 ## Metal evidence already present
 
@@ -186,7 +200,7 @@ The current Metal M-RoPE contract remains intentionally narrower than the IR: it
 
 ### Shared KV
 
-Shared-KV topology requires one earlier publisher for each consumer and matching KV-head/head-dimension geometry. Consumer K/V checkpoint weights are not materialized.
+Shared-KV topology is now governed by the common attention contract: one non-negative earlier publisher per group plus compatible KV state kind, geometry, paging/granularity, and scalar storage. Backend validators consume that contract instead of maintaining independent publisher/consumer truth tables.
 
 At execution time the consumer aliases the publisher's Metal key/value cache. `CompiledAttentionExecution::has_key_value` is the ownership fact: consumers project, normalize, and position only Q, pass zero prepared key heads through Q/K preparation, skip K/V projection and KV store, then restore the semantic `key_value_heads` when scoring against the shared cache. Token/decode and batched-prefill therefore reuse the same attention kernels as private KV instead of maintaining a second shared-attention implementation.
 
@@ -215,7 +229,7 @@ This preserves the fused hot path for the common ordinary per-head/per-head case
 
 Unpacked gates use the resolved `TensorRole::AttentionGate` projection and support OutputWise, ElementWise, and HeadWise granularity. Packed gates preserve the checkpoint convention where each query head is stored as `[query_head, gate_head]`; Q is deinterleaved before Q/K normalization or position handling, while gate values stay in the packed staging buffer until they are applied.
 
-The sigmoid gate is applied to the per-head attention result after any current-value orthogonalization and before `AttentionOutput` projection. Token/decode and batched-prefill use the same semantic ordering. Packed HeadWise is intentionally rejected because the packed projection is structurally head-dimension-wide and no canonical scalar-per-head packed representation is currently defined by the IR.
+The sigmoid gate is applied to the per-head attention result after any current-value orthogonalization and before `AttentionOutput` projection. Token/decode and batched-prefill use the same semantic ordering. Packed HeadWise is rejected by the backend-neutral IR representation contract rather than by Metal-specific capability policy.
 
 ### Output transform
 
@@ -230,8 +244,9 @@ Metal still rejects before device/pipeline execution:
 - M-RoPE forms outside full-width, unscaled, three-axis interleaved split-half theta-10000 execution;
 - external-memory sources;
 - non-BF16 KV state semantics;
-- packed HeadWise attention gates;
 - latent and factorized-latent execution, including latent M-RoPE.
+
+Packed HeadWise gates are rejected earlier by the backend-neutral attention representation validator and therefore are not a Metal-specific rejection.
 
 ## What "AttentionSpec 100% implemented" must mean
 
@@ -249,7 +264,7 @@ Keep backend semantic support explicit and tested. New `AttentionSpec` variants 
 
 ### Phase 1 — External-memory / cross-attention
 
-Build a backend-neutral external-memory binding lifecycle first: stable slot identity, shape/type/lifetime metadata, explicit hidden-state versus preprojected-K/V representation, binding validation, reference execution, then CPU and CUDA implementations.
+Generalize the scoped CPU preprojected-K/V baseline into a backend-neutral binding lifecycle: stable slot identity, shape/type/lifetime metadata, explicit hidden-state versus preprojected-K/V representation, binding validation, reference execution, and then CUDA/Metal implementations. Preserve the existing CPU baseline as an executable subset rather than replacing it with a second source model.
 
 ### Phase 2 — CUDA relative-position bias
 
@@ -263,12 +278,11 @@ Prove the meaningful execution-mode Cartesian product instead of relying on comp
 
 Suggested order:
 
-1. resolve packed HeadWise gate semantics;
-2. true layout/paging capability declaration;
-3. generalize remaining M-RoPE theta/scaling/partial-width ownership;
-4. sparse patterns;
-5. latent attention;
-6. external memory after the common lifecycle exists.
+1. true layout/paging capability declaration;
+2. generalize remaining M-RoPE theta/scaling/partial-width ownership;
+3. sparse patterns;
+4. latent attention;
+5. external memory after the common lifecycle exists.
 
 Every newly supported cell moves to `✓` only with a named implementation path and test.
 
@@ -285,9 +299,11 @@ Prefer:
 ```text
 AttentionSpec
     ↓
+representation/lifecycle contract
+    ↓
 backend capability policy
     ↓
-compiler / lifecycle validation
+compiler / execution validation
     ↓
 execution dispatch
     ↓
@@ -302,14 +318,14 @@ A backend can support a feature while choosing different kernels for token, pref
 
 ### Do not optimize cross-attention before ownership is correct
 
-External memory needs lifecycle, slot binding, shape/type validation, and reference semantics before backend-specific optimization.
+External memory needs lifecycle, slot binding, shape/type validation, and reference semantics before backend-specific optimization. The scoped CPU preprojected-K/V path is useful execution evidence, not a substitute for that lifecycle.
 
 ## Definition of done
 
 The attention subsystem can be called complete with respect to the IR when:
 
 - every `AttentionSpec` dimension has a backend capability outcome;
-- external-memory attention executes end-to-end on the chosen baseline backends;
+- external-memory attention has a common lifecycle and executes end-to-end on the chosen baseline backends;
 - CUDA relative-position bias is implemented for its declared modes or deliberately scoped out;
 - bidirectional and Prefix-LM have execution-mode tests rather than compiler-only acceptance;
 - Metal has an audited matrix and rejects unsupported semantics before execution;
