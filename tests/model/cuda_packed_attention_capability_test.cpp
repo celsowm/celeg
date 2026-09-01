@@ -83,6 +83,24 @@ void prefix_lm_lifecycle_is_explicit() {
     CELEG_TEST_CHECK(celeg::cuda_packed_prefix_length(attention) == 4);
 }
 
+void compiled_program_owns_required_initial_span() {
+    celeg::CompiledModelProgram program;
+    for (const int prefix_length : {4, 0, 7}) {
+        celeg::CompiledAttentionProgram attention;
+        attention.semantics.pattern = prefix_length == 0
+            ? celeg::AttentionPatternSpec{celeg::FullCausalPattern{}}
+            : celeg::AttentionPatternSpec{celeg::PrefixLmPattern{prefix_length}};
+        celeg::CompiledLayerProgram layer;
+        layer.mixer = std::move(attention);
+        program.layers.push_back(std::move(layer));
+    }
+    CELEG_TEST_CHECK(program.required_initial_attention_span() == 7);
+
+    celeg::CompiledModelProgram causal;
+    causal.layers.push_back(program_with(celeg::FullCausalPattern{}).layers.front());
+    CELEG_TEST_CHECK(causal.required_initial_attention_span() == 0);
+}
+
 }
 
 int main() {
@@ -93,5 +111,6 @@ int main() {
     check_pattern(celeg::BlockSparsePattern{16, 2, 1}, true);
     check_pattern(celeg::DynamicSparsePattern{16, 8}, true);
     prefix_lm_lifecycle_is_explicit();
+    compiled_program_owns_required_initial_span();
     return 0;
 }
