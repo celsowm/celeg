@@ -65,13 +65,7 @@ struct AttentionDecodeSegmentation {
     float* partial_accum = nullptr;
 };
 
-// Enough (head, segment) blocks to cover the device several times over, so
-// each block's token loop stays short without the reduce loop and the partial
-// buffers growing without bound. Queried from the device, cached.
 int decode_attention_segments(int query_heads, int max_context);
-
-// The device floor alone, i.e. the segment count a short sequence should be
-// spread over. Always <= decode_attention_segments(...).
 int decode_attention_min_segments(int query_heads);
 
 
@@ -125,6 +119,15 @@ struct PagedKvScaleIndex {
     size_t layer_scale_offset = 0;
 };
 
+struct RelativePositionBiasDeviceView {
+    const float* values = nullptr;
+    int bucket_count = 0;
+    int max_distance = 0;
+    bool bidirectional = false;
+
+    explicit operator bool() const { return values != nullptr; }
+};
+
 
 struct GqaContiguousArgs {
     const __nv_bfloat16* query = nullptr;
@@ -133,6 +136,7 @@ struct GqaContiguousArgs {
     GqaGeometry geometry{};
     AttentionExtent extent{};
     const float* alibi_slopes = nullptr;
+    RelativePositionBiasDeviceView relative_bias{};
     cudaStream_t stream = nullptr;
 };
 
@@ -143,6 +147,7 @@ struct GqaContiguousInt8Args {
     GqaGeometry geometry{};
     AttentionExtent extent{};
     const float* alibi_slopes = nullptr;
+    RelativePositionBiasDeviceView relative_bias{};
     cudaStream_t stream = nullptr;
 };
 
@@ -217,6 +222,7 @@ struct GqaBatchPtrArgs {
     int rows = 0;
     GqaGeometry geometry{};
     const float* alibi_slopes = nullptr;
+    RelativePositionBiasDeviceView relative_bias{};
     bool fast = false;
     cudaStream_t stream = nullptr;
 };
@@ -229,6 +235,7 @@ struct GqaBatchPtrInt8Args {
     int rows = 0;
     GqaGeometry geometry{};
     const float* alibi_slopes = nullptr;
+    RelativePositionBiasDeviceView relative_bias{};
     bool fast = false;
     cudaStream_t stream = nullptr;
 };
@@ -242,6 +249,7 @@ struct GqaPagedArgs {
     int rows = 0;
     GqaGeometry geometry{};
     const float* alibi_slopes = nullptr;
+    RelativePositionBiasDeviceView relative_bias{};
     bool fast = false;
     cudaStream_t stream = nullptr;
 };
@@ -256,6 +264,7 @@ struct GqaPagedInt8Args {
     int rows = 0;
     GqaGeometry geometry{};
     const float* alibi_slopes = nullptr;
+    RelativePositionBiasDeviceView relative_bias{};
     bool fast = false;
     cudaStream_t stream = nullptr;
 };
