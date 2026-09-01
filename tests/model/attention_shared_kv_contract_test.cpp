@@ -1,4 +1,4 @@
-#include "celeg/backend/attention_capabilities.hpp"
+#include "celeg/model/attention_sharing.hpp"
 #include "support/assertions.hpp"
 
 #include <stdexcept>
