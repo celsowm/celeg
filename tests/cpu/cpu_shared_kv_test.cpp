@@ -5,6 +5,7 @@
 #include "cpu/support/synthetic_checkpoint.hpp"
 #include "support/assertions.hpp"
 
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -146,6 +147,7 @@ int main() {
     generation.top_k = 1;
 
     const std::vector<int32_t> prompt = {1, 2, 3, 4, 5};
+    const std::vector<int32_t> peer_prompt = {2, 3, 1, 5, 4};
 
     try {
         celeg::CpuModel shared_scalar(
@@ -192,6 +194,54 @@ int main() {
                        shared_chunk.diagnostics().copy_logits());
         compare_logits(shared_scalar.diagnostics().copy_logits(),
                        shared_chunk.diagnostics().copy_logits());
+
+        celeg::CpuModel shared_packed(
+            directory.string(), 32, scalar_options, generation,
+            fixture_runtime(true));
+        std::unique_ptr<celeg::CpuModel> shared_packed_peer =
+            shared_packed.clone_session();
+        celeg::CpuModel private_packed(
+            directory.string(), 32, scalar_options, generation,
+            fixture_runtime(false));
+        std::unique_ptr<celeg::CpuModel> private_packed_peer =
+            private_packed.clone_session();
+
+        for (std::size_t index = 0; index < prompt.size(); ++index) {
+            const bool final_token = index + 1 == prompt.size();
+            const std::array<celeg::CpuPrefillItem, 2> shared_items{{
+                {&shared_packed, prompt[index], final_token},
+                {shared_packed_peer.get(), peer_prompt[index], final_token},
+            }};
+            const std::array<celeg::CpuPrefillItem, 2> private_items{{
+                {&private_packed, prompt[index], final_token},
+                {private_packed_peer.get(), peer_prompt[index], final_token},
+            }};
+            CELEG_TEST_CHECK(
+                celeg::CpuModel::prefill_batch(shared_items).batch_size == 2);
+            CELEG_TEST_CHECK(
+                celeg::CpuModel::prefill_batch(private_items).batch_size == 2);
+        }
+
+        compare_logits(private_packed.diagnostics().copy_logits(),
+                       shared_packed.diagnostics().copy_logits());
+        compare_logits(private_packed_peer->diagnostics().copy_logits(),
+                       shared_packed_peer->diagnostics().copy_logits());
+
+        const std::array<celeg::CpuModel*, 2> shared_batch{
+            &shared_packed, shared_packed_peer.get()};
+        const std::array<celeg::CpuModel*, 2> private_batch{
+            &private_packed, private_packed_peer.get()};
+        auto [shared_tokens, shared_metrics] =
+            celeg::CpuModel::decode_batch(shared_batch);
+        auto [private_tokens, private_metrics] =
+            celeg::CpuModel::decode_batch(private_batch);
+        CELEG_TEST_CHECK(shared_metrics.batch_size == 2);
+        CELEG_TEST_CHECK(private_metrics.batch_size == 2);
+        CELEG_TEST_CHECK(shared_tokens == private_tokens);
+        compare_logits(private_packed.diagnostics().copy_logits(),
+                       shared_packed.diagnostics().copy_logits());
+        compare_logits(private_packed_peer->diagnostics().copy_logits(),
+                       shared_packed_peer->diagnostics().copy_logits());
     } catch (...) {
         std::filesystem::remove_all(directory);
         throw;
