@@ -135,6 +135,7 @@ struct MetalModel::Impl {
         id<MTLBuffer> value_cache = nil;
         id<MTLBuffer> alibi_slopes = nil;
         id<MTLBuffer> relative_bias = nil;
+        int kv_owner_layer = -1;
         int query_heads = 0;
         int key_value_heads = 0;
         int head_dim = 0;
