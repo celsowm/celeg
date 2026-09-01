@@ -42,9 +42,19 @@ void append_attention(ResolvedModel& model, const AttentionSpec& attention,
         add_request(model, role, layer, -1, std::move(shape), physical_layer);
     };
     if (attention.uses_external_memory()) {
+        const int query_width = attention.query_width();
         append(TensorRole::AttentionQuery,
                {attention.query_projection_width(), hidden});
-        append(TensorRole::AttentionOutput, {hidden, attention.query_width()});
+        if (attention.query_norm.has_value()) {
+            add_norm_request(
+                model, TensorRole::AttentionQueryNorm, layer,
+                attention.query_norm,
+                {attention_norm_width(*attention.query_norm,
+                                      attention.head_dim,
+                                      query_width)},
+                physical_layer);
+        }
+        append(TensorRole::AttentionOutput, {hidden, query_width});
     } else if (attention.uses_latent_state()) {
         const auto& latent = *attention.latent_state();
         if (const auto* factorized = latent.factorized_projection()) {
@@ -84,21 +94,25 @@ void append_attention(ResolvedModel& model, const AttentionSpec& attention,
         append(TensorRole::AttentionQuery,
                {attention.query_projection_width(), hidden});
         if (attention.query_norm.has_value()) {
-            append(
-                TensorRole::AttentionQueryNorm,
+            add_norm_request(
+                model, TensorRole::AttentionQueryNorm, layer,
+                attention.query_norm,
                 {attention_norm_width(*attention.query_norm,
                                       attention.head_dim,
-                                      query_width)});
+                                      query_width)},
+                physical_layer);
         }
         if (!std::holds_alternative<SharedKvConsumer>(attention.kv_sharing)) {
             append(TensorRole::AttentionKey, {key_value_width, hidden});
             append(TensorRole::AttentionValue, {key_value_width, hidden});
             if (attention.key_norm.has_value()) {
-                append(
-                    TensorRole::AttentionKeyNorm,
+                add_norm_request(
+                    model, TensorRole::AttentionKeyNorm, layer,
+                    attention.key_norm,
                     {attention_norm_width(*attention.key_norm,
                                           attention.head_dim,
-                                          key_value_width)});
+                                          key_value_width)},
+                    physical_layer);
             }
         }
         append(TensorRole::AttentionOutput, {hidden, query_width});
@@ -146,7 +160,7 @@ void append_mixer(ResolvedModel& model, const LayerSpec& layer,
                 append(TensorRole::GatedDeltaNetKeyConv,
                        {mixer.key_heads * mixer.key_head_dim, 1, mixer.conv_kernel});
                 append(TensorRole::GatedDeltaNetValueConv,
-                       {mixer.value_width(), 1, mixer.conv_kernel});
+                       {mixer.value_heads * mixer.value_head_dim, 1, mixer.conv_kernel});
             } else {
                 append(TensorRole::GatedDeltaNetQkv, {qkv, hidden});
                 append(TensorRole::GatedDeltaNetZ, {mixer.value_width(), hidden});
