@@ -1,5 +1,6 @@
 #pragma once
 
+#include "backend/cuda/attention_capability.hpp"
 #include "detail/layer_state.hpp"
 #include "kernels/kernels.cuh"
 
@@ -29,6 +30,11 @@ CudaQkvProjectionView make_cuda_qkv_projection_view(
     __nv_bfloat16* storage);
 
 const __nv_bfloat16* require_cuda_factorized_latent_bindings(
+    const AttentionLayer& attention);
+
+AttentionPositionBias cuda_attention_position_bias(const AttentionSpec& attention);
+
+RelativePositionBiasDeviceView cuda_relative_position_bias_view(
     const AttentionLayer& attention);
 
 Bf16KvView cuda_bf16_kv_view(AttentionLayer& owner);
