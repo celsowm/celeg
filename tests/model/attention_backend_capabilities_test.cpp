@@ -22,6 +22,10 @@ bool metal_rejects(Mutator mutate) {
     attention.query_heads = 1;
     attention.key_value_heads = 1;
     attention.head_dim = 8;
+    attention.query_norm = celeg::NormSpec{};
+    attention.key_norm = celeg::NormSpec{};
+    attention.query_norm->granularity = celeg::NormGranularity::PerHead;
+    attention.key_norm->granularity = celeg::NormGranularity::PerHead;
     mutate(attention);
     try {
         celeg::validate_metal_attention_capabilities(program_with(std::move(attention)));
@@ -46,6 +50,12 @@ celeg::MultiAxisRopeSpec valid_mrope() {
 
 int main() {
     CELEG_TEST_CHECK(!metal_rejects([](auto&) {}));
+    CELEG_TEST_CHECK(metal_rejects([](auto& attention) {
+        attention.query_norm.reset();
+    }));
+    CELEG_TEST_CHECK(metal_rejects([](auto& attention) {
+        attention.key_norm->granularity = celeg::NormGranularity::WholeVector;
+    }));
     CELEG_TEST_CHECK(!metal_rejects([](auto& attention) {
         attention.position = celeg::NoPositionEncodingSpec{};
     }));
