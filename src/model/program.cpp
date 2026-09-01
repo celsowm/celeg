@@ -1,5 +1,7 @@
 #include "celeg/model/program.hpp"
 
+#include "attention_validation.hpp"
+
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -322,6 +324,7 @@ void CompiledModelProgram::validate() const {
                 "compiled layer has feed-forward normalization without feed-forward semantics");
         }
         if (const auto* attention = std::get_if<CompiledAttentionProgram>(&layer.mixer)) {
+            validate_attention_representation(attention->semantics);
             validate_attention_state_layout(attention->state_layout);
             attention->execution.validate();
         }
