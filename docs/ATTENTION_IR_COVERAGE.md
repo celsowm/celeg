@@ -33,7 +33,7 @@ The largest remaining semantic gaps are:
 3. formal backend/mode coverage for non-decoder-oriented patterns, especially bidirectional and Prefix-LM;
 4. extending Metal beyond its now-explicit causal/sliding + no-position/RoPE/M-RoPE + ALiBi + relative-bias + standard-attention contract.
 
-Metal is no longer treated as unaudited by default. Its runtime now has explicit full-causal and sliding-window paths over ordinary Q/K/V attention, including ALiBi and relative-position bias. Position handling is explicit: no-position, standard RoPE pairing, and ordinary three-axis interleaved M-RoPE each have a named Q/K preparation path. Unsupported pattern, sharing, transform, latent, partial-width RoPE, and RoPE-scaling semantics are rejected during model initialization rather than being silently approximated.
+Metal is no longer treated as unaudited by default. Its runtime now has explicit full-causal and sliding-window paths over ordinary Q/K/V attention, including ALiBi and relative-position bias. Position handling is explicit: no-position, standard RoPE pairing, and ordinary three-axis interleaved M-RoPE each have a named Q/K preparation path. Unsupported pattern, sharing, transform, latent, partial-width RoPE, RoPE-scaling, and unsupported Q/K-norm semantics are rejected during model initialization rather than being silently approximated.
 
 ## IR surface
 
@@ -155,7 +155,7 @@ The runtime now supports:
 - full-width, unscaled RoPE with both `SplitHalf` and `AdjacentPairs` pairing;
 - ordinary three-axis interleaved M-RoPE with split-half pairing;
 - standard attention execution;
-- Q/K normalization;
+- explicit per-head Q/K normalization;
 - BF16 attention state semantics.
 
 Sliding-window execution uses the compiled `SlidingWindowPattern::window` directly rather than copying it into `MetalModel::Impl::Layer`. Separate normal and cooperative kernels exist for both token/decode and batched prefill; each query reads keys starting at `max(0, sequence_length - window)`.
@@ -164,15 +164,18 @@ ALiBi uses the same semantic formula as CPU, `-slope[head] * abs(query_position 
 
 Relative-position bias reuses the CPU bucket contract: exact-distance buckets for the near region, logarithmic buckets for larger distances, clamping at the last directional bucket, and separate positive/negative halves when `bidirectional=true`. The resolved `[query_heads, bucket_count]` tensor is loaded through `TensorRole::AttentionRelativePositionBias`, retained in a Metal-owned buffer per layer, and applied before softmax in normal/cooperative decode and batched-prefill kernels. A `SlidingWindowPattern` may be combined with the same bias without changing bucket semantics.
 
-`NoPositionEncodingSpec` now has dedicated Q/K preparation kernels rather than abusing RoPE with a synthetic zero angle. Q/K normalization still runs using the same resolved norm weights (or identity weights when no Q/K norm tensor exists), the model query scale is applied, K/V are stored in the ordinary cache, and attention dispatch is unchanged. The same path is available in batched prefill.
+`NoPositionEncodingSpec` now has dedicated Q/K preparation kernels rather than abusing RoPE with a synthetic zero angle. Explicit per-head Q/K normalization runs first, the model query scale is applied, K/V are stored in the ordinary cache, and attention dispatch is unchanged. The same path is available in batched prefill.
 
 Standard Metal RoPE now dispatches by `RopePairingKind`; split-half and adjacent-pair layouts no longer share an incorrectly hard-coded adjacent-pair transform. Metal currently requires `rotary_fraction == 1.0` and `NoRopeScaling`, and rejects other RoPE forms before execution.
 
 Ordinary M-RoPE uses the same interleaved axis assignment as the CPU oracle (`axis = pair % 3`) with three explicit positions per token. `PromptEmbedding::rope_positions` can supply one position triplet per prefill token and `next_rope_position` is preserved across decode and session snapshots. M-RoPE prefill deliberately uses the token path until a dedicated batched three-axis Q/K kernel exists. Raw prompt-embedding injection is a separate multimodal lifecycle capability and is not claimed by this attention-only cell.
 
+Metal currently requires both query and key normalization to be explicitly present with `NormGranularity::PerHead`. Missing Q/K norms and whole-vector Q/K norms are rejected during capability validation rather than being silently interpreted as per-head RMS normalization. Removing this restriction requires kernels that distinguish absence and whole-vector normalization explicitly.
+
 The following semantics are explicitly rejected before device/pipeline setup rather than silently degrading to another attention mode:
 
 - bidirectional, Prefix-LM, BlockSparse, and DynamicSparse patterns;
+- missing or whole-vector Q/K normalization;
 - partial-width or scaled RoPE;
 - external-memory sources;
 - shared KV publisher/consumer modes;
@@ -320,10 +323,11 @@ Suggested order:
 
 1. true layout/paging capability declaration;
 2. dedicated batched M-RoPE Q/K preparation;
-3. shared KV;
-4. sparse patterns;
-5. latent attention;
-6. external memory after the backend-neutral lifecycle exists.
+3. remove the explicit per-head Q/K-norm restriction;
+4. shared KV;
+5. sparse patterns;
+6. latent attention;
+7. external memory after the backend-neutral lifecycle exists.
 
 Every newly supported cell must move from `✗`/`△` to `✓` only with a named implementation path and test.
 
