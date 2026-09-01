@@ -23,6 +23,12 @@ void CudaCompiledModel::prefill_chunk_paged(
     if (tokens.empty()) {
         throw std::invalid_argument("prefill_chunk_paged needs at least one token");
     }
+    const int required_prefix = resources_.program_.required_initial_attention_span();
+    if (required_prefix > 0 &&
+        (begin || session_.position_ < required_prefix)) {
+        throw std::invalid_argument(
+            "CUDA Prefix-LM initial prefix requires packed span prefill");
+    }
     const bool needs_semantic_attention_path = std::any_of(
         resources_.program_.layers.begin(), resources_.program_.layers.end(),
         [](const CompiledLayerProgram& layer) {
