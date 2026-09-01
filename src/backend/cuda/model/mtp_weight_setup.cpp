@@ -63,6 +63,10 @@ void load_mtp_weights(CudaCompiledModel& model, const IWeightRepository& repo) {
     }
     AttentionSpec mtp_layout = full_attention->semantics;
     mtp_layout.kv_sharing = {};
+    if (std::holds_alternative<RelativePositionBiasSpec>(mtp_layout.bias)) {
+        throw std::invalid_argument(
+            "CUDA MTP does not define relative-position bias checkpoint bindings");
+    }
 
     CudaMtpResources& mtp = resources.mtp_;
     mtp.enabled = true;
@@ -194,6 +198,12 @@ void load_mtp_weights(CudaCompiledModel& model, const IWeightRepository& repo) {
         attention.k_norm = resources.weight_loader_->load_rms_norm_weight(
             repo, prefix + ".self_attn.k_norm.weight", {mtp_layout.head_dim},
             NormWeightKind::Scale);
+        if (const auto* alibi = std::get_if<AlibiBiasSpec>(&mtp_layout.bias)) {
+            attention.alibi_slopes.reset(alibi->slopes.size());
+            CELEG_CUDA(cudaMemcpy(
+                attention.alibi_slopes.data(), alibi->slopes.data(),
+                attention.alibi_slopes.bytes(), cudaMemcpyHostToDevice));
+        }
         initialize_cuda_ordinary_attention_state(
             attention, mtp_layout, resources.options().kv_cache_mode,
             model.max_context_, true);
