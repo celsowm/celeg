@@ -134,6 +134,38 @@ int main() {
     CELEG_TEST_CHECK(metal_rejects([](auto& attention) {
         attention.output_transform = celeg::OrthogonalizeCurrentValueSpec{0.0f};
     }));
+    CELEG_TEST_CHECK(!metal_rejects([](auto& attention) {
+        attention.output_gate = celeg::SigmoidAttentionGateSpec{};
+    }));
+    CELEG_TEST_CHECK(!metal_rejects([](auto& attention) {
+        celeg::SigmoidAttentionGateSpec gate;
+        gate.granularity = celeg::AttentionGateGranularity::ElementWise;
+        attention.output_gate = gate;
+    }));
+    CELEG_TEST_CHECK(!metal_rejects([](auto& attention) {
+        celeg::SigmoidAttentionGateSpec gate;
+        gate.granularity = celeg::AttentionGateGranularity::HeadWise;
+        attention.output_gate = gate;
+    }));
+    CELEG_TEST_CHECK(!metal_rejects([](auto& attention) {
+        celeg::SigmoidAttentionGateSpec gate;
+        gate.packed_with_query = true;
+        gate.granularity = celeg::AttentionGateGranularity::OutputWise;
+        attention.output_gate = gate;
+    }));
+    CELEG_TEST_CHECK(!metal_rejects([](auto& attention) {
+        celeg::SigmoidAttentionGateSpec gate;
+        gate.packed_with_query = true;
+        gate.granularity = celeg::AttentionGateGranularity::ElementWise;
+        attention.output_gate = gate;
+        attention.output_transform = celeg::OrthogonalizeCurrentValueSpec{1.0e-6f};
+    }));
+    CELEG_TEST_CHECK(metal_rejects([](auto& attention) {
+        celeg::SigmoidAttentionGateSpec gate;
+        gate.packed_with_query = true;
+        gate.granularity = celeg::AttentionGateGranularity::HeadWise;
+        attention.output_gate = gate;
+    }));
     CELEG_TEST_CHECK(metal_rejects([](auto& attention) {
         attention.pattern = celeg::SlidingWindowPattern{0};
     }));
@@ -161,9 +193,6 @@ int main() {
     CELEG_TEST_CHECK(metal_rejects([](auto& attention) {
         auto& ordinary = std::get<celeg::OrdinaryKvStateSpec>(attention.state);
         ordinary.storage.key = celeg::StateScalarType::INT8;
-    }));
-    CELEG_TEST_CHECK(metal_rejects([](auto& attention) {
-        attention.output_gate = celeg::SigmoidAttentionGateSpec{};
     }));
 
     return 0;
