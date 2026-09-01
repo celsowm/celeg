@@ -141,11 +141,11 @@ int main() {
             [device newLibraryWithSource:inference_source options:nil error:&error];
         if (!inference_library) throw std::runtime_error("inference shader compilation failed");
         id<MTLFunction> matvec_function =
-            [inference_library newFunctionWithName:@"celeg_matvec_tuned_f16"];
-        if (!matvec_function) throw std::runtime_error("tuned matvec function is missing");
+            [inference_library newFunctionWithName:@"celeg_matvec_f16"];
+        if (!matvec_function) throw std::runtime_error("half matvec function is missing");
         id<MTLComputePipelineState> matvec_pipeline =
             [device newComputePipelineStateWithFunction:matvec_function error:&error];
-        if (!matvec_pipeline) throw std::runtime_error("tuned matvec pipeline creation failed");
+        if (!matvec_pipeline) throw std::runtime_error("half matvec pipeline creation failed");
         std::vector<float> matvec_output(rows, 0.0f);
         id<MTLBuffer> matvec_output_buffer = [device newBufferWithBytes:matvec_output.data()
                                                                     length:matvec_output.size() * sizeof(float)
@@ -165,7 +165,7 @@ int main() {
         [command_buffer commit];
         [command_buffer waitUntilCompleted];
         if (command_buffer.status != MTLCommandBufferStatusCompleted) {
-            throw std::runtime_error("tuned matvec dispatch failed");
+            throw std::runtime_error("half matvec dispatch failed");
         }
         std::copy_n(static_cast<const float*>(matvec_output_buffer.contents),
                     matvec_output.size(), matvec_output.data());
@@ -178,7 +178,7 @@ int main() {
             maximum = std::max(maximum, std::abs(expected - matvec_output[row]));
         }
         std::cout << "matvec_max_error=" << maximum << '\n';
-        if (!(maximum < 1.0e-3f)) throw std::runtime_error("tuned matvec differs from reference");
+        if (!(maximum < 1.0e-3f)) throw std::runtime_error("half matvec differs from reference");
         return 0;
     } catch (const std::exception& error) {
         std::cerr << "error: " << error.what() << '\n';
