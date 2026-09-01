@@ -82,10 +82,14 @@ inline void validate_metal_attention_capabilities(
             throw std::invalid_argument(
                 "Metal attention currently does not support output gates");
         }
-        if (!std::holds_alternative<NoAttentionOutputTransformSpec>(
-                attention.output_transform)) {
-            throw std::invalid_argument(
-                "Metal attention currently does not support output transforms");
+        if (const auto* transform =
+                std::get_if<OrthogonalizeCurrentValueSpec>(
+                    &attention.output_transform)) {
+            if (!(transform->minimum_norm_squared > 0.0f) ||
+                !std::isfinite(transform->minimum_norm_squared)) {
+                throw std::invalid_argument(
+                    "Metal attention output transform requires a positive finite norm floor");
+            }
         }
     }
 }
