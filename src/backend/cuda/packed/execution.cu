@@ -3,6 +3,7 @@
 #include "packed/metadata.hpp"
 #include "packed/commit.hpp"
 #include "packed/layer_program.hpp"
+#include "packed/attention_capability.hpp"
 #include "packed/gemm_runtime.hpp"
 #include "packed/metadata_cache.hpp"
 #include "packed/operators.hpp"
@@ -70,6 +71,31 @@ struct PackedDecodeExecutorImpl : PackedWorkspace {
             model, operation, PackedExecutorCapabilities{paged_kv != nullptr});
     }
 
+    static void validate_attention_decode_visibility(
+        const PackedSessionContext& model) {
+        for (const CompiledLayerProgram& layer : model.program().layers) {
+            const auto* attention =
+                std::get_if<CompiledAttentionProgram>(&layer.mixer);
+            if (attention) {
+                validate_cuda_packed_decode_position(
+                    attention->semantics, model.position());
+            }
+        }
+    }
+
+    static void validate_attention_prefill_visibility(
+        const PackedSessionContext& model,
+        size_t token_count) {
+        for (const CompiledLayerProgram& layer : model.program().layers) {
+            const auto* attention =
+                std::get_if<CompiledAttentionProgram>(&layer.mixer);
+            if (attention) {
+                validate_cuda_packed_prefill_span(
+                    attention->semantics, model.position(), token_count);
+            }
+        }
+    }
+
     const PackedSessionContext& validate_decode_batch(
         const std::vector<PackedSessionContext>& models) const {
         const PackedEligibility common = validate_packed_batch_common(
@@ -83,16 +109,18 @@ struct PackedDecodeExecutorImpl : PackedWorkspace {
         PackedEligibility eligibility =
             validate_session(reference, PackedOperation::Decode);
         if (!eligibility) throw std::invalid_argument(eligibility.reason);
+        validate_attention_decode_visibility(reference);
         for (size_t row = 1; row < models.size(); ++row) {
             eligibility = validate_session(models[row], PackedOperation::Decode);
             if (!eligibility) {
                 throw std::invalid_argument(eligibility.reason);
             }
+            validate_attention_decode_visibility(models[row]);
         }
         return reference;
     }
 
-        const PackedSessionContext& validate_prefill_batch(
+    const PackedSessionContext& validate_prefill_batch(
         const std::vector<PackedSessionContext>& models,
         const std::vector<int32_t>& explicit_tokens,
         const std::vector<PackedPrefillRow>& rows) const {
@@ -123,6 +151,7 @@ struct PackedDecodeExecutorImpl : PackedWorkspace {
         PackedEligibility eligibility =
             validate_session(reference, PackedOperation::Prefill);
         if (!eligibility) throw std::invalid_argument(eligibility.reason);
+        validate_attention_prefill_visibility(reference, rows.front().token_count);
         if (!paged_kv) {
             throw std::invalid_argument("ragged packed prefill requires physical paged KV");
         }
@@ -134,6 +163,8 @@ struct PackedDecodeExecutorImpl : PackedWorkspace {
             if (!eligibility) {
                 throw std::invalid_argument(eligibility.reason);
             }
+            validate_attention_prefill_visibility(
+                models[row], rows[row].token_count);
         }
         return reference;
     }
@@ -172,7 +203,7 @@ struct PackedDecodeExecutorImpl : PackedWorkspace {
                                                 attention.segmented,
                                                 attention.chunks, &models);
         launch_rmsnorm(hidden.data(), reference.final_norm(), normed.data(),
-                               rows, program_.hidden, reference.program().final_norm.epsilon,
+                       rows, program_.hidden, reference.program().final_norm.epsilon,
                        stream.get());
         layer_executor_.linear(normed.data(), *reference.logits_weight(),
                                logits.data(), rows, vocab_size_,
@@ -191,8 +222,8 @@ struct PackedDecodeExecutorImpl : PackedWorkspace {
             sampled.data(), positions.data(), d_sampled_dest.data(),
             d_position_dest.data(), rows, stream.get());
         CELEG_CUDA(cudaMemcpyAsync(sampled_host.data(), sampled.data(),
-                                 static_cast<size_t>(rows) * sizeof(int32_t),
-                                 cudaMemcpyDeviceToHost, stream.get()));
+                                  static_cast<size_t>(rows) * sizeof(int32_t),
+                                  cudaMemcpyDeviceToHost, stream.get()));
         CELEG_CUDA(cudaStreamSynchronize(stream.get()));
         gpu_end.record(stream.get());
         gpu_end.synchronize();
@@ -262,7 +293,7 @@ struct PackedDecodeExecutorImpl : PackedWorkspace {
             const size_t pages_needed =
                 (end + static_cast<size_t>(paged_kv->page_tokens()) - 1) /
                 static_cast<size_t>(paged_kv->page_tokens());
-        if (page_tables->at(request).size() < pages_needed ||
+            if (page_tables->at(request).size() < pages_needed ||
                 page_tables->at(request).size() > static_cast<size_t>(page_stride)) {
                 throw std::invalid_argument("ragged prefill page table has invalid length");
             }
@@ -282,23 +313,23 @@ struct PackedDecodeExecutorImpl : PackedWorkspace {
             h_final_rows.data()[request] = h_span_offsets.data()[request] + h_span_counts.data()[request] - 1;
         }
         CELEG_CUDA(cudaMemcpyAsync(d_span_offsets.data(), h_span_offsets.data(),
-                                 requests * sizeof(int32_t), cudaMemcpyHostToDevice, stream.get()));
+                                   requests * sizeof(int32_t), cudaMemcpyHostToDevice, stream.get()));
         CELEG_CUDA(cudaMemcpyAsync(d_span_counts.data(), h_span_counts.data(),
-                                 requests * sizeof(int32_t), cudaMemcpyHostToDevice, stream.get()));
+                                   requests * sizeof(int32_t), cudaMemcpyHostToDevice, stream.get()));
         CELEG_CUDA(cudaMemcpyAsync(d_final_rows.data(), h_final_rows.data(),
-                                 requests * sizeof(int32_t), cudaMemcpyHostToDevice, stream.get()));
+                                   requests * sizeof(int32_t), cudaMemcpyHostToDevice, stream.get()));
         const PackedAttentionBatchPlan attention =
             batch_planner_.prepare_prefill(models, *page_tables, row_descriptors);
         CELEG_CUDA(cudaMemcpyAsync(sampled.data(), explicit_tokens.data(),
-                                 static_cast<size_t>(rows) * sizeof(int32_t),
-                                 cudaMemcpyHostToDevice, stream.get()));
+                                   static_cast<size_t>(rows) * sizeof(int32_t),
+                                   cudaMemcpyHostToDevice, stream.get()));
         for (int request = 0; request < requests; ++request) {
             std::fill_n(h_flat_seen.data() + h_span_offsets.data()[request],
                         h_span_counts.data()[request], h_seen.data()[request]);
         }
         CELEG_CUDA(cudaMemcpyAsync(d_flat_seen.data(), h_flat_seen.data(),
-                                 static_cast<size_t>(rows) * sizeof(uint8_t*),
-                                 cudaMemcpyHostToDevice, stream.get()));
+                                   static_cast<size_t>(rows) * sizeof(uint8_t*),
+                                   cudaMemcpyHostToDevice, stream.get()));
         gpu_begin.record(stream.get());
         const auto host_prepare_done = std::chrono::steady_clock::now();
         launch_mark_seen_batch_ptrs(sampled.data(), d_flat_seen.data(), rows,
@@ -332,9 +363,9 @@ struct PackedDecodeExecutorImpl : PackedWorkspace {
             layer_executor_.linear(normed.data(), *reference.logits_weight(),
                                    logits.data(), finalized,
                                    vocab_size_, program_.hidden);
-        launch_scale(logits.data(), finalized * vocab_size_,
-                   reference.program().logits_multiplier /
-                       reference.program().logits_divisor, stream.get());
+            launch_scale(logits.data(), finalized * vocab_size_,
+                         reference.program().logits_multiplier /
+                             reference.program().logits_divisor, stream.get());
             if (reference.program().final_logit_softcap > 0.0f) {
                 launch_tanh_softcap(logits.data(), finalized * vocab_size_,
                                     reference.program().final_logit_softcap, stream.get());
