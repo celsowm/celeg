@@ -31,9 +31,9 @@ The largest remaining semantic gaps are:
 1. external-memory / cross-attention lifecycle and execution;
 2. CUDA relative-position bias tables;
 3. formal backend/mode coverage for bidirectional and Prefix-LM;
-4. Metal shared KV, sparse patterns, latent attention, general layout/paging ownership, and the unresolved packed-HeadWise gate representation.
+4. Metal shared KV execution, sparse patterns, latent attention, general layout/paging ownership, and the unresolved packed-HeadWise gate representation.
 
-Metal is no longer treated as unaudited. Its runtime has explicit full-causal and sliding-window paths over ordinary Q/K/V attention, ALiBi, relative-position bias, no-position attention, standard RoPE, ordinary three-axis interleaved M-RoPE, all currently modeled Q/K normalization modes, current-value orthogonalization, and ordinary sigmoid output gates. Unsupported pattern, sharing, latent, partial-width RoPE, RoPE-scaling, and packed-HeadWise gate semantics are rejected before execution rather than silently approximated.
+Metal is no longer treated as unaudited. Its runtime has explicit full-causal and sliding-window paths over ordinary Q/K/V attention, ALiBi, relative-position bias, no-position attention, standard RoPE, ordinary three-axis interleaved M-RoPE in token/decode and batched prefill, all currently modeled Q/K normalization modes, current-value orthogonalization, and ordinary sigmoid output gates. Unsupported pattern, shared-KV consumer execution, latent, partial-width/scaled M-RoPE, RoPE-scaling, and packed-HeadWise gate semantics are rejected before execution rather than silently approximated.
 
 ## IR surface
 
@@ -112,7 +112,7 @@ The table is deliberately conservative. `?` means prove it rather than probably 
 
 Metal ordinary KV storage remains `△` for contiguous/paged because the runtime uses an internal page-sized physical layout without yet exposing the same general page-table/layout capability surface as CUDA/CPU.
 
-Metal ordinary M-RoPE remains `△` because token/decode and public prefill are semantically supported with explicit three-axis positions, but M-RoPE still disables the batched-prefill fast path and executes prefill token-by-token.
+Metal ordinary M-RoPE remains `△` because token/decode and batched prefill now execute explicit three-axis positions, but the backend deliberately requires three interleaved axes, split-half pairing, full-width rotation, no RoPE scaling, and theta 10000. Unsupported forms are rejected before dispatch.
 
 Metal output gates remain `△` because unpacked OutputWise, ElementWise, and HeadWise gates are supported, as are packed OutputWise/ElementWise gates, but packed HeadWise is rejected until that checkpoint representation has an unambiguous semantic contract.
 
@@ -149,7 +149,7 @@ The runtime supports:
 - ALiBi and relative-position bias over both causal patterns;
 - no-position Q/K preparation;
 - full-width unscaled RoPE with `SplitHalf` and `AdjacentPairs` pairing;
-- ordinary three-axis interleaved M-RoPE with split-half pairing;
+- ordinary three-axis interleaved M-RoPE with split-half pairing in token/decode and batched prefill;
 - ordinary private BF16 KV state;
 - standard attention execution;
 - absent Q/K normalization;
@@ -176,7 +176,11 @@ Relative-position bias uses the same bucket contract as CPU: exact-distance buck
 
 Standard RoPE dispatches by `RopePairingKind`. Metal currently requires `rotary_fraction == 1.0` and `NoRopeScaling` and rejects other RoPE forms before execution.
 
-Ordinary M-RoPE uses the same interleaved axis assignment as the CPU oracle (`axis = pair % 3`). `PromptEmbedding::rope_positions` supplies one position triplet per prefill token and `next_rope_position` survives decode and snapshots. M-RoPE prefill deliberately remains token-wise until a dedicated batched three-axis Q/K kernel exists.
+Ordinary M-RoPE uses the same interleaved axis assignment as the CPU oracle (`axis = pair % 3`). `PromptEmbedding::rope_positions` supplies one position triplet per prefill token and `next_rope_position` survives decode and snapshots.
+
+Batched M-RoPE prefill stages one shared `[rows, 3]` position buffer and uses `celeg_qk_mrope_position_batch` after standalone Q/K normalization. Explicit prompt positions and synthesized `{position, position, position}` rows share the same batch path. This removes the former token-by-token M-RoPE prefill fallback without multiplying fused norm/position kernel combinations.
+
+The current Metal M-RoPE contract remains intentionally narrower than the IR: it requires full-width, unscaled, three-axis interleaved split-half M-RoPE with theta 10000. These restrictions are validated before device execution.
 
 ### Q/K normalization
 
@@ -185,17 +189,17 @@ Q/K normalization no longer depends on a fake all-ones tensor being interpreted 
 The runtime now distinguishes the semantic cases explicitly:
 
 ```text
-both Q and K PerHead
+both Q and K PerHead, ordinary position
     -> fused norm + position fast path
 
-mixed / WholeVector / one side absent / both absent
+M-RoPE / mixed / WholeVector / one side absent / both absent
     -> normalize each present side independently
     -> position-only Q/K preparation
 ```
 
-Per-head normalization has standalone token and batch kernels for mixed cases. Whole-vector normalization reuses the ordinary Metal RMSNorm path with the projection-wide weight shape emitted by the weight plan. Weightless norms synthesize an all-ones weight at the semantic norm width, while a truly absent norm skips RMS normalization entirely.
+Per-head normalization has standalone token and batch kernels for mixed and M-RoPE cases. Whole-vector normalization reuses the ordinary Metal RMSNorm path with the projection-wide weight shape emitted by the weight plan. Weightless norms synthesize an all-ones weight at the semantic norm width, while a truly absent norm skips RMS normalization entirely.
 
-This preserves the fused hot path for the common per-head/per-head case without conflating absence, granularity, or weightless semantics.
+This preserves the fused hot path for the common ordinary per-head/per-head case without conflating absence, granularity, weightless semantics, or M-RoPE position handling.
 
 ### Output gate
 
@@ -212,9 +216,10 @@ The sigmoid gate is applied to the per-head attention result after any current-v
 Metal still rejects before device/pipeline execution:
 
 - bidirectional, Prefix-LM, BlockSparse, and DynamicSparse patterns;
-- partial-width or scaled RoPE;
+- partial-width or scaled standard RoPE;
+- M-RoPE forms outside full-width, unscaled, three-axis interleaved split-half theta-10000 execution;
 - external-memory sources;
-- shared KV publisher/consumer modes;
+- shared KV consumers until the runtime ownership path is executable;
 - non-BF16 KV state semantics;
 - packed HeadWise attention gates;
 - latent and factorized-latent execution, including latent M-RoPE.
@@ -251,8 +256,8 @@ Suggested order:
 
 1. resolve packed HeadWise gate semantics;
 2. true layout/paging capability declaration;
-3. dedicated batched M-RoPE Q/K preparation;
-4. shared KV;
+3. generalize remaining M-RoPE theta/scaling/partial-width ownership;
+4. finish shared KV consumer execution;
 5. sparse patterns;
 6. latent attention;
 7. external memory after the common lifecycle exists.
