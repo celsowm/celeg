@@ -102,6 +102,17 @@ void compiled_program_owns_required_initial_span() {
     CELEG_TEST_CHECK(causal.required_initial_attention_span() == 0);
 }
 
+void full_prompt_policy_identifies_bidirectional_attention() {
+    const auto causal = program_with(celeg::FullCausalPattern{});
+    CELEG_TEST_CHECK(!celeg::cuda_requires_full_prompt_prefill(causal));
+
+    const auto prefix = program_with(celeg::PrefixLmPattern{8});
+    CELEG_TEST_CHECK(!celeg::cuda_requires_full_prompt_prefill(prefix));
+
+    const auto bidirectional = program_with(celeg::BidirectionalPattern{});
+    CELEG_TEST_CHECK(celeg::cuda_requires_full_prompt_prefill(bidirectional));
+}
+
 void prefill_span_policy_preserves_atomic_prefix() {
     auto decision = celeg::plan_cuda_prefill_span(20, 0, 8, 4, 4, false);
     CELEG_TEST_CHECK(decision.count == 8);
@@ -142,6 +153,7 @@ int main() {
     check_pattern(celeg::DynamicSparsePattern{16, 8}, true);
     prefix_lm_lifecycle_is_explicit();
     compiled_program_owns_required_initial_span();
+    full_prompt_policy_identifies_bidirectional_attention();
     prefill_span_policy_preserves_atomic_prefix();
     return 0;
 }
