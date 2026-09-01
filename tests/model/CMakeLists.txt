@@ -7,6 +7,7 @@ foreach(test_name IN ITEMS
     attention_shared_kv_contract_test
     automatic_inference_test
     cpu_attention_semantic_capability_test
+    cuda_packed_attention_capability_test
     cuda_relative_bias_semantic_test
     layer_dispatch_exhaustiveness_test
     layer_inference_rule_test
