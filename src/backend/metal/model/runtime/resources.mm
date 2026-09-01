@@ -94,9 +94,28 @@ std::vector<float> MetalModel::Impl::load_vector_values(TensorRole role, int lay
             break;
         }
     }
+    const bool planned_attention_norm =
+        role == TensorRole::AttentionQueryNorm || role == TensorRole::AttentionKeyNorm;
     if (!selected) {
         if (!allow_missing) throw std::runtime_error("Metal vector request is missing");
-        return std::vector<float>(static_cast<size_t>(width), 1.0f);
+        int resolved_width = width;
+        if (planned_attention_norm && layer >= 0 &&
+            static_cast<size_t>(layer) < program.layers.size()) {
+            const auto* attention = std::get_if<CompiledAttentionProgram>(
+                &program.layers[static_cast<size_t>(layer)].mixer);
+            if (attention) {
+                const std::optional<NormSpec>& norm =
+                    role == TensorRole::AttentionQueryNorm
+                        ? attention->semantics.query_norm
+                        : attention->semantics.key_norm;
+                if (norm && norm->granularity == NormGranularity::WholeVector) {
+                    resolved_width = role == TensorRole::AttentionQueryNorm
+                        ? attention->semantics.query_width()
+                        : attention->semantics.key_value_width();
+                }
+            }
+        }
+        return std::vector<float>(static_cast<size_t>(resolved_width), 1.0f);
     }
     if (!selected->source_name) {
         throw std::runtime_error("Metal vector request was not resolved");
@@ -105,8 +124,6 @@ std::vector<float> MetalModel::Impl::load_vector_values(TensorRole role, int lay
     std::vector<float> values = decode_tensor_f32(repository->tensor(name),
         std::span<const int64_t>(selected->expected_shape.data(),
                                  selected->expected_shape.size()), name);
-    const bool planned_attention_norm =
-        role == TensorRole::AttentionQueryNorm || role == TensorRole::AttentionKeyNorm;
     if (!planned_attention_norm && values.size() != static_cast<size_t>(width)) {
         throw std::runtime_error("Metal vector width mismatch: " + name);
     }
