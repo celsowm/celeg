@@ -47,6 +47,9 @@ celeg::MultiAxisRopeSpec valid_mrope() {
 int main() {
     CELEG_TEST_CHECK(!metal_rejects([](auto&) {}));
     CELEG_TEST_CHECK(!metal_rejects([](auto& attention) {
+        attention.position = celeg::NoPositionEncodingSpec{};
+    }));
+    CELEG_TEST_CHECK(!metal_rejects([](auto& attention) {
         auto& rope = std::get<celeg::RopePositionSpec>(attention.position);
         rope.pairing = celeg::RopePairingKind::SplitHalf;
     }));
@@ -115,9 +118,6 @@ int main() {
     }));
     CELEG_TEST_CHECK(metal_rejects([](auto& attention) {
         attention.kv_sharing = celeg::SharedKvPublisher{1};
-    }));
-    CELEG_TEST_CHECK(metal_rejects([](auto& attention) {
-        attention.position = celeg::NoPositionEncodingSpec{};
     }));
     CELEG_TEST_CHECK(metal_rejects([](auto& attention) {
         attention.position = celeg::MultiAxisRopeSpec{};
