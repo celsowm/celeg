@@ -20,8 +20,7 @@ AttentionCapability select_attention_plan(
     request.operation = AttentionOperation::Prefill;
     request.layout = AttentionKvLayout::Contiguous;
     request.position_source = AttentionPositionSource::HostScalar;
-    request.bias = attention.alibi_slopes.data()
-        ? AttentionPositionBias::Alibi : AttentionPositionBias::None;
+    request.bias = cuda_attention_position_bias(attention.layout);
     request.fast_attention =
         model.resources_.options().fast_attention && !strict_visibility;
     request.flash_attention_requested =
@@ -107,6 +106,27 @@ void store_and_attend(
                 .geometry = geometry,
                 .extent = extent,
                 .alibi_slopes = attention.alibi_slopes.data(),
+                .stream = model.stream_.get()});
+        }
+        break;
+    case AttentionAlgorithm::RelativeBias:
+        if (int8_kv) {
+            launch_gqa_prefill_relative_int8({
+                .query = model.workspace_.prefill_q_.data(),
+                .kv = int8_kv_view,
+                .out = model.workspace_.prefill_op_output_.data(),
+                .geometry = geometry,
+                .extent = extent,
+                .relative_bias = cuda_relative_position_bias_view(attention),
+                .stream = model.stream_.get()});
+        } else {
+            launch_gqa_prefill_relative({
+                .query = model.workspace_.prefill_q_.data(),
+                .kv = bf16_kv,
+                .out = model.workspace_.prefill_op_output_.data(),
+                .geometry = geometry,
+                .extent = extent,
+                .relative_bias = cuda_relative_position_bias_view(attention),
                 .stream = model.stream_.get()});
         }
         break;
