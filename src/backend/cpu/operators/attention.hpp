@@ -18,6 +18,11 @@ void apply_cpu_latent_attention_positions(
     float* query_rope, float* key_rope, int scalar_position,
     const std::array<int32_t, 3>& rope_position);
 
+void load_cpu_attention_current_value(
+    const CpuCompiledModel::Shared& shared,
+    const CpuCompiledModel::AttentionState& state,
+    int position, float* output, size_t width);
+
 void apply_cpu_attention_output_transform(const AttentionSpec& layout,
                                           float* output,
                                           const float* current_value);
