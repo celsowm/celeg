@@ -119,14 +119,7 @@ void append_attention(std::ostringstream& out, const AttentionSpec& attention) {
             static_assert(always_false_v<Pattern>, "unhandled attention pattern variant");
         }
     }, attention.pattern);
-    out << ":gate:";
-    if (attention.output_gate.has_value()) {
-        out << "sigmoid:" << attention.output_gate->packed_with_query << ':'
-            << static_cast<int>(attention.output_gate->granularity);
-    } else {
-        out << "none";
-    }
-    out << ":bias:";
+    out << ":position:";
     std::visit([&out](const auto& bias) {
         using Bias = std::decay_t<decltype(bias)>;
         if constexpr (std::is_same_v<Bias, NoAttentionBiasSpec>) {
@@ -141,52 +134,39 @@ void append_attention(std::ostringstream& out, const AttentionSpec& attention) {
             static_assert(always_false_v<Bias>, "unhandled attention bias variant");
         }
     }, attention.bias);
-    out << ":state:";
-    std::visit([&out](const auto& state) {
-        using State = std::decay_t<decltype(state)>;
-        if constexpr (std::is_same_v<State, OrdinaryKvStateSpec>) {
-            out << "ordinary:" << state.quantizable << ":storage:"
-                << static_cast<int>(state.storage.key) << ':'
-                << static_cast<int>(state.storage.value) << ':'
-                << static_cast<int>(state.storage.granularity) << ':'
-                << state.storage.paged;
-        } else if constexpr (std::is_same_v<State, LatentAttentionStateSpec>) {
-            out << "latent:" << state.latent_rank << ':' << state.rope_head_dim << ':'
-                << state.nope_head_dim << ':' << state.decoupled_rope << ':';
-            std::visit([&out](const auto& projection) {
-                using Projection = std::decay_t<decltype(projection)>;
-                if constexpr (std::is_same_v<Projection, DirectLatentProjection>) {
-                    out << "direct";
-                } else if constexpr (std::is_same_v<Projection, FactorizedLatentProjection>) {
-                    out << "factorized:" << projection.query_rank << ':'
-                        << projection.value_head_dim;
-                    append_norm(out, projection.query_latent_norm);
-                    append_norm(out, projection.key_latent_norm);
-                } else {
-                    static_assert(always_false_v<Projection>,
-                                  "unhandled latent projection variant");
-                }
-            }, state.projection);
-            out << ":storage:" << static_cast<int>(state.storage.latent) << ':'
-                << static_cast<int>(state.storage.rotary) << ':'
-                << static_cast<int>(state.storage.granularity) << ':'
-                << state.storage.paged;
-        } else {
-            static_assert(always_false_v<State>, "unhandled attention state variant");
-        }
-    }, attention.state);
     out << ":source:";
     std::visit([&out](const auto& source) {
         using Source = std::decay_t<decltype(source)>;
         if constexpr (std::is_same_v<Source, CurrentSequenceSource>) {
-            out << "current_sequence";
+            out << "current";
         } else if constexpr (std::is_same_v<Source, ExternalMemorySource>) {
-            out << "external_memory:" << source.slot;
+            out << "external:" << source.slot;
         } else {
-            static_assert(always_false_v<Source>, "unhandled attention key/value source variant");
+            static_assert(always_false_v<Source>, "unhandled attention source variant");
         }
     }, attention.key_value_source);
-    out << ":transform:";
+    out << ":state:";
+    std::visit([&out](const auto& state) {
+        using State = std::decay_t<decltype(state)>;
+        if constexpr (std::is_same_v<State, OrdinaryKvStateSpec>) {
+            out << "ordinary:" << static_cast<int>(state.storage.key) << ':'
+                << static_cast<int>(state.storage.value) << ':'
+                << static_cast<int>(state.storage.layout);
+        } else if constexpr (std::is_same_v<State, LatentAttentionStateSpec>) {
+            out << "latent:" << state.latent_rank << ':' << state.rope_width << ':'
+                << state.value_width << ':' << state.factorized_projection();
+        } else {
+            static_assert(always_false_v<State>, "unhandled attention state variant");
+        }
+    }, attention.state);
+    out << ":gate:";
+    if (!attention.output_gate) {
+        out << "none";
+    } else {
+        out << attention.output_gate->packed_with_query << ':'
+            << static_cast<int>(attention.output_gate->granularity);
+    }
+    out << ":output-transform:";
     std::visit([&out](const auto& transform) {
         using Transform = std::decay_t<decltype(transform)>;
         if constexpr (std::is_same_v<Transform, NoAttentionOutputTransformSpec>) {
@@ -194,9 +174,11 @@ void append_attention(std::ostringstream& out, const AttentionSpec& attention) {
         } else if constexpr (std::is_same_v<Transform, OrthogonalizeCurrentValueSpec>) {
             out << "orthogonalize:" << transform.minimum_norm_squared;
         } else {
-            static_assert(always_false_v<Transform>, "unhandled attention transform variant");
+            static_assert(always_false_v<Transform>,
+                          "unhandled attention output transform variant");
         }
     }, attention.output_transform);
+    out << ';';
 }
 
 void append_mixer(std::ostringstream& out, const LayerSpec& layer) {
@@ -206,19 +188,18 @@ void append_mixer(std::ostringstream& out, const LayerSpec& layer) {
             out << "attention:";
             append_attention(out, mixer);
         } else if constexpr (std::is_same_v<Mixer, ShortConvolutionSpec>) {
-            out << "short-conv:" << mixer.cache_length << ':' << mixer.channels << ':'
+            out << "conv:" << mixer.kernel_size << ':' << mixer.hidden_size << ':'
                 << mixer.bias;
         } else if constexpr (std::is_same_v<Mixer, GatedDeltaNetSpec>) {
-            out << "gdn:" << mixer.conv_kernel << ':' << mixer.key_head_dim << ':'
-                << mixer.value_head_dim << ':' << mixer.key_heads << ':' << mixer.value_heads
-                << ':' << mixer.vector_decay << ':' << mixer.safe_decay << ':'
-                << mixer.decay_lower_bound << ':' << mixer.sigmoid_output_gate << ':'
-                << mixer.factorized_projections;
+            out << "gated-delta:" << mixer.conv_kernel << ':' << mixer.key_head_dim << ':'
+                << mixer.value_head_dim << ':' << mixer.key_heads << ':'
+                << mixer.value_heads << ':' << mixer.factorized_projections << ':'
+                << mixer.vector_decay << ':' << mixer.safe_decay << ':'
+                << mixer.decay_lower_bound << ':' << mixer.sigmoid_output_gate;
         } else if constexpr (std::is_same_v<Mixer, Mamba2Spec>) {
             out << "mamba2:" << mixer.conv_kernel << ':' << mixer.intermediate_size << ':'
-                << mixer.state_size << ':' << mixer.time_step_rank << ':' << mixer.num_heads
-                << ':' << mixer.head_dim << ':' << mixer.group_count << ':' << mixer.chunk_size
-                << ':' << mixer.conv_bias << ':' << mixer.projection_bias;
+                << mixer.state_size << ':' << mixer.num_heads << ':' << mixer.head_dim << ':'
+                << mixer.group_count;
         } else if constexpr (std::is_same_v<Mixer, MlpBlockSpec>) {
             out << "mlp-only:" << mixer.intermediate_size << ':'
                 << static_cast<int>(mixer.activation);
@@ -237,14 +218,14 @@ void append_feed_forward(std::ostringstream& out, const LayerSpec& layer) {
             out << "dense:" << feed_forward.intermediate_size << ':'
                 << static_cast<int>(feed_forward.activation);
         } else if constexpr (std::is_same_v<FeedForward, MixtureOfExpertsSpec>) {
-            out << "moe:" << feed_forward.intermediate_size << ':' << feed_forward.num_experts
-                << ':' << feed_forward.experts_per_token << ':' << feed_forward.normalize_topk
-                << ':' << feed_forward.use_expert_bias << ':'
+            out << "moe:" << feed_forward.intermediate_size << ':'
+                << feed_forward.num_experts << ':' << feed_forward.experts_per_token << ':'
+                << feed_forward.normalize_weights << ':'
                 << feed_forward.routed_scaling_factor << ':';
             std::visit([&out](const auto& selection) {
                 using Selection = std::decay_t<decltype(selection)>;
                 if constexpr (std::is_same_v<Selection, MoeTopKSelectionSpec>) {
-                    out << "top-k";
+                    out << "topk";
                 } else if constexpr (std::is_same_v<Selection, MoeGroupedTopKSelectionSpec>) {
                     out << "grouped:" << selection.group_count << ':'
                         << selection.experts_per_group << ':'
@@ -252,12 +233,11 @@ void append_feed_forward(std::ostringstream& out, const LayerSpec& layer) {
                         << selection.group_score_top_k;
                 } else {
                     static_assert(always_false_v<Selection>,
-                                  "unhandled MoE selection variant");
+                                  "unhandled MoE selection fingerprint variant");
                 }
             }, feed_forward.selection);
-            out << ":shared:" << feed_forward.shared.has_value();
             if (feed_forward.shared) {
-                out << ':' << feed_forward.shared->intermediate_size << ':'
+                out << ":shared:" << feed_forward.shared->intermediate_size << ':'
                     << static_cast<int>(feed_forward.shared->combine_order);
             }
             out << ':' << feed_forward.router_softmax;
@@ -340,12 +320,35 @@ ExecutionTopology ExecutionTopology::derive(const ModelGraph& graph) {
     return result;
 }
 
-RuntimeTopology compose_runtime_topology(CheckpointDimensions checkpoint,
-                                         const ModelGraph& graph) {
-    RuntimeTopology topology;
-    topology.dims = std::move(checkpoint);
-    topology.exec = ExecutionTopology::derive(graph);
-    return topology;
+void ExecutionTopology::validate() const {
+    if (num_hidden_layers <= 0 ||
+        attention_slot_for_layer.size() != static_cast<size_t>(num_hidden_layers)) {
+        throw std::runtime_error("execution topology is inconsistent");
+    }
+    int expected_attention_slot = 0;
+    for (size_t layer = 0; layer < attention_slot_for_layer.size(); ++layer) {
+        const int slot = attention_slot_for_layer[layer];
+        if (slot < -1 || slot >= attention_layer_count) {
+            throw std::runtime_error("execution topology has invalid attention slot");
+        }
+        if (slot >= 0) {
+            if (slot != expected_attention_slot ||
+                expected_attention_slot >= static_cast<int>(layer_for_attention_slot.size()) ||
+                layer_for_attention_slot[static_cast<size_t>(expected_attention_slot)] !=
+                    static_cast<int>(layer)) {
+                throw std::runtime_error("execution topology attention slots are not canonical");
+            }
+            ++expected_attention_slot;
+        }
+    }
+    if (expected_attention_slot != attention_layer_count ||
+        layer_for_attention_slot.size() != static_cast<size_t>(attention_layer_count) ||
+        conv_layer_count < 0 || gated_delta_net_layer_count < 0 ||
+        mamba2_layer_count < 0 || mlp_only_layer_count < 0 ||
+        attention_layer_count + conv_layer_count + gated_delta_net_layer_count +
+                mamba2_layer_count + mlp_only_layer_count != num_hidden_layers) {
+        throw std::runtime_error("execution topology layer counts are inconsistent");
+    }
 }
 
 
@@ -420,7 +423,7 @@ void ModelGraph::validate() const {
                         }
                     } else {
                         static_assert(always_false_v<Selection>,
-                                      "unhandled MoE selection variant");
+                                      "unhandled MoE selection validation variant");
                     }
                 }, feed_forward.selection);
                 if (feed_forward.shared && feed_forward.shared->intermediate_size <= 0) {
@@ -451,6 +454,19 @@ void ModelGraph::validate() const {
                                   "unhandled position validation variant");
                 }
             }, attention->position);
+            std::visit([&](const auto& bias) {
+                using Bias = std::decay_t<decltype(bias)>;
+                if constexpr (std::is_same_v<Bias, NoAttentionBiasSpec>) {
+                    return;
+                } else if constexpr (std::is_same_v<Bias, AlibiBiasSpec>) {
+                    bias.validate(attention->query_heads);
+                } else if constexpr (std::is_same_v<Bias, RelativePositionBiasSpec>) {
+                    bias.validate();
+                } else {
+                    static_assert(always_false_v<Bias>,
+                                  "unhandled attention bias validation variant");
+                }
+            }, attention->bias);
             if (const auto* sliding = std::get_if<SlidingWindowPattern>(&attention->pattern);
                 sliding && sliding->window <= 0) {
                 throw std::runtime_error("sliding-window attention has invalid window");
@@ -489,158 +505,102 @@ void AlibiBiasSpec::validate(int query_heads) const {
 }
 
 void RelativePositionBiasSpec::validate() const {
-    if (bucket_count <= 0 || max_distance <= 0) {
-        throw std::runtime_error("relative position bias dimensions must be positive");
-    }
-    if (bidirectional && (bucket_count < 2 || (bucket_count % 2) != 0)) {
+    if (bucket_count < 2 || max_distance <= 0) {
         throw std::runtime_error(
-            "bidirectional relative position bias requires an even bucket count");
+            "relative position bias requires at least two buckets and a positive max distance");
+    }
+    if (bidirectional && (bucket_count < 4 || (bucket_count % 2) != 0)) {
+        throw std::runtime_error(
+            "bidirectional relative position bias requires an even bucket count of at least four");
     }
 }
 
-namespace {
-
-void validate_state_scalar(StateScalarType scalar) {
-    switch (scalar) {
-    case StateScalarType::FP32:
-    case StateScalarType::FP16:
-    case StateScalarType::BF16:
-    case StateScalarType::FP8:
-    case StateScalarType::INT8:
-    case StateScalarType::INT4:
-        return;
+void RopePositionSpec::validate(int head_dim) const {
+    if (!(theta > 0.0) || !std::isfinite(theta) ||
+        !(rotary_fraction > 0.0) || rotary_fraction > 1.0 ||
+        !std::isfinite(rotary_fraction) || head_dim <= 0) {
+        throw std::runtime_error("RoPE parameters are invalid");
     }
-    throw std::runtime_error("invalid attention state scalar type");
-}
-
-void validate_state_granularity(StateQuantizationGranularity granularity) {
-    switch (granularity) {
-    case StateQuantizationGranularity::PerTensor:
-    case StateQuantizationGranularity::PerHead:
-    case StateQuantizationGranularity::PerToken:
-    case StateQuantizationGranularity::PerBlock:
-        return;
+    if (static_cast<int>(rotary_fraction * static_cast<double>(head_dim)) % 2 != 0) {
+        throw std::runtime_error("RoPE rotary width must be even");
     }
-    throw std::runtime_error("invalid attention state quantization granularity");
-}
-
-}
-
-void OrdinaryKvStorageSpec::validate() const {
-    validate_state_scalar(key);
-    validate_state_scalar(value);
-    validate_state_granularity(granularity);
-}
-
-void LatentStorageSpec::validate() const {
-    validate_state_scalar(latent);
-    validate_state_scalar(rotary);
-    validate_state_granularity(granularity);
-}
-
-void LatentAttentionStateSpec::validate() const {
-    storage.validate();
-    if (latent_rank <= 0 || rope_head_dim < 0 || nope_head_dim < 0 ||
-        rope_head_dim + nope_head_dim <= 0) {
-        throw std::runtime_error("invalid latent attention state dimensions");
-    }
-    if (const auto* factorized = factorized_projection();
-        factorized &&
-        (factorized->query_rank <= 0 || factorized->value_head_dim <= 0 ||
-         !std::isfinite(factorized->query_latent_norm.epsilon) ||
-         factorized->query_latent_norm.epsilon <= 0.0f ||
-         !std::isfinite(factorized->key_latent_norm.epsilon) ||
-         factorized->key_latent_norm.epsilon <= 0.0f)) {
-        throw std::runtime_error("invalid factorized latent attention projections");
-    }
-}
-
-void TokenPolicy::validate() const {
-    if (bos_token_id < 0 || eos_token_ids.empty() || pad_token_id < 0) {
-        throw std::runtime_error("invalid resolved model token policy");
-    }
-}
-
-void NumericalPolicy::validate() const {
-    if (!(norm_eps > 0.0f) || !std::isfinite(norm_eps) ||
-        (post_norm_eps != 0.0f && (!(post_norm_eps > 0.0f) || !std::isfinite(post_norm_eps))) ||
-        !(logits_divisor > 0.0f) || !std::isfinite(logits_divisor) ||
-        !std::isfinite(embedding_multiplier) ||
-        !std::isfinite(attention_multiplier) ||
-        !std::isfinite(residual_multiplier) ||
-        !std::isfinite(logits_multiplier) ||
-        final_logit_softcap < 0.0f || !std::isfinite(final_logit_softcap)) {
-        throw std::runtime_error("invalid resolved model numerical policy");
-    }
-}
-
-void CheckpointDimensions::validate() const {
-    if (vocab_size <= 0 || max_position_embeddings <= 0 ||
-        mtp_num_hidden_layers < 0) {
-        throw std::runtime_error("invalid checkpoint dimensions");
-    }
-    if (!checkpoint_layer_for_layer.empty()) {
-        for (int layer : checkpoint_layer_for_layer) {
-            if (layer < 0) throw std::runtime_error("negative checkpoint layer mapping");
+    std::visit([&](const auto& scaling) {
+        using Scaling = std::decay_t<decltype(scaling)>;
+        if constexpr (std::is_same_v<Scaling, NoRopeScaling>) {
+            return;
+        } else if constexpr (std::is_same_v<Scaling, LinearRopeScaling>) {
+            if (!(scaling.factor > 0.0) || !std::isfinite(scaling.factor)) {
+                throw std::runtime_error("linear RoPE scaling factor is invalid");
+            }
+        } else if constexpr (std::is_same_v<Scaling, DynamicNtkRopeScaling>) {
+            if (!(scaling.factor > 0.0) || !std::isfinite(scaling.factor) ||
+                scaling.original_context <= 0) {
+                throw std::runtime_error("dynamic NTK RoPE parameters are invalid");
+            }
+        } else if constexpr (std::is_same_v<Scaling, YarnRopeScaling>) {
+            if (!(scaling.factor > 0.0) || !std::isfinite(scaling.factor) ||
+                !(scaling.attention_factor > 0.0) || !std::isfinite(scaling.attention_factor) ||
+                !(scaling.beta_fast > 0.0) || !(scaling.beta_slow > 0.0) ||
+                scaling.original_context <= 0) {
+                throw std::runtime_error("YaRN RoPE parameters are invalid");
+            }
+        } else if constexpr (std::is_same_v<Scaling, LongRopeScaling>) {
+            if (scaling.original_context <= 0 || scaling.short_factors.empty() ||
+                scaling.short_factors.size() != scaling.long_factors.size()) {
+                throw std::runtime_error("LongRoPE factors are invalid");
+            }
+            for (float factor : scaling.short_factors) {
+                if (!(factor > 0.0f) || !std::isfinite(factor)) {
+                    throw std::runtime_error("LongRoPE short factors are invalid");
+                }
+            }
+            for (float factor : scaling.long_factors) {
+                if (!(factor > 0.0f) || !std::isfinite(factor)) {
+                    throw std::runtime_error("LongRoPE long factors are invalid");
+                }
+            }
+        } else if constexpr (std::is_same_v<Scaling, Llama3FrequencyScaling>) {
+            if (!(scaling.factor > 0.0) || !std::isfinite(scaling.factor) ||
+                scaling.original_context <= 0 ||
+                !(scaling.low_frequency_factor > 0.0) ||
+                !(scaling.high_frequency_factor > 0.0) ||
+                scaling.low_frequency_factor > scaling.high_frequency_factor) {
+                throw std::runtime_error("Llama3 RoPE scaling parameters are invalid");
+            }
+        } else {
+            static_assert(always_false_v<Scaling>, "unhandled RoPE scaling validation variant");
         }
+    }, scaling);
+}
+
+void MultiAxisRopeSpec::validate(int head_dim) const {
+    base.validate(head_dim);
+    if (axes <= 0 || axes != static_cast<int>(sections.size())) {
+        throw std::runtime_error("multi-axis RoPE has invalid axis count");
     }
-    token_policy.validate();
-    const auto validate_token_id = [this](int token, const char* name) {
-        if (token < 0 || token >= vocab_size) {
-            throw std::runtime_error(std::string("resolved ") + name +
-                                     " token id is outside the vocabulary");
+    int sum = 0;
+    for (int section : sections) {
+        if (section <= 0) {
+            throw std::runtime_error("multi-axis RoPE has non-positive section width");
         }
-    };
-    validate_token_id(token_policy.bos_token_id, "BOS");
-    validate_token_id(token_policy.pad_token_id, "pad");
-    for (int token : token_policy.eos_token_ids) validate_token_id(token, "EOS");
-}
-
-std::string ExecutionTopology::summary() const {
-    std::ostringstream out;
-    out << "layers=" << num_hidden_layers
-        << " attention_layers=" << attention_layer_count
-        << " conv_layers=" << conv_layer_count
-        << " gated_delta_layers=" << gated_delta_net_layer_count
-        << " mamba2_layers=" << mamba2_layer_count
-        << " mlp_only_layers=" << mlp_only_layer_count;
-    return out.str();
-}
-
-void ExecutionTopology::validate() const {
-    if (num_hidden_layers <= 0) {
-        throw std::runtime_error("invalid resolved model topology");
+        sum += section;
     }
-    if (attention_layer_count + conv_layer_count + gated_delta_net_layer_count +
-        mamba2_layer_count + mlp_only_layer_count != num_hidden_layers) {
-        throw std::runtime_error("resolved layer counts are inconsistent");
+    if (sum * 2 != static_cast<int>(base.rotary_fraction * head_dim)) {
+        throw std::runtime_error("multi-axis RoPE sections do not cover rotary width");
+    }
+}
+
+void NormSpec::validate() const {
+    if (!(epsilon > 0.0f) || !std::isfinite(epsilon)) {
+        throw std::runtime_error("normalization epsilon must be positive and finite");
     }
 }
 
 void ResolvedModel::validate() const {
-    topology.validate();
+    provenance.validate();
     graph.validate();
-    if (graph.layers.size() != static_cast<size_t>(topology.exec.num_hidden_layers)) {
-        throw std::runtime_error("resolved graph/topology layer count mismatch");
-    }
-}
-
-std::string RuntimeTopology::summary() const {
-    std::ostringstream out;
-    out << exec.summary()
-        << " mtp_layers=" << dims.mtp_num_hidden_layers
-        << " vocab=" << dims.vocab_size;
-    return out.str();
-}
-
-void RuntimeTopology::validate() const {
-    dims.validate();
-    exec.validate();
-    if (!dims.checkpoint_layer_for_layer.empty() &&
-        static_cast<int>(dims.checkpoint_layer_for_layer.size()) !=
-            exec.num_hidden_layers) {
-        throw std::runtime_error("checkpoint layer mapping length mismatch");
-    }
+    topology.validate();
+    weight_plan.validate(graph.layers.size());
 }
 
 }
