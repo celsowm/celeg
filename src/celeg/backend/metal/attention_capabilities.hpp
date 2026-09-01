@@ -4,6 +4,7 @@
 
 #include <cmath>
 #include <stdexcept>
+#include <unordered_map>
 
 namespace celeg {
 
@@ -32,6 +33,7 @@ inline void validate_metal_attention_capabilities(
     validate_attention_backend_capabilities(
         program, "Metal", metal_attention_capabilities());
 
+    std::unordered_map<int, const AttentionSpec*> shared_owner;
     for (const CompiledLayerProgram& layer : program.layers) {
         const auto* compiled = std::get_if<CompiledAttentionProgram>(&layer.mixer);
         if (!compiled) continue;
@@ -42,9 +44,30 @@ inline void validate_metal_attention_capabilities(
             throw std::invalid_argument(
                 "Metal sliding-window attention requires a positive window");
         }
-        if (!std::holds_alternative<PrivateKv>(attention.kv_sharing)) {
-            throw std::invalid_argument(
-                "Metal attention currently supports private KV only");
+        if (const auto* publisher =
+                std::get_if<SharedKvPublisher>(&attention.kv_sharing)) {
+            if (publisher->group < 0 || shared_owner.contains(publisher->group)) {
+                throw std::invalid_argument(
+                    "Metal shared KV requires one non-negative publisher per group");
+            }
+            shared_owner.emplace(publisher->group, &attention);
+        } else if (const auto* consumer =
+                       std::get_if<SharedKvConsumer>(&attention.kv_sharing)) {
+            const auto owner = shared_owner.find(consumer->group);
+            if (consumer->group < 0 || owner == shared_owner.end()) {
+                throw std::invalid_argument(
+                    "Metal shared KV consumer requires an earlier publisher");
+            }
+            if (owner->second->key_value_heads != attention.key_value_heads ||
+                owner->second->head_dim != attention.head_dim) {
+                throw std::invalid_argument(
+                    "Metal shared KV consumer geometry does not match its publisher");
+            }
+            if (!std::holds_alternative<NoAttentionOutputTransformSpec>(
+                    attention.output_transform)) {
+                throw std::invalid_argument(
+                    "Metal shared KV consumers currently do not support output transforms");
+            }
         }
         if (!std::holds_alternative<OrdinaryKvStateSpec>(attention.state)) {
             throw std::invalid_argument(
