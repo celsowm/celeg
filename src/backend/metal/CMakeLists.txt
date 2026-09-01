@@ -32,6 +32,7 @@ set(CELEG_METAL_SHADER_SOURCES
     src/backend/metal/kernels/inference/position.metal
     src/backend/metal/kernels/inference/no_position.metal
     src/backend/metal/kernels/inference/qk_position.metal
+    src/backend/metal/kernels/inference/qk_norm.metal
     src/backend/metal/kernels/tensor.metal
 )
 
@@ -62,6 +63,13 @@ file(READ "${_CELEG_METAL_QK_POSITION_SOURCE_FILE}"
     CELEG_METAL_QK_POSITION_SOURCE)
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
     "${_CELEG_METAL_QK_POSITION_SOURCE_FILE}")
+
+set(_CELEG_METAL_QK_NORM_SOURCE_FILE
+    "${CMAKE_CURRENT_LIST_DIR}/kernels/inference/qk_norm.metal")
+file(READ "${_CELEG_METAL_QK_NORM_SOURCE_FILE}"
+    CELEG_METAL_QK_NORM_SOURCE)
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+    "${_CELEG_METAL_QK_NORM_SOURCE_FILE}")
 
 set(CELEG_METAL_APP_SOURCES
     apps/benchmark/metal/inference.cpp
