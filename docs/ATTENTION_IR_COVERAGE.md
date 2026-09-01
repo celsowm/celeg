@@ -31,9 +31,9 @@ The largest remaining semantic gaps are:
 1. external-memory / cross-attention lifecycle and execution;
 2. CUDA relative-position bias tables;
 3. formal backend/mode coverage for bidirectional and Prefix-LM;
-4. Metal sparse patterns, latent attention, general layout/paging ownership, the unresolved packed-HeadWise gate representation, and the shared-KV current-value-transform edge.
+4. Metal sparse patterns, latent attention, general layout/paging ownership, and the unresolved packed-HeadWise gate representation.
 
-Metal is no longer treated as unaudited. Its runtime has explicit full-causal and sliding-window paths over ordinary Q/K/V attention, ALiBi, relative-position bias, no-position attention, standard RoPE, ordinary three-axis interleaved M-RoPE in token/decode and batched prefill, all currently modeled Q/K normalization modes, current-value orthogonalization, ordinary sigmoid output gates, and shared-KV publisher/consumer execution. Unsupported pattern, latent, partial-width/scaled M-RoPE, RoPE-scaling, packed-HeadWise gate, and shared-consumer current-value-transform semantics are rejected before execution rather than silently approximated.
+Metal is no longer treated as unaudited. Its runtime has explicit full-causal and sliding-window paths over ordinary Q/K/V attention, ALiBi, relative-position bias, no-position attention, standard RoPE, ordinary three-axis interleaved M-RoPE in token/decode and batched prefill, all currently modeled Q/K normalization modes, current-value orthogonalization, ordinary sigmoid output gates, and shared-KV publisher/consumer execution. Unsupported pattern, latent, partial-width/scaled M-RoPE, RoPE-scaling, and packed-HeadWise gate semantics are rejected before execution rather than silently approximated.
 
 ## IR surface
 
@@ -98,7 +98,7 @@ The table is deliberately conservative. `?` means prove it rather than probably 
 | M-RoPE, ordinary attention | ✓ | ? | ✓ | △ |
 | M-RoPE, latent attention | ✓ | ? | ✗ | ✗ |
 | Private KV | ✓ | ✓ | ✓ | ✓ |
-| Shared KV publisher/consumer | ✓ | ? | ✓ | △ |
+| Shared KV publisher/consumer | ✓ | ? | ✓ | ✓ |
 | Contiguous ordinary KV | ✓ | ✓ | ✓ | △ |
 | Paged ordinary KV | ✓ | ✓ | ✓ | △ |
 | BF16 ordinary KV | ✓ | ✓ | ✓ | ✓ |
@@ -114,7 +114,7 @@ Metal ordinary KV storage remains `△` for contiguous/paged because the runtime
 
 Metal ordinary M-RoPE remains `△` because token/decode and batched prefill now execute explicit three-axis positions, but the backend deliberately requires three interleaved axes, split-half pairing, full-width rotation, no RoPE scaling, and theta 10000. Unsupported forms are rejected before dispatch.
 
-Metal shared KV remains `△` because ordinary BF16 publisher/consumer execution now works in token/decode and batched prefill, but `OrthogonalizeCurrentValueSpec` on a consumer is intentionally rejected until the runtime can source the consumer's semantic current value directly from the publisher cache.
+Metal shared KV is `✓` for the ordinary BF16 attention surface currently supported by Metal. Publisher/consumer execution works in token/decode and batched prefill, including current-value orthogonalization on consumers sourced directly from the publisher-owned value cache.
 
 Metal output gates remain `△` because unpacked OutputWise, ElementWise, and HeadWise gates are supported, as are packed OutputWise/ElementWise gates, but packed HeadWise is rejected until that checkpoint representation has an unambiguous semantic contract.
 
@@ -159,7 +159,7 @@ The runtime supports:
 - whole-vector Q/K normalization;
 - mixed Q/K normalization granularity/presence;
 - weighted and weightless Q/K normalization;
-- current-value orthogonalization before the attention output projection for KV-owning attention;
+- current-value orthogonalization before the attention output projection for private and shared KV attention;
 - sigmoid attention output gates in token/decode and batched-prefill paths.
 
 ### Sliding window
@@ -190,7 +190,7 @@ Shared-KV topology requires one earlier publisher for each consumer and matching
 
 At execution time the consumer aliases the publisher's Metal key/value cache. `CompiledAttentionExecution::has_key_value` is the ownership fact: consumers project, normalize, and position only Q, pass zero prepared key heads through Q/K preparation, skip K/V projection and KV store, then restore the semantic `key_value_heads` when scoring against the shared cache. Token/decode and batched-prefill therefore reuse the same attention kernels as private KV instead of maintaining a second shared-attention implementation.
 
-`OrthogonalizeCurrentValueSpec` is intentionally rejected on shared-KV consumers for now. That transform requires the semantic current V, and using the consumer's local value workspace would be stale/wrong; support requires sourcing the current value from the publisher-owned cache.
+Current-value orthogonalization also reuses the ordinary Metal transform kernel. KV-owning attention passes the local projected V workspace. A shared-KV consumer instead binds the publisher-owned `value_cache` at `position * key_value_width` for token/decode or `base_position * key_value_width` for batched prefill. The selected cache slice is contiguous in the current Metal page layout, so the transform observes the same `[rows, key_heads, head_dim]` current-value view without materializing a duplicate V projection.
 
 ### Q/K normalization
 
@@ -219,7 +219,7 @@ The sigmoid gate is applied to the per-head attention result after any current-v
 
 ### Output transform
 
-`OrthogonalizeCurrentValueSpec` is applied to the per-head attention result before `AttentionOutput` projection, matching the CPU contract. Each query head removes its projection onto the current value head, with GQA/MQA query heads mapped to their corresponding value head. Token and batched-prefill paths share the same Metal kernel and validate a positive finite `minimum_norm_squared` floor before execution. Shared-KV consumers remain excluded until their current-value source is explicitly owned by the publisher cache path.
+`OrthogonalizeCurrentValueSpec` is applied to the per-head attention result before `AttentionOutput` projection, matching the CPU contract. Each query head removes its projection onto the current value head, with GQA/MQA query heads mapped to their corresponding value head. Token and batched-prefill paths share the same Metal kernel and validate a positive finite `minimum_norm_squared` floor before execution. Shared-KV consumers source the semantic current V directly from the publisher-owned value-cache slice instead of using a stale local workspace.
 
 ### Explicit Metal rejections
 
@@ -229,7 +229,6 @@ Metal still rejects before device/pipeline execution:
 - partial-width or scaled standard RoPE;
 - M-RoPE forms outside full-width, unscaled, three-axis interleaved split-half theta-10000 execution;
 - external-memory sources;
-- current-value orthogonalization on shared-KV consumers;
 - non-BF16 KV state semantics;
 - packed HeadWise attention gates;
 - latent and factorized-latent execution, including latent M-RoPE.
@@ -267,10 +266,9 @@ Suggested order:
 1. resolve packed HeadWise gate semantics;
 2. true layout/paging capability declaration;
 3. generalize remaining M-RoPE theta/scaling/partial-width ownership;
-4. source shared-consumer current V for output transforms;
-5. sparse patterns;
-6. latent attention;
-7. external memory after the common lifecycle exists.
+4. sparse patterns;
+5. latent attention;
+6. external memory after the common lifecycle exists.
 
 Every newly supported cell moves to `✓` only with a named implementation path and test.
 
