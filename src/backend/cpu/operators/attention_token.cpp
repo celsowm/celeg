@@ -189,8 +189,16 @@ void execute_cpu_attention_token(
             }
             attention_state.run_attention(state, layout, q, execution.workspace.op_output.data(),
                           execution.session.position_value + 1, attention.relative_bias);
+            const float* current_value = v;
+            if (std::holds_alternative<OrthogonalizeCurrentValueSpec>(
+                    layout.output_transform) && attention.k.segments.empty()) {
+                load_cpu_attention_current_value(
+                    execution.shared, state, execution.session.position_value,
+                    q, static_cast<size_t>(kv_width));
+                current_value = q;
+            }
             apply_cpu_attention_output_transform(
-                layout, execution.workspace.op_output.data(), v);
+                layout, execution.workspace.op_output.data(), current_value);
             if (layout.output_gate.has_value()) {
                 if (!packed_gate) {
                     execution.shared.linear.gemv(attention.gate,
