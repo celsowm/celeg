@@ -56,12 +56,6 @@ inline void validate_metal_attention_capabilities(
             throw std::invalid_argument(
                 "Metal attention currently supports BF16 KV state only");
         }
-        if (!attention.query_norm || !attention.key_norm ||
-            attention.query_norm->granularity != NormGranularity::PerHead ||
-            attention.key_norm->granularity != NormGranularity::PerHead) {
-            throw std::invalid_argument(
-                "Metal attention currently requires explicit per-head Q/K normalization");
-        }
         if (const RopePositionSpec* rope = attention.rope_position()) {
             if (std::abs(rope->rotary_fraction - 1.0) > 1.0e-12) {
                 throw std::invalid_argument(
