@@ -21,12 +21,14 @@ constexpr std::array<AttentionKvLayout, 3> kLayouts{
     AttentionKvLayout::BatchPointers};
 constexpr std::array<AttentionPositionSource, 2> kSources{
     AttentionPositionSource::HostScalar, AttentionPositionSource::DeviceCounter};
-constexpr std::array<AttentionPositionBias, 2> kBiases{
-    AttentionPositionBias::None, AttentionPositionBias::Alibi};
-constexpr std::array<AttentionAlgorithm, 6> kAlgorithms{
+constexpr std::array<AttentionPositionBias, 3> kBiases{
+    AttentionPositionBias::None, AttentionPositionBias::Alibi,
+    AttentionPositionBias::Relative};
+constexpr std::array<AttentionAlgorithm, 7> kAlgorithms{
     AttentionAlgorithm::Strict, AttentionAlgorithm::Online,
     AttentionAlgorithm::Segmented, AttentionAlgorithm::Flash,
-    AttentionAlgorithm::Gemm, AttentionAlgorithm::Alibi};
+    AttentionAlgorithm::Gemm, AttentionAlgorithm::Alibi,
+    AttentionAlgorithm::RelativeBias};
 
 AttentionRequest prefill_request(KvCacheMode format, bool fast, int head_dim, int rows) {
     AttentionRequest request;
@@ -117,6 +119,8 @@ void resolution_never_contradicts_the_matrix() {
     CELEG_TEST_CHECK(plan.bias == bias);
     CELEG_TEST_CHECK((bias == AttentionPositionBias::Alibi) ==
                      (plan.algorithm == AttentionAlgorithm::Alibi));
+    CELEG_TEST_CHECK((bias == AttentionPositionBias::Relative) ==
+                     (plan.algorithm == AttentionAlgorithm::RelativeBias));
     const AttentionCapability row = attention_capability(
         format, bias, operation, layout, source, plan.algorithm);
     CELEG_TEST_CHECK(row.supported == plan.supported);
@@ -147,14 +151,19 @@ void resolution_never_contradicts_the_matrix() {
 
 void prefill_support_matrix_is_asymmetric() {
     const auto selectable = [](KvCacheMode format, AttentionAlgorithm algorithm) {
-        const AttentionPositionBias bias = algorithm == AttentionAlgorithm::Alibi
-            ? AttentionPositionBias::Alibi : AttentionPositionBias::None;
+        AttentionPositionBias bias = AttentionPositionBias::None;
+        if (algorithm == AttentionAlgorithm::Alibi) {
+            bias = AttentionPositionBias::Alibi;
+        } else if (algorithm == AttentionAlgorithm::RelativeBias) {
+            bias = AttentionPositionBias::Relative;
+        }
         return attention_capability(format, bias, AttentionOperation::Prefill,
                                     AttentionKvLayout::Contiguous,
                                     AttentionPositionSource::HostScalar,
                                     algorithm).supported;
     };
     CELEG_TEST_CHECK(selectable(KvCacheMode::Int8, AttentionAlgorithm::Alibi));
+    CELEG_TEST_CHECK(selectable(KvCacheMode::Int8, AttentionAlgorithm::RelativeBias));
     CELEG_TEST_CHECK(selectable(KvCacheMode::Int8, AttentionAlgorithm::Online));
     CELEG_TEST_CHECK(selectable(KvCacheMode::Int8, AttentionAlgorithm::Strict));
     CELEG_TEST_CHECK(!selectable(KvCacheMode::Int8, AttentionAlgorithm::Flash));
@@ -162,6 +171,7 @@ void prefill_support_matrix_is_asymmetric() {
     CELEG_TEST_CHECK(!selectable(KvCacheMode::Int8, AttentionAlgorithm::Segmented));
 
     CELEG_TEST_CHECK(selectable(KvCacheMode::Bf16, AttentionAlgorithm::Alibi));
+    CELEG_TEST_CHECK(selectable(KvCacheMode::Bf16, AttentionAlgorithm::RelativeBias));
     CELEG_TEST_CHECK(selectable(KvCacheMode::Bf16, AttentionAlgorithm::Flash));
     CELEG_TEST_CHECK(selectable(KvCacheMode::Bf16, AttentionAlgorithm::Gemm));
     CELEG_TEST_CHECK(selectable(KvCacheMode::Bf16, AttentionAlgorithm::Segmented));
@@ -300,6 +310,35 @@ void alibi_combinations() {
     }
 }
 
+void relative_bias_combinations() {
+    for (KvCacheMode format : kFormats) {
+        AttentionRequest prefill = prefill_request(format, true, 128, 4096);
+        prefill.bias = AttentionPositionBias::Relative;
+        prefill.flash_attention_requested = true;
+        CELEG_TEST_CHECK(require_attention_capability(prefill).algorithm ==
+                         AttentionAlgorithm::RelativeBias);
+        for (AttentionKvLayout layout : kLayouts) {
+            AttentionRequest decode = decode_request(
+                format, layout, AttentionPositionSource::DeviceCounter);
+            decode.bias = AttentionPositionBias::Relative;
+            decode.fast_attention = true;
+            decode.segmented_attention = true;
+            CELEG_TEST_CHECK(require_attention_capability(decode).algorithm ==
+                             AttentionAlgorithm::RelativeBias);
+        }
+        AttentionRequest host = decode_request(
+            format, AttentionKvLayout::Contiguous, AttentionPositionSource::HostScalar);
+        host.bias = AttentionPositionBias::Relative;
+        CELEG_TEST_CHECK(rejects(host,
+                                 AttentionUnsupportedReason::PositionSourceNotImplemented,
+                                 AttentionAlgorithm::RelativeBias));
+        host.fast_attention = true;
+        CELEG_TEST_CHECK(rejects(host,
+                                 AttentionUnsupportedReason::PositionSourceNotImplemented,
+                                 AttentionAlgorithm::RelativeBias));
+    }
+}
+
 
 void paged_and_contiguous_parity() {
     for (KvCacheMode format : kFormats) {
@@ -393,6 +432,7 @@ void run_all() {
     prefill_fast_path_selection();
     long_context_fallback_selection();
     alibi_combinations();
+    relative_bias_combinations();
     paged_and_contiguous_parity();
 }
 
