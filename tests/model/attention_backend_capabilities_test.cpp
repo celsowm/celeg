@@ -50,11 +50,31 @@ celeg::MultiAxisRopeSpec valid_mrope() {
 
 int main() {
     CELEG_TEST_CHECK(!metal_rejects([](auto&) {}));
-    CELEG_TEST_CHECK(metal_rejects([](auto& attention) {
+    CELEG_TEST_CHECK(!metal_rejects([](auto& attention) {
         attention.query_norm.reset();
+        attention.key_norm.reset();
     }));
-    CELEG_TEST_CHECK(metal_rejects([](auto& attention) {
+    CELEG_TEST_CHECK(!metal_rejects([](auto& attention) {
+        attention.query_norm->granularity = celeg::NormGranularity::WholeVector;
         attention.key_norm->granularity = celeg::NormGranularity::WholeVector;
+    }));
+    CELEG_TEST_CHECK(!metal_rejects([](auto& attention) {
+        attention.query_norm.reset();
+        attention.key_norm->granularity = celeg::NormGranularity::PerHead;
+    }));
+    CELEG_TEST_CHECK(!metal_rejects([](auto& attention) {
+        attention.query_norm->granularity = celeg::NormGranularity::WholeVector;
+        attention.key_norm->granularity = celeg::NormGranularity::PerHead;
+    }));
+    CELEG_TEST_CHECK(!metal_rejects([](auto& attention) {
+        attention.query_norm->weight_kind = celeg::NormWeightKind::None;
+        attention.key_norm->weight_kind = celeg::NormWeightKind::None;
+    }));
+    CELEG_TEST_CHECK(!metal_rejects([](auto& attention) {
+        attention.query_norm->granularity = celeg::NormGranularity::WholeVector;
+        attention.query_norm->weight_kind = celeg::NormWeightKind::None;
+        attention.key_norm->granularity = celeg::NormGranularity::WholeVector;
+        attention.key_norm->weight_kind = celeg::NormWeightKind::None;
     }));
     CELEG_TEST_CHECK(!metal_rejects([](auto& attention) {
         attention.position = celeg::NoPositionEncodingSpec{};
