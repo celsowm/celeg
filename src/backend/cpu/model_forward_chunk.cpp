@@ -249,21 +249,26 @@ void CpuCompiledModel::forward_chunk(std::span<const int32_t> tokens,
                         attention->relative_bias);
                 });
                 if (layout.output_gate.has_value()) {
+                    const bool packed_gate = layout.output_gate->packed_with_query;
+                    const size_t gate_stride = packed_gate
+                        ? q_width
+                        : (layout.output_gate->granularity == AttentionGateGranularity::HeadWise
+                            ? static_cast<size_t>(layout.query_heads) : q_width);
+                    if (!packed_gate) {
+                        linear_started = Clock::now();
+                        layer_gemm(attention->gate, workspace_.chunk_normed.data(),
+                                   workspace_.chunk_attention_gate.data());
+                        session_.prefill_profile.linear_ms += milliseconds_since(linear_started);
+                    }
                     for (size_t row = 0; row < rows; ++row) {
-                        const float* gate = nullptr;
-                        if (layout.output_gate->packed_with_query) {
-                            gate = workspace_.chunk_qkv.data() + row * layout.query_projection_width() + q_width;
-                        } else {
-                            if (row == 0) {
-                                linear_started = Clock::now();
-                                layer_gemm(attention->gate, workspace_.chunk_normed.data(),
-                                           workspace_.chunk_attention_gate.data());
-                                session_.prefill_profile.linear_ms += milliseconds_since(linear_started);
-                            }
-                            gate = workspace_.chunk_attention_gate.data() + row * q_width;
-                        }
-                        apply_cpu_attention_output_gate(workspace_.chunk_op.data() + row * q_width,
-                                                       gate, q_width);
+                        const float* gate = packed_gate
+                            ? workspace_.chunk_qkv.data() +
+                                row * layout.query_projection_width() + q_width
+                            : workspace_.chunk_attention_gate.data() + row * gate_stride;
+                        apply_cpu_attention_output_gate(
+                            workspace_.chunk_op.data() + row * q_width,
+                            gate, q_width, layout.output_gate->granularity,
+                            layout.query_heads, layout.head_dim);
                     }
                 }
                 linear_started = Clock::now();
@@ -502,14 +507,22 @@ void CpuCompiledModel::forward_chunk(std::span<const int32_t> tokens,
                                       CpuAttentionBias::lower(layout.bias, attention->relative_bias,
                                                               layout.query_heads));
                 if (layout.output_gate.has_value()) {
+                    const size_t gate_stride = packed_gate
+                        ? q_width
+                        : (layout.output_gate->granularity == AttentionGateGranularity::HeadWise
+                            ? static_cast<size_t>(layout.query_heads) : q_width);
                     if (!packed_gate) {
                         layer_gemm(attention->gate, workspace_.chunk_normed.data(),
                                    workspace_.chunk_attention_gate.data());
                     }
                     for (size_t row = 0; row < rows; ++row) {
-                        const float* gate = workspace_.chunk_attention_gate.data() + row * q_width;
+                        const float* gate = workspace_.chunk_attention_gate.data() +
+                            row * gate_stride;
                         float* output = workspace_.chunk_op.data() + row * q_width;
-                        apply_cpu_attention_output_gate(output, gate, q_width);
+                        apply_cpu_attention_output_gate(
+                            output, gate, q_width,
+                            layout.output_gate->granularity,
+                            layout.query_heads, layout.head_dim);
                     }
                 }
                 session_.prefill_profile.attention_ms += milliseconds_since(attention_started);
