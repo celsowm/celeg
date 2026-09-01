@@ -188,9 +188,6 @@ void project_cuda_factorized_latent_attention_output_impl(
     const AttentionSpec& layout = attention.layout;
     const auto& latent = *layout.latent_state();
     const auto& factorized = *latent.factorized_projection();
-    if (!layout.output_gate.has_value()) {
-        throw std::logic_error("CUDA factorized latent attention has no output gate");
-    }
     const auto& latent_expansion_storage =
         std::get<Bf16LinearStorage>(attention.latent_expansion->storage);
     const int hidden = model.resources_.program_.hidden;
@@ -205,17 +202,19 @@ void project_cuda_factorized_latent_attention_output_impl(
         .value_dim = factorized.value_head_dim,
         .latent_rank = latent.latent_rank,
         .stream = model.stream_.get()});
-    model.linear(
-        buffers.normalized_input, *attention.gate, buffers.gate,
-        buffers.rows, layout.output_gate_width(), hidden);
-    if (layout.output_gate->granularity == AttentionGateGranularity::HeadWise) {
-        launch_sigmoid_multiply_headwise(
-            buffers.decompressed, buffers.gate, buffers.rows,
-            layout.query_heads, factorized.value_head_dim, model.stream_.get());
-    } else {
-        launch_sigmoid_multiply(
-            buffers.decompressed, buffers.gate,
-            buffers.rows * layout.latent_output_width(), model.stream_.get());
+    if (layout.output_gate.has_value()) {
+        model.linear(
+            buffers.normalized_input, *attention.gate, buffers.gate,
+            buffers.rows, layout.output_gate_width(), hidden);
+        if (layout.output_gate->granularity == AttentionGateGranularity::HeadWise) {
+            launch_sigmoid_multiply_headwise(
+                buffers.decompressed, buffers.gate, buffers.rows,
+                layout.query_heads, factorized.value_head_dim, model.stream_.get());
+        } else {
+            launch_sigmoid_multiply(
+                buffers.decompressed, buffers.gate,
+                buffers.rows * layout.latent_output_width(), model.stream_.get());
+        }
     }
 
     const bool fuse_residual = cuda_can_fuse_mixer_residual(
