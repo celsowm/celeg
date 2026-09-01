@@ -7,6 +7,19 @@
 namespace celeg {
 
 inline void validate_attention_representation(const AttentionSpec& attention) {
+    if (const auto* alibi = std::get_if<AlibiBiasSpec>(&attention.bias)) {
+        alibi->validate(attention.query_heads);
+    } else if (const auto* relative =
+                   std::get_if<RelativePositionBiasSpec>(&attention.bias)) {
+        relative->validate();
+        const int directional_bucket_count = relative->bidirectional
+            ? relative->bucket_count / 2 : relative->bucket_count;
+        if (directional_bucket_count < 2) {
+            throw std::invalid_argument(
+                "relative position bias requires at least two buckets per direction");
+        }
+    }
+
     if (attention.uses_external_memory()) {
         if (attention.external_memory_slot() < 0) {
             throw std::invalid_argument(
