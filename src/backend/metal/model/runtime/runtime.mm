@@ -177,9 +177,13 @@ std::string MetalModel::backend_description() const {
     return std::string("metal-native device=") + (*impl_).device.name.UTF8String +
         " tensor_f16=" + ((*impl_).pipeline_cache.tensor_matmul_f16 ? "yes" : "no") +
         " tensor_bf16=" + ((*impl_).pipeline_cache.tensor_matmul_bf16 ? "yes" : "no") +
+        " tensor_q4_0=" + ((*impl_).pipeline_cache.tensor_matmul_q4_0 ? "yes" : "no") +
         " tensor_q4k=" + ((*impl_).pipeline_cache.tensor_matmul_q4k ? "yes" : "no") +
         " tensor_q5k=" + ((*impl_).pipeline_cache.tensor_matmul_q5k ? "yes" : "no") +
         " tensor_q6k=" + ((*impl_).pipeline_cache.tensor_matmul_q6k ? "yes" : "no") +
+        " tensor_q8_0=" + ((*impl_).pipeline_cache.tensor_matmul_q8_0 ? "yes" : "no") +
+        " tensor_pair_q5k=" + ((*impl_).pipeline_cache.tensor_matmul_pair_q5k ? "yes" : "no") +
+        " tensor_pair_q6k=" + ((*impl_).pipeline_cache.tensor_matmul_pair_q6k ? "yes" : "no") +
         ((*impl_).pipeline_cache.tensor_compile_error.empty()
             ? std::string{} : " tensor_error=" + (*impl_).pipeline_cache.tensor_compile_error);
 }

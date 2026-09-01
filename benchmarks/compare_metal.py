@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import argparse
+import hashlib
 import json
 import platform
 import statistics
@@ -33,6 +34,29 @@ EXPECTED_MODELS = {
     "LFM2.5-350M-Q8_0.gguf",
     "LFM2.5-350M-QAD-Q4_0.gguf",
 }
+
+
+def file_sha256(path):
+    digest = hashlib.sha256()
+    with path.open("rb") as source:
+        for block in iter(lambda: source.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def git_provenance(directory):
+    try:
+        commit = subprocess.check_output(
+            ["git", "-C", str(directory), "rev-parse", "HEAD"], text=True).strip()
+        diff = subprocess.check_output(
+            ["git", "-C", str(directory), "diff", "--binary", "HEAD"], text=True)
+    except subprocess.CalledProcessError:
+        return {"commit": "unknown", "dirty": "unknown", "diff_sha256": "unknown"}
+    return {
+        "commit": commit,
+        "dirty": bool(diff),
+        "diff_sha256": hashlib.sha256(diff.encode()).hexdigest(),
+    }
 
 
 def parse_args():
@@ -270,18 +294,8 @@ def main():
     models = resolve_models(args.model_dir, args.models)
     results = []
     workloads = workload_args(args)
-    try:
-        celeg_commit = subprocess.check_output(
-            ["git", "rev-parse", "HEAD"], text=True).strip()
-    except subprocess.CalledProcessError:
-        celeg_commit = "unknown"
-    try:
-        llama_cpp_commit = subprocess.check_output(
-            ["git", "-C", ".externals/llama.cpp", "rev-parse", "HEAD"],
-            text=True,
-        ).strip()
-    except subprocess.CalledProcessError:
-        llama_cpp_commit = "unknown"
+    celeg_provenance = git_provenance(Path("."))
+    llama_cpp_provenance = git_provenance(Path(".externals/llama.cpp"))
     for workload in workloads:
         if workload["context"] <= 0 or workload["prompt_tokens"] <= 0 or workload["decode_tokens"] < 0:
             raise SystemExit(f"invalid workload dimensions: {workload}")
@@ -292,9 +306,10 @@ def main():
             entry = {
                 "model": str(model),
                 "size_bytes": model.stat().st_size,
+                "sha256": file_sha256(model),
                 "workload": workload["name"],
-                "celeg_commit": celeg_commit,
-                "llama_cpp_commit": llama_cpp_commit,
+                "celeg_commit": celeg_provenance["commit"],
+                "llama_cpp_commit": llama_cpp_provenance["commit"],
             }
             try:
                 entry.update(collect_workload(model, args, workload))
@@ -319,8 +334,8 @@ def main():
     document = {
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "host": platform.platform(),
-        "celeg_commit": celeg_commit,
-        "llama_cpp_commit": llama_cpp_commit,
+        "celeg": celeg_provenance,
+        "llama_cpp": llama_cpp_provenance,
         "configuration": {
             "workloads": workloads,
             "warmup": args.warmup,

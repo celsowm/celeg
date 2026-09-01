@@ -99,17 +99,29 @@ MetalModel::MetalModel(const std::string& path, int context,
             newFunctionWithName:@"celeg_matmul_tensor_f16"];
         id<MTLFunction> bf16_function = [(*impl_).pipeline_cache.tensor_library
             newFunctionWithName:@"celeg_matmul_tensor_bf16"];
+        id<MTLFunction> q4_0_function = [(*impl_).pipeline_cache.tensor_library
+            newFunctionWithName:@"celeg_matmul_tensor_q4_0"];
         id<MTLFunction> q4k_function = [(*impl_).pipeline_cache.tensor_library
             newFunctionWithName:@"celeg_matmul_tensor_q4k"];
         id<MTLFunction> q5k_function = [(*impl_).pipeline_cache.tensor_library
             newFunctionWithName:@"celeg_matmul_tensor_q5k"];
         id<MTLFunction> q6k_function = [(*impl_).pipeline_cache.tensor_library
             newFunctionWithName:@"celeg_matmul_tensor_q6k"];
+        id<MTLFunction> q8_0_function = [(*impl_).pipeline_cache.tensor_library
+            newFunctionWithName:@"celeg_matmul_tensor_q8_0"];
+        id<MTLFunction> q5k_pair_function = [(*impl_).pipeline_cache.tensor_library
+            newFunctionWithName:@"celeg_matmul_tensor_pair_q5k"];
+        id<MTLFunction> q6k_pair_function = [(*impl_).pipeline_cache.tensor_library
+            newFunctionWithName:@"celeg_matmul_tensor_pair_q6k"];
         NSError* f16_error = nil;
         NSError* bf16_error = nil;
+        NSError* q4_0_error = nil;
         NSError* q4k_error = nil;
         NSError* q5k_error = nil;
         NSError* q6k_error = nil;
+        NSError* q8_0_error = nil;
+        NSError* q5k_pair_error = nil;
+        NSError* q6k_pair_error = nil;
         if (f16_function) {
             id<MTLComputePipelineState> state =
                 [(*impl_).device newComputePipelineStateWithFunction:f16_function
@@ -126,6 +138,14 @@ MetalModel::MetalModel(const std::string& path, int context,
             (*impl_).pipeline_cache.tensor_matmul_bf16 = state != nil;
             if (!state && bf16_error) {
                 (*impl_).pipeline_cache.tensor_compile_error = ns_string(bf16_error.localizedDescription);
+            }
+        }
+        if (q4_0_function) {
+            id<MTLComputePipelineState> state = [(*impl_).device
+                newComputePipelineStateWithFunction:q4_0_function error:&q4_0_error];
+            (*impl_).pipeline_cache.tensor_matmul_q4_0 = state != nil;
+            if (!state && q4_0_error) {
+                (*impl_).pipeline_cache.tensor_compile_error = ns_string(q4_0_error.localizedDescription);
             }
         }
         if (q4k_function) {
@@ -152,18 +172,50 @@ MetalModel::MetalModel(const std::string& path, int context,
                 (*impl_).pipeline_cache.tensor_compile_error = ns_string(q6k_error.localizedDescription);
             }
         }
+        if (q8_0_function) {
+            id<MTLComputePipelineState> state = [(*impl_).device
+                newComputePipelineStateWithFunction:q8_0_function error:&q8_0_error];
+            (*impl_).pipeline_cache.tensor_matmul_q8_0 = state != nil;
+            if (!state && q8_0_error) {
+                (*impl_).pipeline_cache.tensor_compile_error = ns_string(q8_0_error.localizedDescription);
+            }
+        }
+        if (q5k_pair_function) {
+            id<MTLComputePipelineState> state = [(*impl_).device
+                newComputePipelineStateWithFunction:q5k_pair_function error:&q5k_pair_error];
+            (*impl_).pipeline_cache.tensor_matmul_pair_q5k = state != nil;
+            if (!state && q5k_pair_error) {
+                (*impl_).pipeline_cache.tensor_compile_error = ns_string(q5k_pair_error.localizedDescription);
+            }
+        }
+        if (q6k_pair_function) {
+            id<MTLComputePipelineState> state = [(*impl_).device
+                newComputePipelineStateWithFunction:q6k_pair_function error:&q6k_pair_error];
+            (*impl_).pipeline_cache.tensor_matmul_pair_q6k = state != nil;
+            if (!state && q6k_pair_error) {
+                (*impl_).pipeline_cache.tensor_compile_error = ns_string(q6k_pair_error.localizedDescription);
+            }
+        }
         if (!(*impl_).pipeline_cache.tensor_matmul_f16 &&
             !(*impl_).pipeline_cache.tensor_matmul_bf16 &&
+            !(*impl_).pipeline_cache.tensor_matmul_q4_0 &&
             !(*impl_).pipeline_cache.tensor_matmul_q4k &&
             !(*impl_).pipeline_cache.tensor_matmul_q5k &&
-            !(*impl_).pipeline_cache.tensor_matmul_q6k) {
+            !(*impl_).pipeline_cache.tensor_matmul_q6k &&
+            !(*impl_).pipeline_cache.tensor_matmul_q8_0 &&
+            !(*impl_).pipeline_cache.tensor_matmul_pair_q5k &&
+            !(*impl_).pipeline_cache.tensor_matmul_pair_q6k) {
             (*impl_).pipeline_cache.tensor_library = nil;
         }
         if ((*impl_).pipeline_cache.tensor_matmul_f16 ||
             (*impl_).pipeline_cache.tensor_matmul_bf16 ||
+            (*impl_).pipeline_cache.tensor_matmul_q4_0 ||
             (*impl_).pipeline_cache.tensor_matmul_q4k ||
             (*impl_).pipeline_cache.tensor_matmul_q5k ||
-            (*impl_).pipeline_cache.tensor_matmul_q6k) {
+            (*impl_).pipeline_cache.tensor_matmul_q6k ||
+            (*impl_).pipeline_cache.tensor_matmul_q8_0 ||
+            (*impl_).pipeline_cache.tensor_matmul_pair_q5k ||
+            (*impl_).pipeline_cache.tensor_matmul_pair_q6k) {
             (*impl_).pipeline_cache.tensor_compile_error.clear();
         }
     }
