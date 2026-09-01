@@ -58,10 +58,17 @@ inline void validate_cuda_attention_semantics(
         }
     }
 
-    if (std::holds_alternative<RelativePositionBiasSpec>(attention.bias) &&
-        compiled.execution.kind != AttentionExecutionKind::Standard) {
-        throw std::invalid_argument(
-            "CUDA relative-position bias currently supports standard attention only");
+    if (const auto* relative =
+            std::get_if<RelativePositionBiasSpec>(&attention.bias)) {
+        if (relative->bidirectional &&
+            !std::holds_alternative<BidirectionalPattern>(attention.pattern)) {
+            throw std::invalid_argument(
+                "CUDA bidirectional relative-position bias requires bidirectional attention");
+        }
+        if (compiled.execution.kind != AttentionExecutionKind::Standard) {
+            throw std::invalid_argument(
+                "CUDA relative-position bias currently supports standard attention only");
+        }
     }
 
     if (compiled.execution.kind != AttentionExecutionKind::Standard) {
