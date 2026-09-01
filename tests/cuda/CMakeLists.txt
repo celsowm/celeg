@@ -50,4 +50,6 @@ if(TARGET celeg_cuda_backend)
             add_test(NAME ${test_name} COMMAND ${test_name})
         endif()
     endforeach()
+
+    target_link_libraries(cuda_relative_bias_attention_test PRIVATE celeg_cpu_backend)
 endif()
