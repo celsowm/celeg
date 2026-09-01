@@ -92,6 +92,15 @@ inline void validate_metal_attention_capabilities(
                 throw std::invalid_argument(
                     "Metal M-RoPE requires three interleaved axes with split-half pairing");
             }
+            if (std::abs(multi->base.rotary_fraction - 1.0) > 1.0e-12 ||
+                !std::holds_alternative<NoRopeScaling>(multi->base.scaling)) {
+                throw std::invalid_argument(
+                    "Metal M-RoPE currently requires full-width unscaled RoPE");
+            }
+            if (std::abs(multi->base.theta - 10000.0) > 1.0e-9) {
+                throw std::invalid_argument(
+                    "Metal M-RoPE currently requires theta 10000");
+            }
             const int pairs = attention.head_dim / 2;
             if (multi->sections[0] + multi->sections[1] + multi->sections[2] != pairs) {
                 throw std::invalid_argument(
