@@ -11,6 +11,7 @@
 #include <filesystem>
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -155,6 +156,7 @@ void exercise_variant(const std::filesystem::path& directory, bool gated) {
     compare_logits(scalar.diagnostics().copy_logits(),
                    chunked.diagnostics().copy_logits());
     CELEG_TEST_CHECK(scalar.session().position() == chunked.session().position());
+    const std::vector<float> prefill_logits = scalar.diagnostics().copy_logits();
 
     const int32_t scalar_token = scalar.session().decode();
     const int32_t chunked_token = chunked.session().decode();
@@ -179,14 +181,13 @@ void exercise_variant(const std::filesystem::path& directory, bool gated) {
 
     CELEG_TEST_CHECK(packed_a->session().ready_for_decode());
     CELEG_TEST_CHECK(packed_b->session().ready_for_decode());
-    compare_logits(chunked.diagnostics().copy_logits(),
-                   packed_a->diagnostics().copy_logits());
-    compare_logits(chunked.diagnostics().copy_logits(),
-                   packed_b->diagnostics().copy_logits());
+    compare_logits(prefill_logits, packed_a->diagnostics().copy_logits());
+    compare_logits(prefill_logits, packed_b->diagnostics().copy_logits());
 
     celeg::CpuModel packed_reference(
         directory.string(), 32, options, generation, runtime);
     packed_reference.session().prefill(prompt);
+    compare_logits(prefill_logits, packed_reference.diagnostics().copy_logits());
     const int32_t reference_token = packed_reference.session().decode();
 
     celeg::CpuModel* packed_models[] = {packed_a.get(), packed_b.get()};
