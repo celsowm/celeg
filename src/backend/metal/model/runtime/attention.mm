@@ -26,6 +26,12 @@ const RelativePositionBiasSpec* attention_relative_bias(
     return std::get_if<RelativePositionBiasSpec>(&attention.semantics.bias);
 }
 
+const OrthogonalizeCurrentValueSpec* attention_output_transform(
+    const CompiledAttentionProgram& attention) {
+    return std::get_if<OrthogonalizeCurrentValueSpec>(
+        &attention.semantics.output_transform);
+}
+
 bool no_position_encoding(const CompiledAttentionProgram& attention) {
     return std::holds_alternative<NoPositionEncodingSpec>(attention.semantics.position);
 }
@@ -250,6 +256,20 @@ void MetalModel::Impl::encode_attention(
     } else {
         dispatch(encoder, "celeg_attention", query_heads * head_dim);
     }
+
+    if (const auto* transform = attention_output_transform(attention)) {
+        const uint32_t rows = 1;
+        set_buffer(encoder, operation, 0);
+        set_buffer(encoder, value_buffer, 1);
+        set_bytes(encoder, &rows, sizeof(rows), 2);
+        set_bytes(encoder, &query_heads, sizeof(query_heads), 3);
+        set_bytes(encoder, &key_heads, sizeof(key_heads), 4);
+        set_bytes(encoder, &head_dim, sizeof(head_dim), 5);
+        set_bytes(encoder, &transform->minimum_norm_squared,
+                  sizeof(transform->minimum_norm_squared), 6);
+        dispatch(encoder, "celeg_attention_orthogonalize_current_value",
+                 query_heads);
+    }
     encode_matvec(encoder, layer.attention_out, operation, hidden);
 }
 
@@ -435,6 +455,19 @@ void MetalModel::Impl::encode_attention_batch(
     } else {
         dispatch(encoder, "celeg_attention_batch",
                  static_cast<NSUInteger>(rows) * query_heads * head_dim);
+    }
+
+    if (const auto* transform = attention_output_transform(attention)) {
+        set_buffer(encoder, batch_operation, 0);
+        set_buffer(encoder, batch_value, 1);
+        set_bytes(encoder, &rows, sizeof(rows), 2);
+        set_bytes(encoder, &query_heads, sizeof(query_heads), 3);
+        set_bytes(encoder, &key_heads, sizeof(key_heads), 4);
+        set_bytes(encoder, &head_dim, sizeof(head_dim), 5);
+        set_bytes(encoder, &transform->minimum_norm_squared,
+                  sizeof(transform->minimum_norm_squared), 6);
+        dispatch(encoder, "celeg_attention_orthogonalize_current_value",
+                 static_cast<NSUInteger>(rows) * query_heads);
     }
     encode_matmul(encoder, layer.attention_out, batch_operation, batch_hidden, rows);
 }
