@@ -1,4 +1,5 @@
 #include "packed/operators.hpp"
+#include "packed/attention_capability.hpp"
 
 #include "backend/cuda/attention_norm.hpp"
 #include "backend/cuda/model/attention_layer_support.hpp"
@@ -114,6 +115,7 @@ void run_paged_attention_cache(PackedOperatorContext& context,
         static_cast<size_t>(cache_layer)));
     const AttentionSpec& layout = current.layout;
     const AttentionSpec& owner_layout = owner.layout;
+    const int prefix_length = cuda_packed_prefix_length(layout);
     const int slot = w.paged_kv ? w.paged_kv->attention_slot(cache_layer) : -1;
     const int stride = w.paged_kv->max_pages_per_request();
     AttentionRequest request;
@@ -123,7 +125,7 @@ void run_paged_attention_cache(PackedOperatorContext& context,
     request.position_source = AttentionPositionSource::DeviceCounter;
     request.bias = cuda_attention_position_bias(layout);
     request.fast_attention = reference.options().fast_attention;
-    request.segmented_attention = segmented_attention;
+    request.segmented_attention = segmented_attention && prefix_length == 0;
     request.head_dim = owner_layout.head_dim;
     request.rows = rows;
     const AttentionCapability plan = require_attention_capability(request);
@@ -131,7 +133,8 @@ void run_paged_attention_cache(PackedOperatorContext& context,
         .q_heads = layout.query_heads,
         .kv_heads = owner_layout.key_value_heads,
         .head_dim = owner_layout.head_dim,
-        .sliding_window = layout.sliding_window_size()};
+        .sliding_window = layout.sliding_window_size(),
+        .prefix_length = prefix_length};
     const RelativePositionBiasDeviceView relative_bias =
         cuda_relative_position_bias_view(current);
     const PagedKvIndex index{
@@ -298,7 +301,8 @@ void run_local_attention_cache(PackedOperatorContext& context,
         .q_heads = layout.query_heads,
         .kv_heads = owner_layout.key_value_heads,
         .head_dim = owner_layout.head_dim,
-        .sliding_window = layout.sliding_window_size()};
+        .sliding_window = layout.sliding_window_size(),
+        .prefix_length = cuda_packed_prefix_length(layout)};
     const RelativePositionBiasDeviceView relative_bias =
         cuda_relative_position_bias_view(current);
     if (request.kv_format == KvCacheMode::Int8) {
