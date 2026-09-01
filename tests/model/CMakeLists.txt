@@ -32,6 +32,8 @@ target_sources(model_compiler_test PRIVATE
     src/backend/cuda/compiler.cpp)
 target_sources(cpu_attention_semantic_capability_test PRIVATE
     src/backend/cpu/compiler.cpp)
+target_include_directories(cuda_packed_attention_capability_test PRIVATE
+    src/backend/cuda)
 target_sources(cuda_packed_attention_capability_test PRIVATE
     src/backend/cuda/packed/layer_program.cpp)
 target_sources(cuda_relative_bias_semantic_test PRIVATE
