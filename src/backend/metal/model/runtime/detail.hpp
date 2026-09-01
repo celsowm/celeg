@@ -127,6 +127,7 @@ struct MetalModel::Impl {
         Linear query;
         Linear key;
         Linear value;
+        Linear attention_gate;
         Linear attention_out;
         id<MTLBuffer> query_norm = nil;
         id<MTLBuffer> key_norm = nil;
