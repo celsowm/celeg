@@ -442,8 +442,8 @@ void PackedGatedDeltaNetExecutor::run(
             w.gated_delta_z.data() + flat * static_cast<size_t>(value_width),
             w.gated_delta_b.data() + flat * static_cast<size_t>(spec.value_heads),
             w.gated_delta_a.data() + flat * static_cast<size_t>(spec.decay_width()),
-            gated_delta.conv_weight, gated_delta.dt_bias, gated_delta.a_log,
-            gated_delta.norm, state_layer->conv_state.data(),
+            gated_delta.conv_weight, gated_delta.conv_bias, gated_delta.dt_bias,
+            gated_delta.a_log, gated_delta.d, state_layer->conv_state.data(),
             state_layer->recurrent_state.data(),
             w.gated_delta_output.data() + flat * static_cast<size_t>(value_width),
             static_cast<int>(count), spec.conv_kernel, spec.key_head_dim,
@@ -480,9 +480,6 @@ void PackedMamba2Executor::run(
     const Mamba2Spec& spec = mamba.spec;
     const int projection_width = 2 * spec.intermediate_size +
         2 * spec.group_count * spec.state_size + spec.num_heads;
-    if (spec.factorized_projections) {
-        throw std::logic_error("Mamba2 does not expose factorized projections");
-    }
     context.linear(w.normed.data(), *mamba.in, w.mamba_projected.data(), rows,
                    projection_width, context.program.hidden);
 
