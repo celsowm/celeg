@@ -13,6 +13,7 @@
 #include "celeg/quantization/ggml.hpp"
 
 #include "metal_inference_source.hpp"
+#include "metal_tensor_source.hpp"
 
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
@@ -71,6 +72,32 @@ constexpr Binding kBindings[] = {
 
 constexpr uint32_t kAttentionDepths[] = {96, 960, 1984, 4096};
 
+constexpr NSUInteger kTensorTileRows = 64;
+constexpr NSUInteger kTensorTileTokens = 128;
+constexpr NSUInteger kTensorTileK = 64;
+constexpr NSUInteger kTensorTileThreads = 128;
+
+/// Mirrors `MetalModel::Impl::tensor_pipeline` bindings for the batched
+/// (prefill) matmul path.
+struct TensorBinding {
+    const char* label;
+    celeg::GgmlType type;
+    const char* kernel;
+    bool dense;
+};
+
+constexpr TensorBinding kTensorBindings[] = {
+    {"bf16", celeg::GgmlType::BF16, "celeg_matmul_tensor_bf16", true},
+    {"f16", celeg::GgmlType::F16, "celeg_matmul_tensor_f16", true},
+    {"q8_0", celeg::GgmlType::Q8_0, "celeg_matmul_tensor_q8_0", false},
+    {"q6_k", celeg::GgmlType::Q6_K, "celeg_matmul_tensor_q6k", false},
+    {"q5_k", celeg::GgmlType::Q5_K, "celeg_matmul_tensor_q5k", false},
+    {"q4_k", celeg::GgmlType::Q4_K, "celeg_matmul_tensor_q4k", false},
+    {"q4_0", celeg::GgmlType::Q4_0, "celeg_matmul_tensor_q4_0", false},
+};
+
+constexpr uint32_t kPrefillTokens = 512;
+
 class Harness {
 public:
     Harness() {
@@ -84,12 +111,19 @@ public:
             throw std::runtime_error("Metal shader compilation failed: " +
                                      (error ? ns_string(error.localizedDescription) : "unknown"));
         }
+        NSString* tensor_source =
+            [NSString stringWithUTF8String:celeg::metal_detail::kTensorShader];
+        tensor_library = [device newLibraryWithSource:tensor_source options:nil error:&error];
+        if (!tensor_library) {
+            throw std::runtime_error("Metal tensor shader compilation failed: " +
+                                     (error ? ns_string(error.localizedDescription) : "unknown"));
+        }
     }
 
-    id<MTLComputePipelineState> pipeline(const char* name) {
+    id<MTLComputePipelineState> pipeline_from(id<MTLLibrary> source_library, const char* name) {
         NSError* error = nil;
         id<MTLFunction> function =
-            [library newFunctionWithName:[NSString stringWithUTF8String:name]];
+            [source_library newFunctionWithName:[NSString stringWithUTF8String:name]];
         if (!function) throw std::runtime_error(std::string("missing kernel: ") + name);
         id<MTLComputePipelineState> state =
             [device newComputePipelineStateWithFunction:function error:&error];
@@ -98,6 +132,14 @@ public:
                                      (error ? ns_string(error.localizedDescription) : "unknown"));
         }
         return state;
+    }
+
+    id<MTLComputePipelineState> pipeline(const char* name) {
+        return pipeline_from(library, name);
+    }
+
+    id<MTLComputePipelineState> tensor_pipeline(const char* name) {
+        return pipeline_from(tensor_library, name);
     }
 
     id<MTLBuffer> random_buffer(size_t bytes) {
@@ -152,6 +194,7 @@ public:
     id<MTLDevice> device = nil;
     id<MTLCommandQueue> queue = nil;
     id<MTLLibrary> library = nil;
+    id<MTLLibrary> tensor_library = nil;
 };
 
 struct Row {
@@ -216,6 +259,64 @@ std::vector<Row> measure_matvec(Harness& harness) {
                             threadsPerThreadgroup:MTLSizeMake(binding.threads, 1, 1)];
                 });
             rows.push_back({binding.matvec, shape.label, weight_bytes, milliseconds,
+                            static_cast<double>(weight_bytes) / (milliseconds * 1.0e6)});
+        }
+    }
+    return rows;
+}
+
+/// Times the batched (prefill) tensor matmul kernels at `kPrefillTokens`
+/// tokens per shape. Reports weight bytes only, so `gb_per_second` /
+/// `percent_of_roofline` read low by design once the kernel is dominated by
+/// re-reading the activation tile once per row-tile rather than once total;
+/// `ms` is the number to compare across tile-geometry experiments.
+std::vector<Row> measure_matmul(Harness& harness) {
+    std::vector<Row> rows;
+    for (const TensorBinding& binding : kTensorBindings) {
+        const celeg::GgmlTypeTrait trait = celeg::ggml_type_trait(binding.type);
+        id<MTLComputePipelineState> state = harness.tensor_pipeline(binding.kernel);
+        for (const Shape& shape : kShapes) {
+            id<MTLBuffer> weights;
+            uint32_t row_bytes = 0;
+            size_t weight_bytes = 0;
+            if (binding.dense) {
+                weight_bytes = static_cast<size_t>(shape.rows) * shape.cols * sizeof(uint16_t);
+                weights = harness.random_buffer(weight_bytes);
+            } else {
+                row_bytes = shape.cols / trait.block_size * trait.type_size;
+                weight_bytes = static_cast<size_t>(shape.rows) * row_bytes;
+                weights = harness.random_buffer(weight_bytes);
+            }
+            id<MTLBuffer> input = harness.float_buffer(
+                static_cast<size_t>(kPrefillTokens) * shape.cols);
+            id<MTLBuffer> output = harness.zero_buffer(
+                static_cast<size_t>(kPrefillTokens) * shape.rows * sizeof(float));
+            const uint32_t tokens_value = kPrefillTokens;
+            const uint32_t cols_value = shape.cols;
+            const uint32_t output_rows_value = shape.rows;
+            const uint32_t output_stride_value = shape.rows;
+            const NSUInteger threadgroup_bytes = kTensorTileRows * kTensorTileK * sizeof(uint16_t);
+            const MTLSize groups = MTLSizeMake(
+                (shape.rows + kTensorTileRows - 1u) / kTensorTileRows,
+                (kPrefillTokens + kTensorTileTokens - 1u) / kTensorTileTokens, 1);
+            const double milliseconds = harness.time_dispatches(
+                5, 2, ^(id<MTLComputeCommandEncoder> encoder) {
+                    [encoder setComputePipelineState:state];
+                    [encoder setBuffer:weights offset:0 atIndex:0];
+                    [encoder setBuffer:input offset:0 atIndex:1];
+                    [encoder setBuffer:output offset:0 atIndex:2];
+                    [encoder setBytes:&tokens_value length:sizeof(tokens_value) atIndex:3];
+                    [encoder setBytes:&cols_value length:sizeof(cols_value) atIndex:4];
+                    [encoder setBytes:&output_rows_value length:sizeof(output_rows_value) atIndex:5];
+                    [encoder setBytes:&output_stride_value length:sizeof(output_stride_value) atIndex:6];
+                    if (!binding.dense) {
+                        [encoder setBytes:&row_bytes length:sizeof(row_bytes) atIndex:7];
+                    }
+                    [encoder setThreadgroupMemoryLength:threadgroup_bytes atIndex:0];
+                    [encoder dispatchThreadgroups:groups
+                            threadsPerThreadgroup:MTLSizeMake(kTensorTileThreads, 1, 1)];
+                });
+            rows.push_back({binding.kernel, shape.label, weight_bytes, milliseconds,
                             static_cast<double>(weight_bytes) / (milliseconds * 1.0e6)});
         }
     }
@@ -291,12 +392,14 @@ int main() {
         Harness harness;
         const double peak = roofline(harness);
         const std::vector<Row> matvec = measure_matvec(harness);
+        const std::vector<Row> matmul = measure_matmul(harness);
         const std::vector<Row> attention = measure_attention(harness);
         std::cout << "{\n  \"device\": \"" << ns_string(harness.device.name) << "\",\n"
                   << "  \"copy_roofline_gb_per_second\": " << std::setprecision(6) << peak
                   << ",\n  \"rows\": [\n";
         bool first = true;
         emit(matvec, peak, "matvec", first);
+        emit(matmul, peak, "matmul", first);
         emit(attention, peak, "attention", first);
         std::cout << "\n  ]\n}\n";
         return 0;
