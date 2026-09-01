@@ -36,7 +36,9 @@ CompiledAttentionStateLayout lower_attention_state_layout(
 
 CompiledAttentionExecution lower_attention_execution(const AttentionSpec& attention) {
     CompiledAttentionExecution result;
-    result.has_key_value = !std::holds_alternative<SharedKvConsumer>(attention.kv_sharing);
+    result.has_key_value =
+        !std::holds_alternative<SharedKvConsumer>(attention.kv_sharing) &&
+        !attention.uses_external_memory();
     result.has_query_key_norm = attention.has_query_key_norm();
     result.has_rope = attention.rope_position() != nullptr;
     if (const RopePositionSpec* rope = attention.rope_position()) {
