@@ -1,5 +1,6 @@
 #include "detail.hpp"
 
+#include <cstring>
 #include <stdexcept>
 
 namespace celeg {
@@ -108,7 +109,6 @@ bool MetalModel::Impl::supports_prefill_batch() const {
             return false;
         }
         if (const auto* attention = std::get_if<CompiledAttentionProgram>(&layer.mixer)) {
-            if (attention->semantics.multi_axis_position()) return false;
             const bool supported_pattern =
                 std::holds_alternative<FullCausalPattern>(attention->semantics.pattern) ||
                 std::holds_alternative<SlidingWindowPattern>(attention->semantics.pattern);
@@ -133,8 +133,27 @@ bool MetalModel::Impl::supports_prefill_batch() const {
 
 void MetalModel::Impl::encode_prefill_batch(
     id<MTLComputeCommandEncoder>& encoder,
-    const std::vector<int32_t>& tokens) {
+    const std::vector<int32_t>& tokens,
+    std::span<const std::array<int32_t, 3>> rope_positions) {
     const uint32_t rows = static_cast<uint32_t>(tokens.size());
+    if (!rope_positions.empty() && rope_positions.size() != tokens.size()) {
+        throw std::invalid_argument("Metal batched RoPE positions must cover every token");
+    }
+    if (!batch_rope_positions) {
+        batch_rope_positions = zero_buffer(
+            static_cast<size_t>(max_context) * 3 * sizeof(int32_t));
+    }
+    auto* staged_positions = static_cast<int32_t*>(batch_rope_positions.contents);
+    for (uint32_t row = 0; row < rows; ++row) {
+        const std::array<int32_t, 3> resolved = rope_positions.empty()
+            ? std::array<int32_t, 3>{position + static_cast<int32_t>(row),
+                                     position + static_cast<int32_t>(row),
+                                     position + static_cast<int32_t>(row)}
+            : rope_positions[row];
+        std::memcpy(staged_positions + static_cast<size_t>(row) * 3,
+                    resolved.data(), 3 * sizeof(int32_t));
+    }
+
     const uint32_t hidden_width = static_cast<uint32_t>(model.graph.hidden);
     const uint32_t count = rows * hidden_width;
     const uint32_t base_position = static_cast<uint32_t>(position);
@@ -202,7 +221,9 @@ void MetalModel::Impl::encode_prefill_batch(
     encode_matmul(encoder, embedding, batch_normed, logits, 1,
                   static_cast<NSUInteger>(rows - 1) * hidden_width * sizeof(float));
     position += static_cast<int>(rows);
-    for (int32_t& value : next_rope_position) value += static_cast<int32_t>(rows);
+    if (rope_positions.empty()) {
+        for (int32_t& value : next_rope_position) value += static_cast<int32_t>(rows);
+    }
 }
 
 }
