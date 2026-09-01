@@ -293,16 +293,40 @@ struct CpuCompiledModel::BatchScratch {
                 } else {
                     const size_t q_width = static_cast<size_t>(layout.query_width());
                     const size_t q_projection_width = static_cast<size_t>(attention->q.rows);
-                    const bool attention_output_gate = layout.output_gate.has_value() ||
-                        q_projection_width == 2 * q_width;
                     const size_t kv_width = static_cast<size_t>(layout.key_value_width());
+                    const bool packed_gate = layout.output_gate.has_value() &&
+                        layout.output_gate->packed_with_query;
+                    std::vector<float> packed_query;
+                    if (packed_gate) packed_query.resize(rows * q_width);
+                    float* const query_base = packed_gate
+                        ? packed_query.data() : workspace_.qkv.data();
+                    const size_t query_stride = packed_gate ? q_width : q_projection_width;
+
                     layer_gemm(attention->q, workspace_.normed.data(), workspace_.qkv.data());
+                    if (!packed_gate && layout.output_gate.has_value()) {
+                        layer_gemm(attention->gate, workspace_.normed.data(),
+                                   workspace_.attention_gate.data());
+                    }
                     if (!attention->k.segments.empty()) {
                         layer_gemm(attention->k, workspace_.normed.data(), workspace_.op_output.data());
                         layer_gemm(attention->v, workspace_.normed.data(), workspace_.conv_projected.data());
                     }
                     rows_for([&](size_t row) {
-                        float* q = workspace_.qkv.data() + row * q_projection_width;
+                        if (packed_gate) {
+                            const float* source = workspace_.qkv.data() + row * q_projection_width;
+                            float* query = query_base + row * query_stride;
+                            float* gate = workspace_.attention_gate.data() + row * q_width;
+                            const size_t head_dim = static_cast<size_t>(layout.head_dim);
+                            for (int head = 0; head < layout.query_heads; ++head) {
+                                const float* head_source = source +
+                                    static_cast<size_t>(head) * 2 * head_dim;
+                                std::copy_n(head_source, head_dim,
+                                            query + static_cast<size_t>(head) * head_dim);
+                                std::copy_n(head_source + head_dim, head_dim,
+                                            gate + static_cast<size_t>(head) * head_dim);
+                            }
+                        }
+                        float* q = query_base + row * query_stride;
                         float* k = workspace_.op_output.data() + row * kv_width;
                         const int position = sessions[row]->session_.position_value;
                         const std::array<int32_t, 3> rope_position = {
@@ -318,15 +342,26 @@ struct CpuCompiledModel::BatchScratch {
                                                     workspace_.op_output.data() + row * kv_width,
                                                     workspace_.conv_projected.data() + row * kv_width);
                         }
-                        sessions[row]->run_attention(state, layout,
-                                                     workspace_.qkv.data() + row * q_projection_width,
-                                                     workspace_.op_output.data() + row * q_width,
-                                                     sessions[row]->session_.position_value + 1,
-                                                     attention->relative_bias);
-                        if (attention_output_gate) {
-                            const float* gate = workspace_.qkv.data() + row * q_projection_width + q_width;
+                        sessions[row]->run_attention(
+                            state, layout,
+                            query_base + row * query_stride,
+                            workspace_.op_output.data() + row * q_width,
+                            sessions[row]->session_.position_value + 1,
+                            attention->relative_bias);
+                        if (layout.output_gate.has_value()) {
+                            const size_t gate_stride = packed_gate
+                                ? q_width
+                                : (layout.output_gate->granularity ==
+                                        AttentionGateGranularity::HeadWise
+                                    ? static_cast<size_t>(layout.query_heads)
+                                    : q_width);
+                            const float* gate = workspace_.attention_gate.data() +
+                                row * gate_stride;
                             float* output = workspace_.op_output.data() + row * q_width;
-                            apply_cpu_attention_output_gate(output, gate, q_width);
+                            apply_cpu_attention_output_gate(
+                                output, gate, q_width,
+                                layout.output_gate->granularity,
+                                layout.query_heads, layout.head_dim);
                         }
                     }
                     layer_gemm(attention->out, workspace_.op_output.data(), workspace_.hidden.data());
