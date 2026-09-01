@@ -3,6 +3,7 @@
 #include "support/assertions.hpp"
 
 #include <iostream>
+#include <stdexcept>
 #include <utility>
 
 namespace {
@@ -35,6 +36,15 @@ void expect_fingerprint_change(const celeg::ResolvedModel& baseline,
     CELEG_TEST_CHECK(original.semantic_fingerprint != modified.semantic_fingerprint);
 }
 
+bool compiled_program_rejected(celeg::CompiledModelProgram program) {
+    try {
+        program.validate();
+    } catch (const std::invalid_argument&) {
+        return true;
+    }
+    return false;
+}
+
 }
 
 int main() {
@@ -50,6 +60,22 @@ int main() {
         compiled.layers[0].feed_forward));
     CELEG_TEST_CHECK(std::get<celeg::CompiledDenseFeedForwardProgram>(
         compiled.layers[0].feed_forward).intermediate_size == 16);
+
+    celeg::CompiledModelProgram invalid_packed_headwise = compiled;
+    std::get<celeg::CompiledAttentionProgram>(
+        invalid_packed_headwise.layers[0].mixer).semantics.output_gate =
+        celeg::SigmoidAttentionGateSpec{
+            true, celeg::AttentionGateGranularity::HeadWise};
+    CELEG_TEST_CHECK(compiled_program_rejected(std::move(invalid_packed_headwise)));
+
+    celeg::CompiledModelProgram invalid_packed_latent = compiled;
+    auto& invalid_packed_latent_attention = std::get<celeg::CompiledAttentionProgram>(
+        invalid_packed_latent.layers[0].mixer).semantics;
+    invalid_packed_latent_attention.state = celeg::LatentAttentionStateSpec{
+        4, 0, 4, false};
+    invalid_packed_latent_attention.output_gate = celeg::SigmoidAttentionGateSpec{
+        true, celeg::AttentionGateGranularity::ElementWise};
+    CELEG_TEST_CHECK(compiled_program_rejected(std::move(invalid_packed_latent)));
 
     celeg::CompiledModelProgram copied = compiled;
     auto& copied_attention = std::get<celeg::CompiledAttentionProgram>(
