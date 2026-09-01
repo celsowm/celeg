@@ -112,6 +112,10 @@ void compiler_accepts_standard_relative_bias() {
 
 void unsupported_relative_semantics_are_explicit() {
     CELEG_TEST_CHECK(compiler_rejects([](auto& attention) {
+        attention.bias = celeg::RelativePositionBiasSpec{32, 128, true};
+    }));
+
+    CELEG_TEST_CHECK(compiler_rejects([](auto& attention) {
         attention.pattern = celeg::PrefixLmPattern{4};
     }));
 
