@@ -71,11 +71,10 @@ void launch_gqa_prefill_relative_bidirectional(const GqaContiguousArgs& args) {
     const GqaGeometry& g = args.geometry;
     const auto& bias = args.relative_bias;
     const int rows = args.extent.rows;
-    const int seq_len = args.extent.seq_len > 0 ? args.extent.seq_len : rows;
     gqa_relative_bidirectional_prefill_kernel<<<rows * g.q_heads, 32, 0, args.stream>>>(
         args.query, args.kv.keys, args.kv.values,
         nullptr, nullptr, args.out, bias.values, bias.bucket_count,
-        bias.max_distance, bias.bidirectional, rows, seq_len,
+        bias.max_distance, bias.bidirectional, rows, rows,
         g.q_heads, g.kv_heads, g.head_dim, g.sliding_window);
     CELEG_KERNEL_DEBUG_SYNC(args.stream);
 }
@@ -85,12 +84,11 @@ void launch_gqa_prefill_relative_bidirectional_int8(
     const GqaGeometry& g = args.geometry;
     const auto& bias = args.relative_bias;
     const int rows = args.extent.rows;
-    const int seq_len = args.extent.seq_len > 0 ? args.extent.seq_len : rows;
     gqa_relative_bidirectional_prefill_kernel<<<rows * g.q_heads, 32, 0, args.stream>>>(
         args.query, args.kv.keys, args.kv.values,
         args.kv.key_scales, args.kv.value_scales,
         args.out, bias.values, bias.bucket_count,
-        bias.max_distance, bias.bidirectional, rows, seq_len,
+        bias.max_distance, bias.bidirectional, rows, rows,
         g.q_heads, g.kv_heads, g.head_dim, g.sliding_window);
     CELEG_KERNEL_DEBUG_SYNC(args.stream);
 }
