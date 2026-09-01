@@ -78,9 +78,11 @@ inline void validate_metal_attention_capabilities(
                     "Metal M-RoPE sections do not match the rotary dimension");
             }
         }
-        if (attention.output_gate.has_value()) {
+        if (attention.output_gate.has_value() &&
+            attention.output_gate->packed_with_query &&
+            attention.output_gate->granularity == AttentionGateGranularity::HeadWise) {
             throw std::invalid_argument(
-                "Metal attention currently does not support output gates");
+                "Metal packed attention gates currently require element-wise semantics");
         }
         if (const auto* transform =
                 std::get_if<OrthogonalizeCurrentValueSpec>(
