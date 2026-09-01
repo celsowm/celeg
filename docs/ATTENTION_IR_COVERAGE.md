@@ -100,13 +100,13 @@ The table is deliberately conservative. `?` means prove it rather than probably 
 | M-RoPE, ordinary attention | ✓ | ✓ | ✓ | △ |
 | M-RoPE, latent attention | ✓ | ✗ | ✗ | ✗ |
 | Private KV | ✓ | ✓ | ✓ | ✓ |
-| Shared KV publisher/consumer | ✓ | △ | ✓ | ✓ |
+| Shared KV publisher/consumer | ✓ | ✓ | ✓ | ✓ |
 | Contiguous ordinary KV | ✓ | ✓ | ✓ | △ |
 | Paged ordinary KV | ✓ | ✓ | ✓ | △ |
 | BF16 ordinary KV | ✓ | ✓ | ✓ | ✓ |
 | INT8 ordinary KV | ✓ | ✗ | ✓ | ✗ |
-| Projected latent attention | ✓ | △ | ✓ | ✗ |
-| Factorized latent attention | ✓ | △ | ✓ | ✗ |
+| Projected latent attention | ✓ | ✓ | ✓ | ✗ |
+| Factorized latent attention | ✓ | ✓ | ✓ | ✗ |
 | Q/K normalization | ✓ | ✓ | ✓ | ✓ |
 | Output gate | ✓ | △ | ✓ | ✓ |
 | Current-value orthogonalization | ✓ | ✓ | ✓ | ✓ |
@@ -145,11 +145,13 @@ CPU lowers and scores ALiBi and `RelativePositionBiasSpec`, including bidirectio
 
 Ordinary M-RoPE has an end-to-end CPU fixture that compares scalar prefill with chunked prefill, explicit three-axis prompt positions, prefix snapshots, and decode behavior.
 
-CPU shared-KV has explicit publisher/consumer topology and execution ownership. The common attention contract now requires one earlier publisher per group and matching KV state geometry/storage before backend execution. Token, chunk, and packed paths all skip consumer K/V projection and address the publisher-owned state. It remains `△` until a dedicated end-to-end shared-KV model fixture covers those paths numerically.
+CPU shared-KV has explicit publisher/consumer topology and execution ownership. The common attention contract requires one earlier publisher per group and matching KV state geometry/storage before backend execution. A dedicated synthetic end-to-end fixture compares Shared-KV execution with a mathematically equivalent Private-KV reference across scalar prefill, chunk prefill, packed ragged prefill, scalar decode, and packed decode. Token, chunk, and packed paths all skip consumer K/V projection and address the publisher-owned state.
 
 CPU ordinary state intentionally accepts FP32/BF16 storage semantics and rejects INT8 before execution, so INT8 is `✗`, not unaudited.
 
-Projected and factorized latent attention both have concrete CPU execution paths. Factorized output decompression no longer assumes an output gate exists: the gate projection/sigmoid is applied only when `output_gate` is present. Normal and packed prefill deliberately fall back to token-wise execution for factorized latent attention while the chunk fast path still assumes the older gated shape. Projected/factorized latent therefore move from `?` to `△` pending dedicated end-to-end fixtures and chunk-path parity.
+Projected latent attention has a dedicated end-to-end fixture covering scalar prefill, chunk prefill, packed ragged prefill, scalar decode, and packed decode. Those execution modes agree numerically, so projected latent execution is `✓` for the declared CPU capability surface.
+
+Factorized latent attention also has a dedicated end-to-end fixture. It covers both ungated execution and an unpacked HeadWise sigmoid output gate through scalar prefill/decode, `CpuModel::prefill_chunk()`, `CpuModel::prefill_batch()`, and `CpuModel::decode_batch()`. Public chunk and packed APIs deliberately fall back to token-wise factorized execution rather than entering an incompatible specialized fast path. The absence of a factorized chunk/packed fast path is therefore a performance/dispatch limitation, not a semantic capability gap.
 
 CPU output gates are implemented for ordinary attention and optional factorized-latent output. Direct projected-latent output gates are explicitly rejected, so the aggregate CPU gate cell remains `△`.
 
