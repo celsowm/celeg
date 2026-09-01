@@ -13,3 +13,4 @@
 #include "inference/pair.metal"
 #include "inference/relative_bias.metal"
 #include "inference/position.metal"
+#include "inference/no_position.metal"
