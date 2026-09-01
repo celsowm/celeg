@@ -669,8 +669,13 @@ void CpuCompiledModel::Shared::load_weights() {
             require_matrix(attention.gate, label + ".gate");
         } else {
             require_matrix(attention.q, label + ".q");
-            require_matrix(attention.k, label + ".k");
-            require_matrix(attention.v, label + ".v");
+            const bool owns_key_value =
+                !semantics.uses_external_memory() &&
+                !std::holds_alternative<SharedKvConsumer>(semantics.kv_sharing);
+            if (owns_key_value) {
+                require_matrix(attention.k, label + ".k");
+                require_matrix(attention.v, label + ".v");
+            }
             if (semantics.output_gate.has_value() && !semantics.output_gate->packed_with_query) {
                 require_matrix(attention.gate, label + ".gate");
             }
