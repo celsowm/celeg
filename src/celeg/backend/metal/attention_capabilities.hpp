@@ -18,7 +18,7 @@ inline constexpr AttentionBackendCapabilities metal_attention_capabilities() {
         .external_memory = false,
         .alibi = true,
         .relative_position_bias = true,
-        .no_position = false,
+        .no_position = true,
         .rope = true,
         .multi_axis_rope = true,
         .standard_execution = true,
