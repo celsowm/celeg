@@ -33,6 +33,15 @@ void validate_cpu_attention_semantics(const CompiledModelProgram& program) {
                 throw std::invalid_argument(
                     "CPU latent attention does not yet support multi-axis RoPE");
             }
+            if (attention.output_gate.has_value() && !latent->factorized()) {
+                throw std::invalid_argument(
+                    "CPU direct latent attention does not support output gates");
+            }
+            if (!std::holds_alternative<NoAttentionOutputTransformSpec>(
+                    attention.output_transform)) {
+                throw std::invalid_argument(
+                    "CPU latent attention does not support current-value output transforms");
+            }
         }
     }
 }
