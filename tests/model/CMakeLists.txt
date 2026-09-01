@@ -1,6 +1,7 @@
 foreach(test_name IN ITEMS
     architecture_resolution_test
     attention_backend_capabilities_test
+    attention_norm_weight_plan_test
     attention_semantic_capability_test
     attention_shared_kv_contract_test
     automatic_inference_test
