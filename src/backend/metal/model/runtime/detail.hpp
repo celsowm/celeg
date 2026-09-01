@@ -179,6 +179,7 @@ struct MetalModel::Impl {
     id<MTLBuffer> recurrent_output = nil;
     id<MTLBuffer> logits = nil;
     id<MTLBuffer> batch_tokens = nil;
+    id<MTLBuffer> batch_rope_positions = nil;
     id<MTLBuffer> batch_hidden = nil;
     id<MTLBuffer> batch_residual = nil;
     id<MTLBuffer> batch_normed = nil;
@@ -300,8 +301,10 @@ struct MetalModel::Impl {
                                          Layer& layer, uint32_t rows);
     void encode_moe(id<MTLCommandBuffer>& command_buffer,
                     id<MTLComputeCommandEncoder>& encoder, Layer& layer);
-    void encode_prefill_batch(id<MTLComputeCommandEncoder>& encoder,
-                              const std::vector<int32_t>& tokens);
+    void encode_prefill_batch(
+        id<MTLComputeCommandEncoder>& encoder,
+        const std::vector<int32_t>& tokens,
+        std::span<const std::array<int32_t, 3>> rope_positions = {});
     bool supports_prefill_batch() const;
 
     void encode_token(id<MTLCommandBuffer>& command_buffer,
