@@ -116,11 +116,13 @@ bool MetalModel::Impl::supports_prefill_batch() const {
                 std::holds_alternative<NoAttentionBiasSpec>(attention->semantics.bias) ||
                 std::holds_alternative<AlibiBiasSpec>(attention->semantics.bias) ||
                 std::holds_alternative<RelativePositionBiasSpec>(attention->semantics.bias);
+            const bool supported_output_transform =
+                std::holds_alternative<NoAttentionOutputTransformSpec>(
+                    attention->semantics.output_transform) ||
+                std::holds_alternative<OrthogonalizeCurrentValueSpec>(
+                    attention->semantics.output_transform);
             if (!std::holds_alternative<OrdinaryKvStateSpec>(attention->semantics.state) ||
-                attention->semantics.output_gate.has_value() ||
-                !supported_pattern || !supported_bias ||
-                !std::holds_alternative<NoAttentionOutputTransformSpec>(
-                    attention->semantics.output_transform)) {
+                !supported_pattern || !supported_bias || !supported_output_transform) {
                 return false;
             }
         }
