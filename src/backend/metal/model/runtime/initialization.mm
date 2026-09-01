@@ -141,7 +141,14 @@ MetalModel::MetalModel(const std::string& path, int context,
             max_batch_intermediate = std::max(max_batch_intermediate,
                                         static_cast<size_t>(dense->intermediate_size));
         }
-        if (const auto* gated_delta = std::get_if<GatedDeltaNetSpec>(&layer.mixer)) {
+        if (const auto* attention = std::get_if<CompiledAttentionProgram>(&layer.mixer)) {
+            max_projection = std::max(
+                max_projection,
+                static_cast<size_t>(attention->semantics.query_projection_width()));
+            max_projection = std::max(
+                max_projection,
+                static_cast<size_t>(attention->semantics.output_gate_width()));
+        } else if (const auto* gated_delta = std::get_if<GatedDeltaNetSpec>(&layer.mixer)) {
             const size_t key_width = static_cast<size_t>(gated_delta->key_heads) *
                 static_cast<size_t>(gated_delta->key_head_dim);
             const size_t value_width = static_cast<size_t>(gated_delta->value_heads) *
@@ -358,6 +365,11 @@ MetalModel::MetalModel(const std::string& path, int context,
                                              static_cast<int>(index), spec.key_value_width(), hidden);
             layer.value = (*impl_).load_linear(TensorRole::AttentionValue,
                                                static_cast<int>(index), spec.key_value_width(), hidden);
+            if (spec.output_gate.has_value() && !spec.output_gate->packed_with_query) {
+                layer.attention_gate = (*impl_).load_linear(
+                    TensorRole::AttentionGate, static_cast<int>(index),
+                    spec.output_gate_width(), hidden);
+            }
             layer.attention_out = (*impl_).load_linear(TensorRole::AttentionOutput,
                                                        static_cast<int>(index), hidden, spec.query_width());
             layer.query_norm = (*impl_).load_vector(TensorRole::AttentionQueryNorm,
