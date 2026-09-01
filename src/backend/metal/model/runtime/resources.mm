@@ -105,7 +105,9 @@ std::vector<float> MetalModel::Impl::load_vector_values(TensorRole role, int lay
     std::vector<float> values = decode_tensor_f32(repository->tensor(name),
         std::span<const int64_t>(selected->expected_shape.data(),
                                  selected->expected_shape.size()), name);
-    if (values.size() != static_cast<size_t>(width)) {
+    const bool planned_attention_norm =
+        role == TensorRole::AttentionQueryNorm || role == TensorRole::AttentionKeyNorm;
+    if (!planned_attention_norm && values.size() != static_cast<size_t>(width)) {
         throw std::runtime_error("Metal vector width mismatch: " + name);
     }
     if (selected->norm_weight_kind == NormWeightKind::OnePlusScale) {
