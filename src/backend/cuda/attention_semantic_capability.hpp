@@ -51,6 +51,12 @@ inline void validate_cuda_attention_semantics(
         }
     }
 
+    if (std::holds_alternative<RelativePositionBiasSpec>(attention.bias) &&
+        compiled.execution.kind != AttentionExecutionKind::Standard) {
+        throw std::invalid_argument(
+            "CUDA relative-position bias currently supports standard attention only");
+    }
+
     if (compiled.execution.kind != AttentionExecutionKind::Standard) {
         const auto* latent = attention.latent_state();
         if (!latent) {
