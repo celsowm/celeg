@@ -31,6 +31,15 @@ target_sources(cpu_attention_semantic_capability_test PRIVATE
     src/backend/cpu/compiler.cpp)
 
 if(TARGET celeg_cuda_backend)
+    add_executable(cuda_factorized_attention_binding_test
+        tests/model/cuda_factorized_attention_binding_test.cpp)
+    target_include_directories(cuda_factorized_attention_binding_test PRIVATE
+        include src tests src/backend/cuda src/backend/cuda/model)
+    target_link_libraries(cuda_factorized_attention_binding_test PRIVATE
+        celeg_cuda_backend Threads::Threads)
+    add_test(NAME cuda_factorized_attention_binding_test
+             COMMAND cuda_factorized_attention_binding_test)
+
     add_executable(latent_prefill_path_test tests/model/latent_prefill_path_test.cpp)
     target_include_directories(latent_prefill_path_test PRIVATE
         include src tests src/backend/cuda/model/prefill_batched/attention)
