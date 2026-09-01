@@ -31,9 +31,9 @@ The largest remaining semantic gaps are:
 1. external-memory / cross-attention lifecycle and execution;
 2. CUDA relative-position bias tables;
 3. formal backend/mode coverage for bidirectional and Prefix-LM;
-4. Metal shared KV, sparse patterns, latent attention, and general layout/paging ownership.
+4. Metal output gates, shared KV, sparse patterns, latent attention, and general layout/paging ownership.
 
-Metal is no longer treated as unaudited. Its runtime has explicit full-causal and sliding-window paths over ordinary Q/K/V attention, ALiBi, relative-position bias, no-position attention, standard RoPE, ordinary three-axis interleaved M-RoPE, and all currently modeled Q/K normalization modes. Unsupported pattern, sharing, transform, latent, partial-width RoPE, and RoPE-scaling semantics are rejected before execution rather than silently approximated.
+Metal is no longer treated as unaudited. Its runtime has explicit full-causal and sliding-window paths over ordinary Q/K/V attention, ALiBi, relative-position bias, no-position attention, standard RoPE, ordinary three-axis interleaved M-RoPE, all currently modeled Q/K normalization modes, and current-value orthogonalization. Unsupported pattern, sharing, gate, latent, partial-width RoPE, and RoPE-scaling semantics are rejected before execution rather than silently approximated.
 
 ## IR surface
 
@@ -107,6 +107,7 @@ The table is deliberately conservative. `?` means prove it rather than probably 
 | Factorized latent attention | ✓ | ? | ✓ | ✗ |
 | Q/K normalization | ✓ | ✓ | ✓ | ✓ |
 | Output gate | ✓ | ? | ✓ | ✗ |
+| Current-value orthogonalization | ✓ | ✓ | ✓ | ✓ |
 | External-memory / cross-attention | IR only | ✗ | ✗ | ✗ |
 
 Metal ordinary KV storage remains `△` for contiguous/paged because the runtime uses an internal page-sized physical layout without yet exposing the same general page-table/layout capability surface as CUDA/CPU.
@@ -153,7 +154,8 @@ The runtime supports:
 - per-head Q/K normalization;
 - whole-vector Q/K normalization;
 - mixed Q/K normalization granularity/presence;
-- weighted and weightless Q/K normalization.
+- weighted and weightless Q/K normalization;
+- current-value orthogonalization before the attention output projection.
 
 ### Sliding window
 
@@ -192,6 +194,10 @@ Per-head normalization has standalone token and batch kernels for mixed cases. W
 
 This preserves the fused hot path for the common per-head/per-head case without conflating absence, granularity, or weightless semantics.
 
+### Output transform
+
+`OrthogonalizeCurrentValueSpec` is applied to the per-head attention result before `AttentionOutput` projection, matching the CPU contract. Each query head removes its projection onto the current value head, with GQA/MQA query heads mapped to their corresponding value head. Token and batched-prefill paths share the same Metal kernel and validate a positive finite `minimum_norm_squared` floor before execution.
+
 ### Explicit Metal rejections
 
 Metal still rejects before device/pipeline execution:
@@ -201,7 +207,7 @@ Metal still rejects before device/pipeline execution:
 - external-memory sources;
 - shared KV publisher/consumer modes;
 - non-BF16 KV state semantics;
-- output gates and output transforms;
+- output gates;
 - latent and factorized-latent execution, including latent M-RoPE.
 
 ## What "AttentionSpec 100% implemented" must mean
@@ -234,12 +240,13 @@ Prove the meaningful execution-mode Cartesian product instead of relying on comp
 
 Suggested order:
 
-1. true layout/paging capability declaration;
-2. dedicated batched M-RoPE Q/K preparation;
-3. shared KV;
-4. sparse patterns;
-5. latent attention;
-6. external memory after the common lifecycle exists.
+1. output gates;
+2. true layout/paging capability declaration;
+3. dedicated batched M-RoPE Q/K preparation;
+4. shared KV;
+5. sparse patterns;
+6. latent attention;
+7. external memory after the common lifecycle exists.
 
 Every newly supported cell moves to `✓` only with a named implementation path and test.
 
