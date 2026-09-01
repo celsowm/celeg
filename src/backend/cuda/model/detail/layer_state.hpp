@@ -70,6 +70,7 @@ struct AttentionLayer {
     const __nv_bfloat16* latent_key_norm = nullptr;
     const __nv_bfloat16* q_norm = nullptr;
     const __nv_bfloat16* k_norm = nullptr;
+    const float* relative_bias = nullptr;
     AttentionRuntimeState state = OrdinaryBf16KvState{};
     DeviceBuffer<float> alibi_slopes;
     int kv_owner_layer = -1;
