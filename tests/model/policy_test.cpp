@@ -28,6 +28,8 @@ bool graph_rejected(celeg::ModelGraph graph) {
         graph.validate();
     } catch (const std::runtime_error&) {
         return true;
+    } catch (const std::invalid_argument&) {
+        return true;
     }
     return false;
 }
@@ -123,6 +125,32 @@ int main() {
     packed_latent_attention.output_gate = celeg::SigmoidAttentionGateSpec{
         true, celeg::AttentionGateGranularity::ElementWise};
     CELEG_TEST_CHECK(graph_rejected(std::move(packed_latent)));
+
+    celeg::ModelGraph external = attention_graph();
+    auto& external_attention = std::get<celeg::AttentionSpec>(
+        external.layers[0].mixer);
+    external_attention.key_value_source = celeg::ExternalMemorySource{2};
+    external.validate();
+
+    celeg::ModelGraph negative_external_slot = external;
+    std::get<celeg::AttentionSpec>(negative_external_slot.layers[0].mixer)
+        .key_value_source = celeg::ExternalMemorySource{-1};
+    CELEG_TEST_CHECK(graph_rejected(std::move(negative_external_slot)));
+
+    celeg::ModelGraph shared_external = external;
+    std::get<celeg::AttentionSpec>(shared_external.layers[0].mixer).kv_sharing =
+        celeg::SharedKvPublisher{0};
+    CELEG_TEST_CHECK(graph_rejected(std::move(shared_external)));
+
+    celeg::ModelGraph latent_external = external;
+    std::get<celeg::AttentionSpec>(latent_external.layers[0].mixer).state =
+        celeg::LatentAttentionStateSpec{4, 0, 4, false};
+    CELEG_TEST_CHECK(graph_rejected(std::move(latent_external)));
+
+    celeg::ModelGraph transformed_external = external;
+    std::get<celeg::AttentionSpec>(transformed_external.layers[0].mixer)
+        .output_transform = celeg::OrthogonalizeCurrentValueSpec{1.0e-6f};
+    CELEG_TEST_CHECK(graph_rejected(std::move(transformed_external)));
 
     std::cout << "policy_test: ok\n";
     return 0;
