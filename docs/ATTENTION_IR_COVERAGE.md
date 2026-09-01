@@ -31,9 +31,9 @@ The largest remaining semantic gaps are:
 1. external-memory / cross-attention lifecycle and execution;
 2. CUDA relative-position bias tables;
 3. formal backend/mode coverage for bidirectional and Prefix-LM;
-4. Metal output gates, shared KV, sparse patterns, latent attention, and general layout/paging ownership.
+4. Metal shared KV, sparse patterns, latent attention, general layout/paging ownership, and the unresolved packed-HeadWise gate representation.
 
-Metal is no longer treated as unaudited. Its runtime has explicit full-causal and sliding-window paths over ordinary Q/K/V attention, ALiBi, relative-position bias, no-position attention, standard RoPE, ordinary three-axis interleaved M-RoPE, all currently modeled Q/K normalization modes, and current-value orthogonalization. Unsupported pattern, sharing, gate, latent, partial-width RoPE, and RoPE-scaling semantics are rejected before execution rather than silently approximated.
+Metal is no longer treated as unaudited. Its runtime has explicit full-causal and sliding-window paths over ordinary Q/K/V attention, ALiBi, relative-position bias, no-position attention, standard RoPE, ordinary three-axis interleaved M-RoPE, all currently modeled Q/K normalization modes, current-value orthogonalization, and ordinary sigmoid output gates. Unsupported pattern, sharing, latent, partial-width RoPE, RoPE-scaling, and packed-HeadWise gate semantics are rejected before execution rather than silently approximated.
 
 ## IR surface
 
@@ -106,13 +106,15 @@ The table is deliberately conservative. `?` means prove it rather than probably 
 | Projected latent attention | ✓ | ? | ✓ | ✗ |
 | Factorized latent attention | ✓ | ? | ✓ | ✗ |
 | Q/K normalization | ✓ | ✓ | ✓ | ✓ |
-| Output gate | ✓ | ? | ✓ | ✗ |
+| Output gate | ✓ | ? | ✓ | △ |
 | Current-value orthogonalization | ✓ | ✓ | ✓ | ✓ |
 | External-memory / cross-attention | IR only | ✗ | ✗ | ✗ |
 
 Metal ordinary KV storage remains `△` for contiguous/paged because the runtime uses an internal page-sized physical layout without yet exposing the same general page-table/layout capability surface as CUDA/CPU.
 
 Metal ordinary M-RoPE remains `△` because token/decode and public prefill are semantically supported with explicit three-axis positions, but M-RoPE still disables the batched-prefill fast path and executes prefill token-by-token.
+
+Metal output gates remain `△` because unpacked OutputWise, ElementWise, and HeadWise gates are supported, as are packed OutputWise/ElementWise gates, but packed HeadWise is rejected until that checkpoint representation has an unambiguous semantic contract.
 
 ## CUDA restrictions that matter
 
@@ -155,7 +157,8 @@ The runtime supports:
 - whole-vector Q/K normalization;
 - mixed Q/K normalization granularity/presence;
 - weighted and weightless Q/K normalization;
-- current-value orthogonalization before the attention output projection.
+- current-value orthogonalization before the attention output projection;
+- sigmoid attention output gates in token/decode and batched-prefill paths.
 
 ### Sliding window
 
@@ -194,6 +197,12 @@ Per-head normalization has standalone token and batch kernels for mixed cases. W
 
 This preserves the fused hot path for the common per-head/per-head case without conflating absence, granularity, or weightless semantics.
 
+### Output gate
+
+Unpacked gates use the resolved `TensorRole::AttentionGate` projection and support OutputWise, ElementWise, and HeadWise granularity. Packed gates preserve the checkpoint convention where each query head is stored as `[query_head, gate_head]`; Q is deinterleaved before Q/K normalization or position handling, while gate values stay in the packed staging buffer until they are applied.
+
+The sigmoid gate is applied to the per-head attention result after any current-value orthogonalization and before `AttentionOutput` projection. Token/decode and batched-prefill use the same semantic ordering. Packed HeadWise is intentionally rejected because the packed projection is structurally head-dimension-wide and no canonical scalar-per-head packed representation is currently defined by the IR.
+
 ### Output transform
 
 `OrthogonalizeCurrentValueSpec` is applied to the per-head attention result before `AttentionOutput` projection, matching the CPU contract. Each query head removes its projection onto the current value head, with GQA/MQA query heads mapped to their corresponding value head. Token and batched-prefill paths share the same Metal kernel and validate a positive finite `minimum_norm_squared` floor before execution.
@@ -207,7 +216,7 @@ Metal still rejects before device/pipeline execution:
 - external-memory sources;
 - shared KV publisher/consumer modes;
 - non-BF16 KV state semantics;
-- output gates;
+- packed HeadWise attention gates;
 - latent and factorized-latent execution, including latent M-RoPE.
 
 ## What "AttentionSpec 100% implemented" must mean
@@ -240,7 +249,7 @@ Prove the meaningful execution-mode Cartesian product instead of relying on comp
 
 Suggested order:
 
-1. output gates;
+1. resolve packed HeadWise gate semantics;
 2. true layout/paging capability declaration;
 3. dedicated batched M-RoPE Q/K preparation;
 4. shared KV;
