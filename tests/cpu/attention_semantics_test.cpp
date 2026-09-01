@@ -90,48 +90,33 @@ void test_prefix_lm_pattern_boundaries() {
     celeg::CpuAttentionPattern pattern;
     pattern.storage = celeg::PrefixLmPattern{4};
 
-    // Queries inside the prefix can attend anywhere inside the prefix, including
-    // future prefix tokens, but cannot see tokens after the prefix.
     CELEG_TEST_CHECK(pattern.allows(0, 0));
     CELEG_TEST_CHECK(pattern.allows(0, 3));
     CELEG_TEST_CHECK(!pattern.allows(0, 4));
     CELEG_TEST_CHECK(pattern.allows(2, 3));
     CELEG_TEST_CHECK(!pattern.allows(2, 5));
-
-    // The first query after the prefix transitions to ordinary causal semantics.
     CELEG_TEST_CHECK(pattern.allows(4, 0));
     CELEG_TEST_CHECK(pattern.allows(4, 4));
     CELEG_TEST_CHECK(!pattern.allows(4, 5));
     CELEG_TEST_CHECK(pattern.allows(7, 6));
     CELEG_TEST_CHECK(!pattern.allows(7, 8));
-
     CELEG_TEST_CHECK(pattern.first_candidate(0) == 0);
     CELEG_TEST_CHECK(pattern.first_candidate(7) == 0);
     CELEG_TEST_CHECK(pattern.may_read_future(0, 8));
     CELEG_TEST_CHECK(pattern.may_read_future(3, 8));
     CELEG_TEST_CHECK(!pattern.may_read_future(4, 8));
 
-    // A prefix covering the complete sequence has no out-of-prefix future region.
     celeg::CpuAttentionPattern full_prefix;
     full_prefix.storage = celeg::PrefixLmPattern{8};
     CELEG_TEST_CHECK(!full_prefix.may_read_future(0, 8));
     CELEG_TEST_CHECK(full_prefix.allows(0, 7));
 }
 
-// The attention kernels fold 1/sqrt(head_dim) into the scores themselves, so
-// apply_cpu_attention_qk must premultiply the query by query_scale/(1/sqrt(head_dim))
-// on every path. The query-key-norm path used to apply query_scale directly,
-// leaving every score a further 1/sqrt(head_dim) too small -- 8x for head_dim 64.
-// Softmax over a single position normalises that away, so it stayed invisible
-// until a sequence had two or more tokens, and only mattered enough to corrupt
-// output once one position carried a much larger value vector than the others.
 void test_query_key_norm_uses_same_query_scale() {
     constexpr int kHeadDim = 64;
     constexpr int kHeads = 2;
     constexpr int kWidth = kHeads * kHeadDim;
 
-    // A real rotary spec, evaluated at position 0 where RoPE is the identity,
-    // so the rotation drops out and only the query scale is under test.
     celeg::RopePositionSpec rope;
     rope.theta = 10000.0;
     rope.rotary_fraction = 1.0;
@@ -151,9 +136,6 @@ void test_query_key_norm_uses_same_query_scale() {
     normed.query_norm = norm;
 
     celeg::CpuCompiledModel::AttentionWeights weights;
-    // Unit norm weights over a query whose per-head RMS is exactly 1 make the
-    // RMS normalisation an identity, so the only thing separating the two
-    // layouts is the query scale.
     weights.q_norm.assign(kHeadDim, 1.0f);
 
     std::vector<float> plain_query(kWidth);
@@ -164,12 +146,60 @@ void test_query_key_norm_uses_same_query_scale() {
     celeg::apply_cpu_attention_qk(plain, weights, plain_query.data(), nullptr, 0, position);
     celeg::apply_cpu_attention_qk(normed, weights, normed_query.data(), nullptr, 0, position);
 
-    // query_scale equals the kernel's own 1/sqrt(64) = 0.125 here, so the
-    // correct premultiplier is exactly 1 and the query is unchanged.
     for (int i = 0; i < kWidth; ++i) {
         CELEG_TEST_CHECK(close(plain_query[i], (i % 2 == 0) ? 1.0f : -1.0f));
         CELEG_TEST_CHECK(close(normed_query[i], plain_query[i]));
     }
+}
+
+void test_query_only_norm_with_key_projection() {
+    celeg::AttentionSpec layout;
+    layout.query_heads = 1;
+    layout.key_value_heads = 1;
+    layout.head_dim = 4;
+    layout.query_scale = 0.5f;
+    layout.position = celeg::NoPositionEncodingSpec{};
+    celeg::NormSpec norm;
+    norm.epsilon = 0.0f;
+    norm.granularity = celeg::NormGranularity::PerHead;
+    layout.query_norm = norm;
+
+    celeg::CpuCompiledModel::AttentionWeights weights;
+    weights.q_norm.assign(4, 1.0f);
+    weights.k.segments.emplace_back(celeg::CpuInt8Matrix{});
+
+    float query[] = {2.0f, 2.0f, 2.0f, 2.0f};
+    float key[] = {3.0f, 3.0f, 3.0f, 3.0f};
+    const std::array<int32_t, 3> position{0, 0, 0};
+    celeg::apply_cpu_attention_qk(layout, weights, query, key, 0, position);
+
+    for (float value : query) CELEG_TEST_CHECK(close(value, 1.0f));
+    for (float value : key) CELEG_TEST_CHECK(close(value, 3.0f));
+}
+
+void test_key_only_norm_without_query_norm() {
+    celeg::AttentionSpec layout;
+    layout.query_heads = 1;
+    layout.key_value_heads = 1;
+    layout.head_dim = 4;
+    layout.query_scale = 0.5f;
+    layout.position = celeg::NoPositionEncodingSpec{};
+    celeg::NormSpec norm;
+    norm.epsilon = 0.0f;
+    norm.granularity = celeg::NormGranularity::PerHead;
+    layout.key_norm = norm;
+
+    celeg::CpuCompiledModel::AttentionWeights weights;
+    weights.k_norm.assign(4, 1.0f);
+    weights.k.segments.emplace_back(celeg::CpuInt8Matrix{});
+
+    float query[] = {3.0f, 3.0f, 3.0f, 3.0f};
+    float key[] = {2.0f, 2.0f, 2.0f, 2.0f};
+    const std::array<int32_t, 3> position{0, 0, 0};
+    celeg::apply_cpu_attention_qk(layout, weights, query, key, 0, position);
+
+    for (float value : query) CELEG_TEST_CHECK(close(value, 3.0f));
+    for (float value : key) CELEG_TEST_CHECK(close(value, 1.0f));
 }
 
 }
@@ -180,5 +210,7 @@ int main() {
     test_bidirectional_pattern_reads_future_keys();
     test_prefix_lm_pattern_boundaries();
     test_query_key_norm_uses_same_query_scale();
+    test_query_only_norm_with_key_projection();
+    test_key_only_norm_without_query_norm();
     return 0;
 }
