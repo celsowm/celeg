@@ -66,7 +66,6 @@ void CudaCompiledModel::enqueue_decode_standard_attention(
         AttentionPositionSource::DeviceCounter,
         resources_.options().fast_attention,
         session_.active_segmented_attention_,
-        attention->alibi_slopes.data() != nullptr,
         owner_layout.head_dim);
     store_standard_attention_kv_contiguous(
         *attention, owner, attention_policy.plan, k, v);
@@ -88,6 +87,7 @@ void CudaCompiledModel::enqueue_decode_standard_attention(
             .partial_denom = workspace_.attention_partial_denom_.data(),
             .partial_accum = workspace_.attention_partial_accum_.data()},
         .alibi_slopes = attention->alibi_slopes.data(),
+        .relative_bias = cuda_relative_position_bias_view(*attention),
         .stream = stream_.get()});
 
     if (const auto* transform = std::get_if<OrthogonalizeCurrentValueSpec>(
