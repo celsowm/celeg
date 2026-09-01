@@ -34,6 +34,22 @@ void configure_external(celeg::AttentionSpec& attention) {
     attention.output_transform = celeg::NoAttentionOutputTransformSpec{};
 }
 
+void configure_factorized(celeg::AttentionSpec& attention) {
+    celeg::LatentAttentionStateSpec latent;
+    latent.latent_rank = 4;
+    latent.rope_head_dim = 0;
+    latent.nope_head_dim = 4;
+    latent.decoupled_rope = false;
+    celeg::FactorizedLatentProjection projection;
+    projection.query_rank = 4;
+    projection.value_head_dim = 4;
+    projection.query_latent_norm = celeg::NormSpec{1.0e-5f};
+    projection.key_latent_norm = celeg::NormSpec{1.0e-5f};
+    latent.projection = projection;
+    attention.state = latent;
+    attention.position = celeg::NoPositionEncodingSpec{};
+}
+
 template <typename Mutator>
 bool rejects(Mutator mutate) {
     celeg::ResolvedModel model = base_model();
@@ -82,6 +98,23 @@ int main() {
     CELEG_TEST_CHECK(rejects([](auto& attention) {
         attention.state = celeg::LatentAttentionStateSpec{16, 2, 6, true};
         attention.output_transform = celeg::OrthogonalizeCurrentValueSpec{1.0e-6f};
+    }));
+
+    CELEG_TEST_CHECK(!rejects([](auto& attention) {
+        configure_factorized(attention);
+    }));
+    CELEG_TEST_CHECK(!rejects([](auto& attention) {
+        configure_factorized(attention);
+        celeg::SigmoidAttentionGateSpec gate;
+        gate.granularity = celeg::AttentionGateGranularity::HeadWise;
+        attention.output_gate = gate;
+    }));
+    CELEG_TEST_CHECK(rejects([](auto& attention) {
+        configure_factorized(attention);
+        celeg::SigmoidAttentionGateSpec gate;
+        gate.packed_with_query = true;
+        gate.granularity = celeg::AttentionGateGranularity::ElementWise;
+        attention.output_gate = gate;
     }));
 
     CELEG_TEST_CHECK(!rejects([](auto& attention) {
