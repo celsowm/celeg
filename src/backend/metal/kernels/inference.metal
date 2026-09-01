@@ -16,3 +16,4 @@
 #include "inference/no_position.metal"
 #include "inference/qk_position.metal"
 #include "inference/qk_norm.metal"
+#include "inference/attention_output.metal"
