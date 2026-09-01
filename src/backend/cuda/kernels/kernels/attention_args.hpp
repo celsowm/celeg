@@ -15,6 +15,7 @@ struct GqaGeometry {
     int kv_heads = 0;
     int head_dim = 0;
     int sliding_window = 0;
+    int prefix_length = 0;
 };
 
 struct LatentGeometry {
