@@ -231,7 +231,7 @@ bool bind_cuda_attention_layer(CudaCompiledModel& model,
         cuda_tensor_name(resources.model_.weight_plan.requests,
                          TensorRole::AttentionOutput, layer_index),
         {resources.program_.hidden, layout.query_width()});
-    if (layout.has_query_key_norm()) {
+    if (layout.query_norm.has_value()) {
         const int query_norm_width = attention_norm_width(
             *layout.query_norm, layout.query_heads, layout.head_dim);
         attention_layer.q_norm = resources.weight_loader_->load_rms_norm_weight(
@@ -241,17 +241,17 @@ bool bind_cuda_attention_layer(CudaCompiledModel& model,
                 : cuda_tensor_name(resources.model_.weight_plan.requests,
                                    TensorRole::AttentionQueryNorm, layer_index),
             {query_norm_width}, layout.query_norm->weight_kind);
-        if (attention_layer.key) {
-            const int key_norm_width = attention_norm_width(
-                *layout.key_norm, layout.key_value_heads, layout.head_dim);
-            attention_layer.k_norm = resources.weight_loader_->load_rms_norm_weight(
-                repo,
-                layout.key_norm->weightless()
-                    ? std::string{}
-                    : cuda_tensor_name(resources.model_.weight_plan.requests,
-                                       TensorRole::AttentionKeyNorm, layer_index),
-                {key_norm_width}, layout.key_norm->weight_kind);
-        }
+    }
+    if (layout.key_norm.has_value() && attention_layer.key) {
+        const int key_norm_width = attention_norm_width(
+            *layout.key_norm, layout.key_value_heads, layout.head_dim);
+        attention_layer.k_norm = resources.weight_loader_->load_rms_norm_weight(
+            repo,
+            layout.key_norm->weightless()
+                ? std::string{}
+                : cuda_tensor_name(resources.model_.weight_plan.requests,
+                                   TensorRole::AttentionKeyNorm, layer_index),
+            {key_norm_width}, layout.key_norm->weight_kind);
     }
 
     initialize_cuda_ordinary_attention_state(
