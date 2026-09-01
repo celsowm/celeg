@@ -140,6 +140,12 @@ id<MTLBuffer> MetalModel::Impl::load_vector(TensorRole role, int layer, int widt
 
 MetalModel::Impl::Linear MetalModel::Impl::load_linear(TensorRole role, int layer,
                                                         int rows, int cols) {
+    if ((role == TensorRole::AttentionKey || role == TensorRole::AttentionValue) &&
+        layer >= 0 && static_cast<size_t>(layer) < program.layers.size()) {
+        const auto* attention = std::get_if<CompiledAttentionProgram>(
+            &program.layers[static_cast<size_t>(layer)].mixer);
+        if (attention && attention->semantics.kv_sharing_consumes()) return {};
+    }
     const TensorRequest& request = request_for(model.weight_plan.requests, role, layer);
     if (!request.source_name) throw std::runtime_error("Metal matrix request was not resolved");
     const std::string& name = *request.source_name;
