@@ -13,6 +13,7 @@ namespace celeg {
 #include "attention_paged.cuh"
 #include "attention_alibi.cuh"
 #include "attention_relative_bias.cuh"
+#include "attention_relative_bidirectional.cuh"
 #include "attention_latent.cuh"
 #include "attention_gemm.cuh"
 }
