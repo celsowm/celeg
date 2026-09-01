@@ -77,6 +77,9 @@ void launch_gqa_decode_relative_device(const GqaContiguousArgs& args);
 void launch_gqa_decode_relative_int8_device(const GqaContiguousInt8Args& args);
 void launch_gqa_prefill_relative(const GqaContiguousArgs& args);
 void launch_gqa_prefill_relative_int8(const GqaContiguousInt8Args& args);
+void launch_gqa_prefill_relative_bidirectional(const GqaContiguousArgs& args);
+void launch_gqa_prefill_relative_bidirectional_int8(
+    const GqaContiguousInt8Args& args);
 void launch_gqa_decode_relative_batch_ptrs(const GqaBatchPtrArgs& args);
 void launch_gqa_decode_relative_int8_batch_ptrs(const GqaBatchPtrInt8Args& args);
 void launch_gqa_decode_relative_paged_batch(const GqaPagedArgs& args);
