@@ -140,13 +140,17 @@ void execute_cpu_attention_token(
                                         static_cast<size_t>(head * factorized->value_head_dim));
                     }
                     output_input = execution.workspace.latent_decompressed.data();
-                    execution.shared.linear.gemv(attention.gate, execution.workspace.normed.data(),
-                        execution.workspace.attention_gate.data());
-                    apply_cpu_attention_output_gate(execution.workspace.latent_decompressed.data(),
-                        execution.workspace.attention_gate.data(),
-                        static_cast<size_t>(layout.latent_output_width()),
-                        layout.output_gate->granularity,
-                        layout.query_heads, factorized->value_head_dim);
+                    if (layout.output_gate.has_value()) {
+                        execution.shared.linear.gemv(
+                            attention.gate, execution.workspace.normed.data(),
+                            execution.workspace.attention_gate.data());
+                        apply_cpu_attention_output_gate(
+                            execution.workspace.latent_decompressed.data(),
+                            execution.workspace.attention_gate.data(),
+                            static_cast<size_t>(layout.latent_output_width()),
+                            layout.output_gate->granularity,
+                            layout.query_heads, factorized->value_head_dim);
+                    }
                 }
                 execution.shared.linear.gemv(attention.out, output_input,
                                     execution.workspace.hidden.data());
