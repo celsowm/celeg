@@ -21,11 +21,11 @@ std::optional<std::string_view> MetalModel::Impl::linear_kernel(
         {"celeg_matvec_q4_0", "celeg_matvec_pair_q4_0", "celeg_matmul_q4_0", "celeg_matmul_pair_q4_0", nullptr,
          "celeg_embedding_q4_0", "celeg_embedding_q4_0_batch", nullptr},
         {"celeg_matvec_q4k", "celeg_matvec_pair_q4k", "celeg_matmul_q4k", "celeg_matmul_pair_q4k", nullptr,
-         "celeg_embedding_q4k", "celeg_embedding_q4k_batch", "celeg_swiglu_matvec_q4k"},
+         "celeg_embedding_q4k", "celeg_embedding_q4k_batch", nullptr},
         {"celeg_matvec_q5k", "celeg_matvec_pair_q5k", "celeg_matmul_q5k", "celeg_matmul_pair_q5k", nullptr,
-         "celeg_embedding_q5k", "celeg_embedding_q5k_batch", "celeg_swiglu_matvec_q5k"},
+         "celeg_embedding_q5k", "celeg_embedding_q5k_batch", nullptr},
         {"celeg_matvec_q6k", "celeg_matvec_pair_q6k", "celeg_matmul_q6k", "celeg_matmul_pair_q6k", nullptr,
-         "celeg_embedding_q6k", "celeg_embedding_q6k_batch", "celeg_swiglu_matvec_q6k"},
+         "celeg_embedding_q6k", "celeg_embedding_q6k_batch", nullptr},
         {"celeg_matvec_q8_0", "celeg_matvec_pair_q8_0", "celeg_matmul_q8_0", "celeg_matmul_pair_q8_0", nullptr,
          "celeg_embedding_q8_0", "celeg_embedding_q8_0_batch", nullptr},
     };
@@ -34,9 +34,9 @@ std::optional<std::string_view> MetalModel::Impl::linear_kernel(
         {"celeg_matvec_tuned_f16", nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr},
         {"celeg_matvec_tuned_bf16", nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr},
         {"celeg_matvec_q4_0_tuned", nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr},
-        {"celeg_matvec_q4k_tuned", nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr},
-        {"celeg_matvec_q5k_tuned", nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr},
-        {"celeg_matvec_q6k_tuned", nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr},
+        {nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr},
+        {nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr},
+        {nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr},
         {nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr},
     };
     const auto storage_index = static_cast<std::size_t>(storage);
