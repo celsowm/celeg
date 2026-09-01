@@ -128,6 +128,12 @@ int main() {
     CELEG_TEST_CHECK(!metal_rejects([](auto& attention) {
         attention.bias = celeg::RelativePositionBiasSpec{32, 128, true};
     }));
+    CELEG_TEST_CHECK(!metal_rejects([](auto& attention) {
+        attention.output_transform = celeg::OrthogonalizeCurrentValueSpec{1.0e-6f};
+    }));
+    CELEG_TEST_CHECK(metal_rejects([](auto& attention) {
+        attention.output_transform = celeg::OrthogonalizeCurrentValueSpec{0.0f};
+    }));
     CELEG_TEST_CHECK(metal_rejects([](auto& attention) {
         attention.pattern = celeg::SlidingWindowPattern{0};
     }));
@@ -158,9 +164,6 @@ int main() {
     }));
     CELEG_TEST_CHECK(metal_rejects([](auto& attention) {
         attention.output_gate = celeg::SigmoidAttentionGateSpec{};
-    }));
-    CELEG_TEST_CHECK(metal_rejects([](auto& attention) {
-        attention.output_transform = celeg::OrthogonalizeCurrentValueSpec{1.0e-6f};
     }));
 
     return 0;
