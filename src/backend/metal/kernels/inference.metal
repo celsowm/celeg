@@ -10,7 +10,6 @@
 #include "inference/state.metal"
 #include "inference/projection.metal"
 #include "inference/batch.metal"
-#include "inference/pair.metal"
 #include "inference/relative_bias.metal"
 #include "inference/position.metal"
 #include "inference/no_position.metal"

@@ -243,8 +243,7 @@ if(CELEG_ENABLE_METAL)
         src/backend/metal/kernels/inference/vector.metal
         src/backend/metal/kernels/inference/state.metal
         src/backend/metal/kernels/inference/projection.metal
-        src/backend/metal/kernels/inference/batch.metal
-        src/backend/metal/kernels/inference/pair.metal)
+        src/backend/metal/kernels/inference/batch.metal)
     set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
         "${CMAKE_CURRENT_SOURCE_DIR}/src/backend/metal/kernels/probe.metal"
         "${CMAKE_CURRENT_SOURCE_DIR}/src/backend/metal/kernels/inference.metal"

@@ -27,7 +27,6 @@ set(CELEG_METAL_SHADER_SOURCES
     src/backend/metal/kernels/inference/state.metal
     src/backend/metal/kernels/inference/projection.metal
     src/backend/metal/kernels/inference/batch.metal
-    src/backend/metal/kernels/inference/pair.metal
     src/backend/metal/kernels/inference/relative_bias.metal
     src/backend/metal/kernels/inference/position.metal
     src/backend/metal/kernels/inference/no_position.metal

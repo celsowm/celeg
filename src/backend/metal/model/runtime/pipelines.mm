@@ -10,24 +10,34 @@ namespace celeg {
 
 using metal_model_detail::ns_string;
 
+namespace {
+
+/// @brief Weight-tile geometry; must match the constants in `tensor.metal`.
+constexpr NSUInteger kTensorTileRows = 64;
+constexpr NSUInteger kTensorTileTokens = 128;
+constexpr NSUInteger kTensorTileK = 64;
+constexpr NSUInteger kTensorTileThreads = 128;
+
+}
+
 std::optional<std::string_view> MetalModel::Impl::linear_kernel(
     LinearStorage storage, LinearOperationKind operation) const {
     static constexpr const char* kGeneric[8][8] = {
-        {nullptr, nullptr, "celeg_matmul", "celeg_matmul_pair", nullptr,
+        {nullptr, nullptr, "celeg_matmul", nullptr, nullptr,
          "celeg_embedding", "celeg_embedding_batch", nullptr},
-        {nullptr, nullptr, "celeg_matmul_f16", "celeg_matmul_pair_f16",
+        {nullptr, nullptr, "celeg_matmul_f16", nullptr,
          "celeg_matmul_tensor_f16", "celeg_embedding_f16", "celeg_embedding_f16_batch", nullptr},
-        {nullptr, nullptr, "celeg_matmul_bf16", "celeg_matmul_pair_bf16",
+        {nullptr, nullptr, "celeg_matmul_bf16", nullptr,
          "celeg_matmul_tensor_bf16", "celeg_embedding_bf16", "celeg_embedding_bf16_batch", nullptr},
-        {nullptr, nullptr, "celeg_matmul_q4_0", "celeg_matmul_pair_q4_0", "celeg_matmul_tensor_q4_0",
+        {nullptr, nullptr, "celeg_matmul_q4_0", nullptr, "celeg_matmul_tensor_q4_0",
          "celeg_embedding_q4_0", "celeg_embedding_q4_0_batch", nullptr},
-        {nullptr, nullptr, "celeg_matmul_q4k", "celeg_matmul_pair_q4k", "celeg_matmul_tensor_q4k",
+        {nullptr, nullptr, "celeg_matmul_q4k", nullptr, "celeg_matmul_tensor_q4k",
          "celeg_embedding_q4k", "celeg_embedding_q4k_batch", nullptr},
-        {nullptr, nullptr, "celeg_matmul_q5k", "celeg_matmul_pair_q5k", "celeg_matmul_tensor_q5k",
+        {nullptr, nullptr, "celeg_matmul_q5k", nullptr, "celeg_matmul_tensor_q5k",
          "celeg_embedding_q5k", "celeg_embedding_q5k_batch", nullptr},
-        {nullptr, nullptr, "celeg_matmul_q6k", "celeg_matmul_pair_q6k", "celeg_matmul_tensor_q6k",
+        {nullptr, nullptr, "celeg_matmul_q6k", nullptr, "celeg_matmul_tensor_q6k",
          "celeg_embedding_q6k", "celeg_embedding_q6k_batch", nullptr},
-        {nullptr, nullptr, "celeg_matmul_q8_0", "celeg_matmul_pair_q8_0", "celeg_matmul_tensor_q8_0",
+        {nullptr, nullptr, "celeg_matmul_q8_0", nullptr, "celeg_matmul_tensor_q8_0",
          "celeg_embedding_q8_0", "celeg_embedding_q8_0_batch", nullptr},
     };
     const auto storage_index = static_cast<std::size_t>(storage);
@@ -322,14 +332,13 @@ void MetalModel::Impl::encode_matmul(id<MTLComputeCommandEncoder> encoder,
         if (!kernel) throw std::runtime_error("unsupported Metal tensor matmul binding");
         id<MTLComputePipelineState> state = tensor_pipeline(*kernel);
         [encoder setComputePipelineState:state];
-        const NSUInteger tile_rows = 64u;
-        const NSUInteger tile_tokens = 128u;
-        const NSUInteger tile_k = 32u;
-        [encoder setThreadgroupMemoryLength:tile_rows * tile_k * sizeof(uint16_t) atIndex:0];
+        [encoder setThreadgroupMemoryLength:kTensorTileRows * kTensorTileK *
+                                            sizeof(uint16_t)
+                                    atIndex:0];
         [encoder dispatchThreadgroups:MTLSizeMake(
-            (weight.rows + tile_rows - 1u) / tile_rows,
-            (rows + tile_tokens - 1u) / tile_tokens, 1)
-         threadsPerThreadgroup:MTLSizeMake(128, 1, 1)];
+            (weight.rows + kTensorTileRows - 1u) / kTensorTileRows,
+            (rows + kTensorTileTokens - 1u) / kTensorTileTokens, 1)
+         threadsPerThreadgroup:MTLSizeMake(kTensorTileThreads, 1, 1)];
         record_dispatch(*kernel);
         return;
     }
@@ -341,58 +350,6 @@ void MetalModel::Impl::encode_matmul(id<MTLComputeCommandEncoder> encoder,
     [encoder dispatchThreadgroups:MTLSizeMake(groups, rows, 1)
              threadsPerThreadgroup:MTLSizeMake(256, 1, 1)];
     record_dispatch(*kernel);
-}
-
-bool MetalModel::Impl::encode_matmul_pair(
-    id<MTLComputeCommandEncoder> encoder, const Linear& first,
-    const Linear& second, id<MTLBuffer> input, id<MTLBuffer> output,
-    uint32_t rows, uint32_t width) {
-    if (first.storage != second.storage || first.rows != second.rows ||
-        first.cols != second.cols || first.rows != width ||
-        first.row_bytes != second.row_bytes) {
-        return false;
-    }
-    const bool tensor = rows >= 16 &&
-        ((first.storage == LinearStorage::Q5K && pipeline_cache.tensor_matmul_pair_q5k) ||
-         (first.storage == LinearStorage::Q6K && pipeline_cache.tensor_matmul_pair_q6k));
-    if (!tensor && tensor_matmul_available(first.storage, rows)) return false;
-    set_buffer(encoder, first.buffer, 0);
-    set_buffer(encoder, second.buffer, 1);
-    set_buffer(encoder, input, 2);
-    set_buffer(encoder, output, 3);
-    set_bytes(encoder, &first.rows, sizeof(first.rows), 4);
-    set_bytes(encoder, &first.cols, sizeof(first.cols), 5);
-    const uint32_t stride = width * 2;
-    set_bytes(encoder, &stride, sizeof(stride), 6);
-    if (first.row_bytes != 0) {
-        set_bytes(encoder, &first.row_bytes, sizeof(first.row_bytes), 7);
-    }
-    if (tensor) {
-        const std::string_view kernel = first.storage == LinearStorage::Q5K
-            ? "celeg_matmul_tensor_pair_q5k" : "celeg_matmul_tensor_pair_q6k";
-        const uint32_t output_rows = width;
-        set_bytes(encoder, &rows, sizeof(rows), 4);
-        set_bytes(encoder, &first.cols, sizeof(first.cols), 5);
-        set_bytes(encoder, &output_rows, sizeof(output_rows), 6);
-        set_bytes(encoder, &stride, sizeof(stride), 7);
-        set_bytes(encoder, &first.row_bytes, sizeof(first.row_bytes), 8);
-        id<MTLComputePipelineState> state = tensor_pipeline(kernel);
-        [encoder setComputePipelineState:state];
-        [encoder setThreadgroupMemoryLength:2u * 64u * 32u * sizeof(uint16_t) atIndex:0];
-        [encoder dispatchThreadgroups:MTLSizeMake((width + 63u) / 64u,
-                                                  (rows + 127u) / 128u, 1)
-                 threadsPerThreadgroup:MTLSizeMake(128, 1, 1)];
-        record_dispatch(kernel);
-        return true;
-    }
-    const auto kernel = linear_kernel(first.storage, LinearOperationKind::MatMulPair);
-    if (!kernel) return false;
-    id<MTLComputePipelineState> state = pipeline(*kernel);
-    [encoder setComputePipelineState:state];
-    [encoder dispatchThreadgroups:MTLSizeMake((width + 3u) / 4u, rows, 1)
-             threadsPerThreadgroup:MTLSizeMake(256, 1, 1)];
-    record_dispatch(*kernel);
-    return true;
 }
 
 void MetalModel::Impl::encode_embedding(id<MTLComputeCommandEncoder> encoder,
