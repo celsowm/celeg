@@ -462,6 +462,16 @@ void ModelGraph::validate() const {
                 default:
                     throw std::runtime_error("invalid attention gate granularity");
                 }
+                if (attention->output_gate->packed_with_query &&
+                    attention->output_gate->granularity == AttentionGateGranularity::HeadWise) {
+                    throw std::runtime_error(
+                        "packed HeadWise attention output gates have no canonical representation");
+                }
+                if (attention->output_gate->packed_with_query &&
+                    attention->uses_latent_state()) {
+                    throw std::runtime_error(
+                        "packed attention output gates require ordinary query projection");
+                }
             }
         }
     }
