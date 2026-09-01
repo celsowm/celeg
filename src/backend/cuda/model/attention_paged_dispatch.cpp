@@ -1,5 +1,6 @@
 #include "detail/compiled_model.hpp"
 #include "attention_decode_dispatch.hpp"
+#include "attention_layer_support.hpp"
 #include "backend/cuda/paged_kv.hpp"
 
 namespace celeg {
@@ -43,6 +44,7 @@ void CudaCompiledModel::dispatch_standard_attention_paged(
             .partial_denom = workspace_.attention_partial_denom_.data(),
             .partial_accum = workspace_.attention_partial_accum_.data()},
         .alibi_slopes = attention.alibi_slopes.data(),
+        .relative_bias = cuda_relative_position_bias_view(attention),
         .stream = stream_.get()});
 }
 
