@@ -1,4 +1,5 @@
 #include "engine_internal.hpp"
+#include "prefill_policy.hpp"
 
 namespace celeg {
 bool CudaSchedulerDriver::run_prefill_work() {
@@ -34,27 +35,19 @@ bool CudaSchedulerDriver::run_prefill_work() {
             size_t count = 0;
             if (embedded) {
                 count = remaining;
-            } else if (request.prefill_offset == 0 && required_initial_span != 0) {
-                if (remaining < required_initial_span) {
-                    finish_request_locked(
-                        request, RequestStatus::Failed,
-                        "CUDA Prefix-LM prompt is shorter than the required prefix");
-                    continue;
-                }
-                if (!work.empty() &&
-                    token_budget < static_cast<int>(required_initial_span)) {
-                    continue;
-                }
-                const size_t ordinary = std::min<size_t>(
-                    remaining,
-                    static_cast<size_t>(std::max(
-                        0, std::min(engine_options_.prefill_chunk_tokens,
-                                    token_budget))));
-                count = std::max(required_initial_span, ordinary);
             } else {
-                count = std::min<size_t>(remaining, static_cast<size_t>(std::max(
-                    0, std::min(engine_options_.prefill_chunk_tokens,
-                                token_budget))));
+                try {
+                    const CudaPrefillSpanDecision decision = plan_cuda_prefill_span(
+                        remaining, request.prefill_offset, required_initial_span,
+                        engine_options_.prefill_chunk_tokens, token_budget,
+                        !work.empty());
+                    if (decision.defer) continue;
+                    count = decision.count;
+                } catch (const std::invalid_argument& error) {
+                    finish_request_locked(
+                        request, RequestStatus::Failed, error.what());
+                    continue;
+                }
             }
             if (count == 0) continue;
             work.push_back({&lane, request.id, request.prefill_offset, count,
