@@ -24,6 +24,16 @@ celeg::ResolvedModel relative_model(bool bidirectional = false) {
     layer.mixer = attention;
     layer.feed_forward = std::monostate{};
     model.graph.layers.push_back(std::move(layer));
+
+    for (celeg::TensorRole role : {
+             celeg::TensorRole::AttentionInputNorm,
+             celeg::TensorRole::AttentionQuery,
+             celeg::TensorRole::AttentionKey,
+             celeg::TensorRole::AttentionValue,
+             celeg::TensorRole::AttentionOutput,
+             celeg::TensorRole::AttentionRelativePositionBias}) {
+        model.weight_plan.requests.push_back({role, 0, -1, {}});
+    }
     return model;
 }
 
