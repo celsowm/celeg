@@ -14,3 +14,4 @@
 #include "inference/relative_bias.metal"
 #include "inference/position.metal"
 #include "inference/no_position.metal"
+#include "inference/qk_position.metal"
