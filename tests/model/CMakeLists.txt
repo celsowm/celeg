@@ -3,6 +3,7 @@ foreach(test_name IN ITEMS
     attention_backend_capabilities_test
     attention_semantic_capability_test
     automatic_inference_test
+    cpu_attention_semantic_capability_test
     layer_dispatch_exhaustiveness_test
     layer_inference_rule_test
     metal_shared_kv_capability_test
@@ -24,6 +25,8 @@ target_include_directories(layer_inference_rule_test PRIVATE src/model)
 target_sources(model_compiler_test PRIVATE
     src/backend/cpu/compiler.cpp
     src/backend/cuda/compiler.cpp)
+target_sources(cpu_attention_semantic_capability_test PRIVATE
+    src/backend/cpu/compiler.cpp)
 
 if(TARGET celeg_cuda_backend)
     add_executable(latent_prefill_path_test tests/model/latent_prefill_path_test.cpp)
