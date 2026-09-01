@@ -40,6 +40,12 @@ inline void validate_attention_backend_capabilities(
         if (!compiled) continue;
         const AttentionSpec& attention = compiled->semantics;
 
+        if (attention.output_gate.has_value() &&
+            attention.output_gate->packed_with_query &&
+            attention.output_gate->granularity == AttentionGateGranularity::HeadWise) {
+            throw std::invalid_argument(
+                "packed HeadWise attention output gates have no canonical IR representation");
+        }
         if (attention.uses_external_memory() && !capabilities.external_memory) {
             throw unsupported("external-memory attention");
         }
