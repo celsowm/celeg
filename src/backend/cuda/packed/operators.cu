@@ -1,6 +1,7 @@
 #include "packed/operators.hpp"
 
 #include "backend/cuda/attention_norm.hpp"
+#include "backend/cuda/model/attention_layer_support.hpp"
 #include "kernels/kernels.cuh"
 #include "kernels/gated_delta.hpp"
 #include "kernels/mamba2.hpp"
@@ -120,8 +121,7 @@ void run_paged_attention_cache(PackedOperatorContext& context,
     request.operation = AttentionOperation::Decode;
     request.layout = AttentionKvLayout::Paged;
     request.position_source = AttentionPositionSource::DeviceCounter;
-    request.bias = current.alibi_slopes.data() ? AttentionPositionBias::Alibi
-                                               : AttentionPositionBias::None;
+    request.bias = cuda_attention_position_bias(layout);
     request.fast_attention = reference.options().fast_attention;
     request.segmented_attention = segmented_attention;
     request.head_dim = owner_layout.head_dim;
@@ -132,6 +132,8 @@ void run_paged_attention_cache(PackedOperatorContext& context,
         .kv_heads = owner_layout.key_value_heads,
         .head_dim = owner_layout.head_dim,
         .sliding_window = layout.sliding_window_size()};
+    const RelativePositionBiasDeviceView relative_bias =
+        cuda_relative_position_bias_view(current);
     const PagedKvIndex index{
         .page_tables = w.d_page_tables.data(),
         .page_table_stride = stride,
@@ -172,6 +174,18 @@ void run_paged_attention_cache(PackedOperatorContext& context,
                 .rows = rows,
                 .geometry = geometry,
                 .alibi_slopes = current.alibi_slopes.data(),
+                .stream = w.stream.get()});
+        } else if (plan.algorithm == AttentionAlgorithm::RelativeBias) {
+            launch_gqa_decode_relative_int8_paged_batch({
+                .query = w.q.data(),
+                .kv = pool,
+                .index = index,
+                .scale_index = scale_index,
+                .out = w.op_output.data(),
+                .positions = w.positions.data(),
+                .rows = rows,
+                .geometry = geometry,
+                .relative_bias = relative_bias,
                 .stream = w.stream.get()});
         } else if (plan.algorithm == AttentionAlgorithm::Segmented) {
             launch_gqa_decode_int8_paged_segmented_batch({
@@ -220,6 +234,17 @@ void run_paged_attention_cache(PackedOperatorContext& context,
             .geometry = geometry,
             .alibi_slopes = current.alibi_slopes.data(),
             .stream = w.stream.get()});
+    } else if (plan.algorithm == AttentionAlgorithm::RelativeBias) {
+        launch_gqa_decode_relative_paged_batch({
+            .query = w.q.data(),
+            .kv = pool,
+            .index = index,
+            .out = w.op_output.data(),
+            .positions = w.positions.data(),
+            .rows = rows,
+            .geometry = geometry,
+            .relative_bias = relative_bias,
+            .stream = w.stream.get()});
     } else if (plan.algorithm == AttentionAlgorithm::Segmented) {
         launch_gqa_decode_paged_segmented_batch({
             .query = w.q.data(),
@@ -263,8 +288,7 @@ void run_local_attention_cache(PackedOperatorContext& context,
     request.operation = AttentionOperation::Decode;
     request.layout = AttentionKvLayout::BatchPointers;
     request.position_source = AttentionPositionSource::DeviceCounter;
-    request.bias = current.alibi_slopes.data() ? AttentionPositionBias::Alibi
-                                               : AttentionPositionBias::None;
+    request.bias = cuda_attention_position_bias(layout);
     request.fast_attention = reference.options().fast_attention;
     request.segmented_attention = false;
     request.head_dim = owner_layout.head_dim;
@@ -275,6 +299,8 @@ void run_local_attention_cache(PackedOperatorContext& context,
         .kv_heads = owner_layout.key_value_heads,
         .head_dim = owner_layout.head_dim,
         .sliding_window = layout.sliding_window_size()};
+    const RelativePositionBiasDeviceView relative_bias =
+        cuda_relative_position_bias_view(current);
     if (request.kv_format == KvCacheMode::Int8) {
         const Int8KvBatchView batch{
             .keys = w.d_key_int8.data() + offset,
@@ -295,6 +321,16 @@ void run_local_attention_cache(PackedOperatorContext& context,
                 .rows = rows,
                 .geometry = geometry,
                 .alibi_slopes = current.alibi_slopes.data(),
+                .stream = w.stream.get()});
+        } else if (plan.algorithm == AttentionAlgorithm::RelativeBias) {
+            launch_gqa_decode_relative_int8_batch_ptrs({
+                .query = w.q.data(),
+                .kv = batch,
+                .out = w.op_output.data(),
+                .positions = w.positions.data(),
+                .rows = rows,
+                .geometry = geometry,
+                .relative_bias = relative_bias,
                 .stream = w.stream.get()});
         } else {
             launch_gqa_decode_int8_batch_ptrs({
@@ -325,6 +361,16 @@ void run_local_attention_cache(PackedOperatorContext& context,
             .rows = rows,
             .geometry = geometry,
             .alibi_slopes = current.alibi_slopes.data(),
+            .stream = w.stream.get()});
+    } else if (plan.algorithm == AttentionAlgorithm::RelativeBias) {
+        launch_gqa_decode_relative_batch_ptrs({
+            .query = w.q.data(),
+            .kv = batch,
+            .out = w.op_output.data(),
+            .positions = w.positions.data(),
+            .rows = rows,
+            .geometry = geometry,
+            .relative_bias = relative_bias,
             .stream = w.stream.get()});
     } else {
         launch_gqa_decode_batch_ptrs({
@@ -360,12 +406,12 @@ void PackedGatedDeltaNetExecutor::run(
         spec.value_heads * spec.value_head_dim;
     const int value_width = spec.value_heads * spec.value_head_dim;
     if (spec.factorized_projections) {
-        context.linear(w.normed.data(), *gated_delta.q, w.q.data(),
-                       rows, spec.key_heads * spec.key_head_dim, context.program.hidden);
-        context.linear(w.normed.data(), *gated_delta.k, w.k.data(),
-                       rows, spec.key_heads * spec.key_head_dim, context.program.hidden);
-        context.linear(w.normed.data(), *gated_delta.v, w.v.data(),
-                       rows, value_width, context.program.hidden);
+        context.linear(w.normed.data(), *gated_delta.q, w.q.data(), rows,
+                       spec.key_heads * spec.key_head_dim, context.program.hidden);
+        context.linear(w.normed.data(), *gated_delta.k, w.k.data(), rows,
+                       spec.key_heads * spec.key_head_dim, context.program.hidden);
+        context.linear(w.normed.data(), *gated_delta.v, w.v.data(), rows,
+                       value_width, context.program.hidden);
         launch_interleave_gated_delta_qkv(
             w.q.data(), w.k.data(), w.v.data(), w.gated_delta_qkv.data(), rows,
             spec.key_heads * spec.key_head_dim, value_width, w.stream.get());
@@ -434,6 +480,9 @@ void PackedMamba2Executor::run(
     const Mamba2Spec& spec = mamba.spec;
     const int projection_width = 2 * spec.intermediate_size +
         2 * spec.group_count * spec.state_size + spec.num_heads;
+    if (spec.factorized_projections) {
+        throw std::logic_error("Mamba2 does not expose factorized projections");
+    }
     context.linear(w.normed.data(), *mamba.in, w.mamba_projected.data(), rows,
                    projection_width, context.program.hidden);
 
