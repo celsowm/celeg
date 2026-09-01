@@ -315,7 +315,7 @@ void CpuCompiledModel::Shared::load_weights() {
             if (attention.output_gate.has_value() && !attention.output_gate->packed_with_query) {
                 layer.gate = load_matrix(source, reader.get(), writer.get(),
                     tensor_name(weight_requests, TensorRole::AttentionGate, index),
-                    {attention.query_width(), program.hidden});
+                    {attention.output_gate_width(), program.hidden});
             }
             if (const auto* relative =
                     std::get_if<RelativePositionBiasSpec>(&attention.bias)) {
