@@ -1,5 +1,7 @@
 #include "attention_decode_dispatch.hpp"
 
+#include "attention_layer_support.hpp"
+
 #include <stdexcept>
 
 namespace celeg {
@@ -11,7 +13,6 @@ CudaDecodeAttentionPolicy plan_cuda_decode_attention(
     AttentionPositionSource position_source,
     bool fast_attention,
     bool segmented_attention,
-    bool has_alibi,
     int owner_head_dim) {
     const auto* block_sparse = std::get_if<BlockSparsePattern>(&layout.pattern);
     AttentionRequest request;
@@ -19,8 +20,7 @@ CudaDecodeAttentionPolicy plan_cuda_decode_attention(
     request.operation = AttentionOperation::Decode;
     request.layout = kv_layout;
     request.position_source = position_source;
-    request.bias = has_alibi
-        ? AttentionPositionBias::Alibi : AttentionPositionBias::None;
+    request.bias = cuda_attention_position_bias(layout);
     request.fast_attention = fast_attention && block_sparse == nullptr;
     request.segmented_attention = segmented_attention && block_sparse == nullptr;
     request.head_dim = owner_head_dim;
@@ -73,6 +73,29 @@ void dispatch_cuda_contiguous_decode_attention(
                 .geometry = dispatch.geometry,
                 .extent = dispatch.extent,
                 .alibi_slopes = dispatch.alibi_slopes,
+                .stream = dispatch.stream});
+        }
+        return;
+
+    case AttentionAlgorithm::RelativeBias:
+        if (!device_position) throw UnsupportedAttentionCapability(dispatch.plan);
+        if (int8_kv) {
+            launch_gqa_decode_relative_int8_device({
+                .query = dispatch.query,
+                .kv = dispatch.int8_kv,
+                .out = dispatch.out,
+                .geometry = dispatch.geometry,
+                .extent = dispatch.extent,
+                .relative_bias = dispatch.relative_bias,
+                .stream = dispatch.stream});
+        } else {
+            launch_gqa_decode_relative_device({
+                .query = dispatch.query,
+                .kv = dispatch.bf16_kv,
+                .out = dispatch.out,
+                .geometry = dispatch.geometry,
+                .extent = dispatch.extent,
+                .relative_bias = dispatch.relative_bias,
                 .stream = dispatch.stream});
         }
         return;
@@ -204,6 +227,33 @@ void dispatch_cuda_paged_decode_attention(
                 .rows = dispatch.rows,
                 .geometry = dispatch.geometry,
                 .alibi_slopes = dispatch.alibi_slopes,
+                .stream = dispatch.stream});
+        }
+        return;
+
+    case AttentionAlgorithm::RelativeBias:
+        if (int8_kv) {
+            launch_gqa_decode_relative_int8_paged_batch({
+                .query = dispatch.query,
+                .kv = dispatch.int8_kv,
+                .index = dispatch.index,
+                .scale_index = dispatch.scale_index,
+                .out = dispatch.out,
+                .positions = dispatch.positions,
+                .rows = dispatch.rows,
+                .geometry = dispatch.geometry,
+                .relative_bias = dispatch.relative_bias,
+                .stream = dispatch.stream});
+        } else {
+            launch_gqa_decode_relative_paged_batch({
+                .query = dispatch.query,
+                .kv = dispatch.bf16_kv,
+                .index = dispatch.index,
+                .out = dispatch.out,
+                .positions = dispatch.positions,
+                .rows = dispatch.rows,
+                .geometry = dispatch.geometry,
+                .relative_bias = dispatch.relative_bias,
                 .stream = dispatch.stream});
         }
         return;
