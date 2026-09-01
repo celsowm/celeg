@@ -18,14 +18,9 @@ void apply_cpu_attention_qk(const AttentionSpec& layout,
     const bool has_key = key != nullptr && !weights.k.segments.empty();
     const RopePositionSpec* rope = layout.rope_position();
 
-    // The attention kernels (cpu_gqa_decode_paged_parallel and the chunk
-    // equivalent) already fold 1/sqrt(head_dim) into the scores, so every path
-    // here must premultiply the query by the *ratio* between the model's own
-    // query scale and that default -- never by layout.query_scale itself, which
-    // would scale a second time. The query-key-norm branches used to do exactly
-    // that, making every score 1/sqrt(head_dim) too small (8x for head_dim 64).
-    // Softmax over a single position hides it, so it only shows up once a
-    // sequence has more than one token.
+    // The attention kernels already fold 1/sqrt(head_dim) into the scores, so
+    // Q preparation only applies the ratio between the model scale and that
+    // kernel scale. Position attention scaling is folded into the same ratio.
     const float kernel_scale = 1.0f / std::sqrt(static_cast<float>(layout.head_dim));
     const float query_scale_ratio = layout.query_scale / kernel_scale;
 
@@ -37,78 +32,51 @@ void apply_cpu_attention_qk(const AttentionSpec& layout,
             cpu_qk_norm_only(data, norm_weight, 1, heads * layout.head_dim, norm.epsilon);
         }
     };
-
-    if (rope == nullptr) {
-        if (layout.has_query_key_norm()) {
-            apply_norm_only(query, weights.q_norm.data(), layout.query_heads,
-                            *layout.query_norm);
-            if (has_key) {
-                apply_norm_only(key, weights.k_norm.data(), layout.key_value_heads,
-                                *layout.key_norm);
-            }
-            for (int i = 0; i < q_width; ++i) query[i] *= query_scale_ratio;
+    const auto apply_rope_only = [&](float* data, int heads) {
+        if (!rope) return;
+        if (const auto* multi = layout.multi_axis_position()) {
+            cpu_rope_mrope(data, heads, layout.head_dim, rope_position,
+                           multi->sections, multi->interleaved, *rope);
+        } else {
+            cpu_rope(data, heads, layout.head_dim, scalar_position, *rope);
+        }
+    };
+    const auto prepare_side = [&](float* data, const float* norm_weight,
+                                  int heads, const std::optional<NormSpec>& norm) {
+        if (!norm.has_value()) {
+            apply_rope_only(data, heads);
             return;
         }
-        for (int i = 0; i < q_width; ++i) query[i] *= query_scale_ratio;
-        return;
-    }
-
-    if (layout.has_query_key_norm()) {
-        const auto apply_norm_and_rope = [&](float* data, const float* norm_weight,
-                                             int heads, const NormSpec& norm) {
-            if (norm.granularity == NormGranularity::PerHead) {
-                if (const auto* multi = layout.multi_axis_position()) {
-                    cpu_qk_norm_rope_mrope(
-                        data, norm_weight, heads, layout.head_dim, rope_position,
-                        multi->sections, multi->interleaved, *rope, norm.epsilon);
-                } else {
-                    cpu_qk_norm_rope(data, norm_weight, heads, layout.head_dim,
-                                     scalar_position, *rope, norm.epsilon);
-                }
-                return;
-            }
-
-            cpu_qk_norm_only(data, norm_weight, 1, heads * layout.head_dim,
-                             norm.epsilon);
+        if (!rope) {
+            apply_norm_only(data, norm_weight, heads, *norm);
+            return;
+        }
+        if (norm->granularity == NormGranularity::PerHead) {
             if (const auto* multi = layout.multi_axis_position()) {
-                cpu_rope_mrope(data, heads, layout.head_dim, rope_position,
-                               multi->sections, multi->interleaved, *rope);
+                cpu_qk_norm_rope_mrope(
+                    data, norm_weight, heads, layout.head_dim, rope_position,
+                    multi->sections, multi->interleaved, *rope, norm->epsilon);
             } else {
-                cpu_rope(data, heads, layout.head_dim, scalar_position, *rope);
+                cpu_qk_norm_rope(data, norm_weight, heads, layout.head_dim,
+                                 scalar_position, *rope, norm->epsilon);
             }
-        };
-
-        apply_norm_and_rope(query, weights.q_norm.data(), layout.query_heads,
-                            *layout.query_norm);
-        if (has_key) {
-            apply_norm_and_rope(key, weights.k_norm.data(), layout.key_value_heads,
-                                *layout.key_norm);
+            return;
         }
-        const float query_scale = query_scale_ratio *
-            rope_attention_scale(*rope, scalar_position);
-        for (int i = 0; i < q_width; ++i) query[i] *= query_scale;
-        return;
+        apply_norm_only(data, norm_weight, heads, *norm);
+        apply_rope_only(data, heads);
+    };
+
+    prepare_side(query, weights.q_norm.data(), layout.query_heads,
+                 layout.query_norm);
+    if (has_key) {
+        prepare_side(key, weights.k_norm.data(), layout.key_value_heads,
+                     layout.key_norm);
     }
 
-    if (const auto* multi = layout.multi_axis_position()) {
-        cpu_rope_mrope(query, layout.query_heads, layout.head_dim, rope_position,
-                       multi->sections, multi->interleaved,
-                       *rope);
-        if (has_key) {
-            cpu_rope_mrope(key, layout.key_value_heads, layout.head_dim, rope_position,
-                           multi->sections, multi->interleaved,
-                           *rope);
-        }
-    } else {
-        cpu_rope(query, layout.query_heads, layout.head_dim, scalar_position,
-                 *rope);
-        if (has_key) {
-            cpu_rope(key, layout.key_value_heads, layout.head_dim, scalar_position,
-                     *rope);
-        }
-    }
-    const float query_scale = query_scale_ratio *
-        rope_attention_scale(*rope, scalar_position);
+    const float position_scale = rope
+        ? rope_attention_scale(*rope, scalar_position)
+        : 1.0f;
+    const float query_scale = query_scale_ratio * position_scale;
     for (int i = 0; i < q_width; ++i) query[i] *= query_scale;
 }
 
