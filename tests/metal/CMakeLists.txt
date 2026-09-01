@@ -5,6 +5,7 @@ if(TARGET celeg_metal_backend)
     add_test(NAME metal_c_api_smoke_test COMMAND metal_c_api_smoke_test)
 
     foreach(test_name IN ITEMS
+        metal_attention_gate_test
         metal_device_test
         metal_inference_test
         metal_linear_binding_test
