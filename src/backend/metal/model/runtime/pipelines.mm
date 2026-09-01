@@ -276,6 +276,30 @@ bool MetalModel::Impl::encode_swiglu_matvec(
     return true;
 }
 
+/**
+ * @brief Whether a batched matmul of @p rows tokens takes the tensor path.
+ *
+ * The fused gate/up pair kernel is a plain one-simdgroup-per-output-row loop,
+ * so falling into it costs far more than issuing two tensor matmuls. Only
+ * Q5_K and Q6_K have a fused tensor kernel; every other storage is better
+ * served by declining the pair and letting the caller emit two matmuls.
+ */
+bool MetalModel::Impl::tensor_matmul_available(LinearStorage storage,
+                                               uint32_t rows) const {
+    if (rows < 16) return false;
+    switch (storage) {
+        case LinearStorage::Float16: return pipeline_cache.tensor_matmul_f16;
+        case LinearStorage::BFloat16: return pipeline_cache.tensor_matmul_bf16;
+        case LinearStorage::Q4_0: return pipeline_cache.tensor_matmul_q4_0;
+        case LinearStorage::Q4K: return pipeline_cache.tensor_matmul_q4k;
+        case LinearStorage::Q5K: return pipeline_cache.tensor_matmul_q5k;
+        case LinearStorage::Q6K: return pipeline_cache.tensor_matmul_q6k;
+        case LinearStorage::Q8_0: return pipeline_cache.tensor_matmul_q8_0;
+        case LinearStorage::Float32: return false;
+    }
+    return false;
+}
+
 void MetalModel::Impl::encode_matmul(id<MTLComputeCommandEncoder> encoder,
                                      const Linear& weight, id<MTLBuffer> input,
                                      id<MTLBuffer> output, uint32_t rows,
@@ -291,14 +315,7 @@ void MetalModel::Impl::encode_matmul(id<MTLComputeCommandEncoder> encoder,
     set_bytes(encoder, &stride, sizeof(stride), 6);
     const bool dense = weight.row_bytes == 0;
     if (!dense) set_bytes(encoder, &weight.row_bytes, sizeof(weight.row_bytes), 7);
-    const bool tensor =
-        (weight.storage == LinearStorage::Float16 && pipeline_cache.tensor_matmul_f16) ||
-        (weight.storage == LinearStorage::BFloat16 && pipeline_cache.tensor_matmul_bf16) ||
-        (weight.storage == LinearStorage::Q4_0 && pipeline_cache.tensor_matmul_q4_0 && rows >= 16) ||
-        (weight.storage == LinearStorage::Q4K && pipeline_cache.tensor_matmul_q4k && rows >= 16) ||
-        (weight.storage == LinearStorage::Q5K && pipeline_cache.tensor_matmul_q5k && rows >= 16) ||
-        (weight.storage == LinearStorage::Q6K && pipeline_cache.tensor_matmul_q6k && rows >= 16) ||
-        (weight.storage == LinearStorage::Q8_0 && pipeline_cache.tensor_matmul_q8_0 && rows >= 16);
+    const bool tensor = tensor_matmul_available(weight.storage, rows);
     if (tensor) {
         const auto kernel = linear_kernel(weight.storage,
                                            LinearOperationKind::MatMulTensor);
@@ -335,10 +352,10 @@ bool MetalModel::Impl::encode_matmul_pair(
         first.row_bytes != second.row_bytes) {
         return false;
     }
-    if (first.storage == LinearStorage::Q4K) return false;
     const bool tensor = rows >= 16 &&
         ((first.storage == LinearStorage::Q5K && pipeline_cache.tensor_matmul_pair_q5k) ||
          (first.storage == LinearStorage::Q6K && pipeline_cache.tensor_matmul_pair_q6k));
+    if (!tensor && tensor_matmul_available(first.storage, rows)) return false;
     set_buffer(encoder, first.buffer, 0);
     set_buffer(encoder, second.buffer, 1);
     set_buffer(encoder, input, 2);

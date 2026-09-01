@@ -238,6 +238,7 @@ struct MetalModel::Impl {
         LinearStorage storage, LinearOperationKind operation) const;
     MetalMatvecKernel matvec_kernel(LinearStorage storage) const;
     MetalMatvecKernel swiglu_matvec_kernel(LinearStorage storage) const;
+    bool tensor_matmul_available(LinearStorage storage, uint32_t rows) const;
     void begin_commands(id<MTLCommandBuffer>& command_buffer,
                         id<MTLComputeCommandEncoder>& encoder);
     void finish_commands(id<MTLCommandBuffer>& command_buffer,
