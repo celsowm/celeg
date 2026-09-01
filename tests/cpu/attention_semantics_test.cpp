@@ -131,7 +131,7 @@ void test_query_key_norm_uses_same_query_scale() {
 
     celeg::AttentionSpec normed = plain;
     celeg::NormSpec norm;
-    norm.epsilon = 0.0f;
+    norm.epsilon = 1.0e-6f;
     norm.granularity = celeg::NormGranularity::PerHead;
     normed.query_norm = norm;
 
@@ -160,7 +160,7 @@ void test_query_only_norm_with_key_projection() {
     layout.query_scale = 0.5f;
     layout.position = celeg::NoPositionEncodingSpec{};
     celeg::NormSpec norm;
-    norm.epsilon = 0.0f;
+    norm.epsilon = 1.0e-6f;
     norm.granularity = celeg::NormGranularity::PerHead;
     layout.query_norm = norm;
 
@@ -185,7 +185,7 @@ void test_key_only_norm_without_query_norm() {
     layout.query_scale = 0.5f;
     layout.position = celeg::NoPositionEncodingSpec{};
     celeg::NormSpec norm;
-    norm.epsilon = 0.0f;
+    norm.epsilon = 1.0e-6f;
     norm.granularity = celeg::NormGranularity::PerHead;
     layout.key_norm = norm;
 
