@@ -235,7 +235,7 @@ struct MetalModel::Impl {
     id<MTLComputePipelineState> pipeline(std::string_view name);
     id<MTLComputePipelineState> tensor_pipeline(std::string_view name);
     std::optional<std::string_view> linear_kernel(
-        LinearStorage storage, LinearOperationKind operation, bool tuned) const;
+        LinearStorage storage, LinearOperationKind operation) const;
     MetalMatvecKernel matvec_kernel(LinearStorage storage) const;
     MetalMatvecKernel swiglu_matvec_kernel(LinearStorage storage) const;
     void begin_commands(id<MTLCommandBuffer>& command_buffer,
@@ -257,10 +257,6 @@ struct MetalModel::Impl {
     bool encode_swiglu_matvec(id<MTLComputeCommandEncoder> encoder,
                               const Linear& weight, id<MTLBuffer> gate_up,
                               id<MTLBuffer> output);
-    bool encode_matvec_pair(id<MTLComputeCommandEncoder> encoder,
-                            const Linear& first, const Linear& second,
-                            id<MTLBuffer> input, id<MTLBuffer> output,
-                            uint32_t width);
     void encode_matmul(id<MTLComputeCommandEncoder> encoder, const Linear& weight,
                        id<MTLBuffer> input, id<MTLBuffer> output, uint32_t rows,
                        NSUInteger input_offset = 0, NSUInteger output_offset = 0,

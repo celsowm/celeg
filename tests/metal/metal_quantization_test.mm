@@ -85,18 +85,11 @@ std::vector<float> run_matvec(id<MTLDevice> device,
     NSString* source = [NSString stringWithUTF8String:celeg::metal_detail::kInferenceShader];
     id<MTLLibrary> library = [device newLibraryWithSource:source options:nil error:&error];
     if (!library) throw std::runtime_error("Metal matvec shader compilation failed");
-    const bool tuned = tensor.type == celeg::GgmlType::Q4_0 ||
-        tensor.type == celeg::GgmlType::Q4_K || tensor.type == celeg::GgmlType::Q5_K ||
-        tensor.type == celeg::GgmlType::Q6_K;
     const char* kernel = nullptr;
     switch (tensor.type) {
-        case celeg::GgmlType::Q4_0:
-            kernel = tuned ? "celeg_matvec_q4_0_tuned" : "celeg_matvec_q4_0";
-            break;
+        case celeg::GgmlType::Q4_0: kernel = "celeg_matvec_q4_0"; break;
         case celeg::GgmlType::Q4_K: kernel = "celeg_matvec_q4k"; break;
-        case celeg::GgmlType::Q5_K:
-            kernel = tuned ? "celeg_matvec_q5k_tuned" : "celeg_matvec_q5k";
-            break;
+        case celeg::GgmlType::Q5_K: kernel = "celeg_matvec_q5k"; break;
         case celeg::GgmlType::Q6_K: kernel = "celeg_matvec_q6k"; break;
         case celeg::GgmlType::Q8_0: kernel = "celeg_matvec_q8_0"; break;
         default: throw std::runtime_error("unsupported Metal matvec test type");
@@ -129,17 +122,8 @@ std::vector<float> run_matvec(id<MTLDevice> device,
     [encoder setBytes:&rows length:sizeof(rows) atIndex:3];
     [encoder setBytes:&cols length:sizeof(cols) atIndex:4];
     [encoder setBytes:&row_bytes length:sizeof(row_bytes) atIndex:5];
-    if (tensor.type == celeg::GgmlType::Q6_K || tensor.type == celeg::GgmlType::Q4_K) {
-        [encoder dispatchThreadgroups:MTLSizeMake((rows + 15u) / 16u, 1, 1)
-                 threadsPerThreadgroup:MTLSizeMake(128, 1, 1)];
-    } else if (tuned) {
-        [encoder setThreadgroupMemoryLength:8u * sizeof(float) atIndex:0];
-        [encoder dispatchThreadgroups:MTLSizeMake((rows + 1u) / 2u, 1, 1)
-                 threadsPerThreadgroup:MTLSizeMake(128, 1, 1)];
-    } else {
-        [encoder dispatchThreadgroups:MTLSizeMake((rows + 7u) / 8u, 1, 1)
-                 threadsPerThreadgroup:MTLSizeMake(256, 1, 1)];
-    }
+    [encoder dispatchThreadgroups:MTLSizeMake((rows + 15u) / 16u, 1, 1)
+             threadsPerThreadgroup:MTLSizeMake(128, 1, 1)];
     [encoder endEncoding];
     [command_buffer commit];
     [command_buffer waitUntilCompleted];
@@ -258,68 +242,6 @@ std::vector<float> run_matmul_pair_quantized(id<MTLDevice> device,
     return output;
 }
 
-std::vector<float> run_residual_matvec_pair_quantized(
-    id<MTLDevice> device, const celeg::GgufTensorView& tensor,
-    uint32_t rows, const char* kernel_name, const std::vector<float>& input,
-    const std::vector<float>& residual, const std::vector<float>& norm_weight,
-    float multiplier, float epsilon) {
-    NSError* error = nil;
-    NSString* source = [NSString stringWithUTF8String:celeg::metal_detail::kInferenceShader];
-    id<MTLLibrary> library = [device newLibraryWithSource:source options:nil error:&error];
-    if (!library) throw std::runtime_error("Metal fused shader compilation failed");
-    id<MTLFunction> function = [library newFunctionWithName:
-        [NSString stringWithUTF8String:kernel_name]];
-    if (!function) throw std::runtime_error("Metal fused function is missing");
-    id<MTLComputePipelineState> pipeline = [device newComputePipelineStateWithFunction:function
-                                                                                      error:&error];
-    if (!pipeline) throw std::runtime_error("Metal fused pipeline creation failed");
-    id<MTLBuffer> weights = [device newBufferWithBytes:tensor.data
-                                                 length:tensor.bytes
-                                                options:MTLResourceStorageModeShared];
-    id<MTLBuffer> input_buffer = [device newBufferWithBytes:input.data()
-                                                       length:input.size() * sizeof(float)
-                                                     options:MTLResourceStorageModeShared];
-    id<MTLBuffer> residual_buffer = [device newBufferWithBytes:residual.data()
-                                                          length:residual.size() * sizeof(float)
-                                                        options:MTLResourceStorageModeShared];
-    id<MTLBuffer> norm_buffer = [device newBufferWithBytes:norm_weight.data()
-                                                      length:norm_weight.size() * sizeof(float)
-                                                    options:MTLResourceStorageModeShared];
-    std::vector<float> output(static_cast<size_t>(rows) * 2, 0.0f);
-    id<MTLBuffer> output_buffer = [device newBufferWithBytes:output.data()
-                                                        length:output.size() * sizeof(float)
-                                                      options:MTLResourceStorageModeShared];
-    id<MTLCommandQueue> queue = [device newCommandQueue];
-    id<MTLCommandBuffer> command_buffer = [queue commandBuffer];
-    id<MTLComputeCommandEncoder> encoder = [command_buffer computeCommandEncoder];
-    const uint32_t cols = static_cast<uint32_t>(tensor.shape.at(1));
-    const uint32_t row_bytes = static_cast<uint32_t>(tensor.bytes / tensor.shape.at(0));
-    [encoder setComputePipelineState:pipeline];
-    [encoder setBuffer:weights offset:0 atIndex:0];
-    [encoder setBuffer:weights offset:0 atIndex:1];
-    [encoder setBuffer:input_buffer offset:0 atIndex:2];
-    [encoder setBuffer:residual_buffer offset:0 atIndex:3];
-    [encoder setBuffer:norm_buffer offset:0 atIndex:4];
-    [encoder setBuffer:input_buffer offset:0 atIndex:5];
-    [encoder setBuffer:output_buffer offset:0 atIndex:6];
-    [encoder setBytes:&rows length:sizeof(rows) atIndex:7];
-    [encoder setBytes:&cols length:sizeof(cols) atIndex:8];
-    [encoder setBytes:&row_bytes length:sizeof(row_bytes) atIndex:9];
-    [encoder setBytes:&multiplier length:sizeof(multiplier) atIndex:10];
-    [encoder setBytes:&epsilon length:sizeof(epsilon) atIndex:11];
-    [encoder setThreadgroupMemoryLength:(cols + 9u) * sizeof(float) atIndex:0];
-    [encoder dispatchThreadgroups:MTLSizeMake((rows + 3u) / 4u, 1, 1)
-             threadsPerThreadgroup:MTLSizeMake(256, 1, 1)];
-    [encoder endEncoding];
-    [command_buffer commit];
-    [command_buffer waitUntilCompleted];
-    if (command_buffer.status != MTLCommandBufferStatusCompleted) {
-        throw std::runtime_error("Metal fused dispatch failed");
-    }
-    std::memcpy(output.data(), output_buffer.contents, output.size() * sizeof(float));
-    return output;
-}
-
 /// Mirrors `MetalModel::Impl::swiglu_matvec_kernel` so the test exercises the
 /// same launch geometry the runtime uses.
 struct Geometry {
@@ -330,6 +252,7 @@ struct Geometry {
 
 Geometry swiglu_geometry(const char* kernel_name) {
     if (std::strcmp(kernel_name, "celeg_swiglu_matvec_q4k") == 0) return {16, 128, 0};
+    if (std::strcmp(kernel_name, "celeg_swiglu_matvec_q5k") == 0) return {16, 128, 0};
     if (std::strcmp(kernel_name, "celeg_swiglu_matvec_q6k") == 0) return {16, 128, 0};
     return {2, 128, 8};
 }
@@ -620,63 +543,6 @@ bool check_swiglu_matvec(const celeg::GgufFile& file, celeg::GgmlType type,
     return false;
 }
 
-bool check_residual_matvec_pair_quantized(const celeg::GgufFile& file,
-                                          celeg::GgmlType type,
-                                          const char* kernel_name,
-                                          id<MTLDevice> device) {
-    for (const std::string& name : file.tensor_names()) {
-        const celeg::GgufTensorView tensor = file.tensor(name);
-        const celeg::GgmlTypeTrait trait = celeg::ggml_type_trait(type);
-        if (tensor.type != type || tensor.shape.size() != 2 || tensor.shape[0] < 3 ||
-            tensor.shape[1] == 0 || tensor.shape[1] % trait.block_size != 0) {
-            continue;
-        }
-        constexpr uint32_t rows = 3;
-        const uint32_t cols = static_cast<uint32_t>(tensor.shape.at(1));
-        std::vector<float> input(cols);
-        std::vector<float> residual(cols);
-        std::vector<float> norm_weight(cols);
-        for (uint32_t column = 0; column < cols; ++column) {
-            input[column] = std::sin(static_cast<float>(column + 5) * 0.011f);
-            residual[column] = std::cos(static_cast<float>(column + 7) * 0.009f);
-            norm_weight[column] = 0.75f + static_cast<float>(column % 17) * 0.01f;
-        }
-        const std::vector<float> actual = run_residual_matvec_pair_quantized(
-            device, tensor, rows, kernel_name, input, residual, norm_weight, 1.0f, 1.0e-5f);
-        celeg::GgmlMatrixView matrix;
-        matrix.type = type;
-        matrix.rows = static_cast<uint32_t>(tensor.shape.at(0));
-        matrix.cols = cols;
-        matrix.data = tensor.data;
-        matrix.bytes = tensor.bytes;
-        matrix.validate();
-        std::vector<float> decoded(cols);
-        float inverse = 0.0f;
-        float total = 0.0f;
-        for (uint32_t column = 0; column < cols; ++column) {
-            total += (input[column] + residual[column]) * (input[column] + residual[column]);
-        }
-        inverse = 1.0f / std::sqrt(total / static_cast<float>(cols) + 1.0e-5f);
-        float maximum = 0.0f;
-        for (uint32_t row = 0; row < rows; ++row) {
-            celeg::ggml_decode_row(matrix, row, decoded.data());
-            float reference = 0.0f;
-            for (uint32_t column = 0; column < cols; ++column) {
-                reference += decoded[column] * (input[column] + residual[column]) *
-                    inverse * norm_weight[column];
-            }
-            maximum = std::max(maximum, std::abs(reference - actual[row]));
-            maximum = std::max(maximum, std::abs(reference - actual[rows + row]));
-        }
-        std::cout << celeg::ggml_type_name(type) << " residual_matvec_pair=" << name
-                  << " max_error=" << maximum << '\n';
-        if (!(maximum < 1.0e-3f)) {
-            throw std::runtime_error("Metal fused quantized matvec differs from FP32 reference");
-        }
-        return true;
-    }
-    return false;
-}
 
 }
 
@@ -707,7 +573,6 @@ int main(int argc, char** argv) {
         bool q6k_checked = false;
         bool q8_0_checked = false;
         int swiglu_checked = 0;
-        int fused_checked = 0;
         for (const celeg::GgmlType type : types) {
             const bool type_checked = check_type(file, type, device);
             checked += type_checked ? 1 : 0;
@@ -743,12 +608,6 @@ int main(int argc, char** argv) {
             file, celeg::GgmlType::Q5_K, "celeg_swiglu_matvec_q5k", device) ? 1 : 0;
         swiglu_checked += check_swiglu_matvec(
             file, celeg::GgmlType::Q6_K, "celeg_swiglu_matvec_q6k", device) ? 1 : 0;
-        fused_checked += check_residual_matvec_pair_quantized(
-            file, celeg::GgmlType::Q4_K, "celeg_residual_matvec_pair_q4k", device) ? 1 : 0;
-        fused_checked += check_residual_matvec_pair_quantized(
-            file, celeg::GgmlType::Q5_K, "celeg_residual_matvec_pair_q5k", device) ? 1 : 0;
-        fused_checked += check_residual_matvec_pair_quantized(
-            file, celeg::GgmlType::Q6_K, "celeg_residual_matvec_pair_q6k", device) ? 1 : 0;
         if (checked == 0) throw std::runtime_error("cached GGUF has no native Metal test tensor");
         if (matvec_checked == 0) {
             throw std::runtime_error("cached GGUF has no native Metal matvec test tensor");
@@ -766,10 +625,6 @@ int main(int argc, char** argv) {
         if ((q4k_checked || q5k_checked || q6k_checked) && swiglu_checked == 0) {
             throw std::runtime_error(
                 "cached GGUF has no native Metal Q4_K/Q5_K/Q6_K SwiGLU test tensor");
-        }
-        if ((q4k_checked || q5k_checked || q6k_checked) && fused_checked == 0) {
-            throw std::runtime_error(
-                "cached GGUF has no native Metal fused Q4_K/Q5_K/Q6_K test tensor");
         }
         return 0;
     } catch (const std::exception& error) {

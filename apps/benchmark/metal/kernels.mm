@@ -60,13 +60,13 @@ struct Binding {
 };
 
 constexpr Binding kBindings[] = {
-    {"bf16", celeg::GgmlType::BF16, "celeg_matvec_tuned_bf16", 2, 128, 8},
-    {"f16", celeg::GgmlType::F16, "celeg_matvec_tuned_f16", 2, 128, 8},
-    {"q8_0", celeg::GgmlType::Q8_0, "celeg_matvec_q8_0", 8, 256, 0},
+    {"bf16", celeg::GgmlType::BF16, "celeg_matvec_bf16", 2, 128, 8},
+    {"f16", celeg::GgmlType::F16, "celeg_matvec_f16", 2, 128, 8},
+    {"q8_0", celeg::GgmlType::Q8_0, "celeg_matvec_q8_0", 16, 128, 0},
     {"q6_k", celeg::GgmlType::Q6_K, "celeg_matvec_q6k", 16, 128, 0},
-    {"q5_k", celeg::GgmlType::Q5_K, "celeg_matvec_q5k_tuned", 2, 128, 8},
+    {"q5_k", celeg::GgmlType::Q5_K, "celeg_matvec_q5k", 16, 128, 0},
     {"q4_k", celeg::GgmlType::Q4_K, "celeg_matvec_q4k", 16, 128, 0},
-    {"q4_0", celeg::GgmlType::Q4_0, "celeg_matvec_q4_0_tuned", 2, 128, 8},
+    {"q4_0", celeg::GgmlType::Q4_0, "celeg_matvec_q4_0", 16, 128, 0},
 };
 
 constexpr uint32_t kAttentionDepths[] = {96, 960, 1984, 4096};
