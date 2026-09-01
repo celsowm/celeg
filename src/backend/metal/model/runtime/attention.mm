@@ -25,6 +25,10 @@ const RelativePositionBiasSpec* attention_relative_bias(
     return std::get_if<RelativePositionBiasSpec>(&attention.semantics.bias);
 }
 
+bool no_position_encoding(const CompiledAttentionProgram& attention) {
+    return std::holds_alternative<NoPositionEncodingSpec>(attention.semantics.position);
+}
+
 bool split_half_rope(const CompiledAttentionProgram& attention) {
     const RopePositionSpec* rope = attention.semantics.rope_position();
     return rope && rope->pairing == RopePairingKind::SplitHalf;
@@ -39,6 +43,7 @@ void MetalModel::Impl::encode_attention(
     const AlibiBiasSpec* alibi = attention_alibi(attention);
     const RelativePositionBiasSpec* relative = attention_relative_bias(attention);
     const MultiAxisRopeSpec* multi = attention.semantics.multi_axis_position();
+    const bool no_position = no_position_encoding(attention);
     if (alibi && !layer.alibi_slopes) {
         layer.alibi_slopes = buffer(alibi->slopes);
     }
@@ -69,7 +74,17 @@ void MetalModel::Impl::encode_attention(
     set_bytes(encoder, &query_heads, sizeof(query_heads), 7);
     set_bytes(encoder, &key_heads, sizeof(key_heads), 8);
     set_bytes(encoder, &head_dim, sizeof(head_dim), 9);
-    if (multi) {
+    if (no_position) {
+        set_bytes(encoder, &position_value, sizeof(position_value), 10);
+        set_bytes(encoder, &query_scale, sizeof(query_scale), 11);
+        set_bytes(encoder, &layer.query_norm_epsilon,
+                  sizeof(layer.query_norm_epsilon), 12);
+        set_bytes(encoder, &layer.key_norm_epsilon,
+                  sizeof(layer.key_norm_epsilon), 13);
+        set_bytes(encoder, &page_tokens, sizeof(page_tokens), 14);
+        dispatch(encoder, "celeg_qk_norm_store_kv",
+                 std::max(query_heads, key_heads));
+    } else if (multi) {
         const std::array<int32_t, 3>& resolved_position =
             rope_position ? *rope_position : next_rope_position;
         const std::array<uint32_t, 3> sections{
@@ -165,6 +180,7 @@ void MetalModel::Impl::encode_attention_batch(
     uint32_t base_position) {
     const AlibiBiasSpec* alibi = attention_alibi(attention);
     const RelativePositionBiasSpec* relative = attention_relative_bias(attention);
+    const bool no_position = no_position_encoding(attention);
     if (alibi && !layer.alibi_slopes) {
         layer.alibi_slopes = buffer(alibi->slopes);
     }
@@ -192,16 +208,24 @@ void MetalModel::Impl::encode_attention_batch(
     set_bytes(encoder, &query_heads, sizeof(query_heads), 5);
     set_bytes(encoder, &key_heads, sizeof(key_heads), 6);
     set_bytes(encoder, &head_dim, sizeof(head_dim), 7);
-    set_bytes(encoder, &base_position, sizeof(base_position), 8);
-    set_bytes(encoder, &layer.rope_theta, sizeof(layer.rope_theta), 9);
-    set_bytes(encoder, &query_scale, sizeof(query_scale), 10);
-    set_bytes(encoder, &layer.query_norm_epsilon, sizeof(layer.query_norm_epsilon), 11);
-    set_bytes(encoder, &layer.key_norm_epsilon, sizeof(layer.key_norm_epsilon), 12);
-    dispatch(encoder,
-             split_half_rope(attention)
-                 ? "celeg_qk_norm_rope_batch_split"
-                 : "celeg_qk_norm_rope_batch",
-             static_cast<NSUInteger>(rows) * head_count);
+    if (no_position) {
+        set_bytes(encoder, &query_scale, sizeof(query_scale), 8);
+        set_bytes(encoder, &layer.query_norm_epsilon, sizeof(layer.query_norm_epsilon), 9);
+        set_bytes(encoder, &layer.key_norm_epsilon, sizeof(layer.key_norm_epsilon), 10);
+        dispatch(encoder, "celeg_qk_norm_batch_no_position",
+                 static_cast<NSUInteger>(rows) * head_count);
+    } else {
+        set_bytes(encoder, &base_position, sizeof(base_position), 8);
+        set_bytes(encoder, &layer.rope_theta, sizeof(layer.rope_theta), 9);
+        set_bytes(encoder, &query_scale, sizeof(query_scale), 10);
+        set_bytes(encoder, &layer.query_norm_epsilon, sizeof(layer.query_norm_epsilon), 11);
+        set_bytes(encoder, &layer.key_norm_epsilon, sizeof(layer.key_norm_epsilon), 12);
+        dispatch(encoder,
+                 split_half_rope(attention)
+                     ? "celeg_qk_norm_rope_batch_split"
+                     : "celeg_qk_norm_rope_batch",
+                 static_cast<NSUInteger>(rows) * head_count);
+    }
 
     const uint32_t kv_width = key_heads * head_dim;
     const uint32_t page_tokens = static_cast<uint32_t>(layer.page_tokens);
