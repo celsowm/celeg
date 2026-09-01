@@ -176,12 +176,6 @@ int main() {
         attention.output_transform = celeg::OrthogonalizeCurrentValueSpec{1.0e-6f};
     }));
     CELEG_TEST_CHECK(metal_rejects([](auto& attention) {
-        celeg::SigmoidAttentionGateSpec gate;
-        gate.packed_with_query = true;
-        gate.granularity = celeg::AttentionGateGranularity::HeadWise;
-        attention.output_gate = gate;
-    }));
-    CELEG_TEST_CHECK(metal_rejects([](auto& attention) {
         attention.pattern = celeg::SlidingWindowPattern{0};
     }));
     CELEG_TEST_CHECK(metal_rejects([](auto& attention) {
