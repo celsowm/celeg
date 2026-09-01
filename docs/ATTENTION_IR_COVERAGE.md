@@ -22,15 +22,15 @@ A feature must not be called implemented merely because its variant exists in `g
 
 ## Current architectural conclusion
 
-CUDA is close to complete for the modern decoder attention surface CELEG targets: ordinary MHA/GQA/MQA, causal and sliding-window attention, paged/contiguous KV, sparse patterns, shared KV, Q/K normalization, ordinary RoPE/M-RoPE, ALiBi, output gates, and projected/factorized latent attention are substantially represented.
+CUDA is close to complete for the modern decoder attention surface CELEG targets: ordinary MHA/GQA/MQA, causal and sliding-window attention, paged/contiguous KV, sparse patterns, shared KV, Q/K normalization, ordinary RoPE/M-RoPE, ALiBi, scoped relative-position bias, output gates, and projected/factorized latent attention are substantially represented.
 
 That is not the same as saying the complete `AttentionSpec` IR is implemented end-to-end.
 
 The largest remaining semantic gaps are:
 
 1. a backend-neutral external-memory / cross-attention lifecycle beyond the scoped CPU preprojected-K/V baseline;
-2. CUDA relative-position bias tables;
-3. formal backend/mode coverage for bidirectional and Prefix-LM;
+2. formal backend/mode coverage for bidirectional and Prefix-LM;
+3. completion of CUDA relative-position bias outside ordinary unidirectional standard attention, including bidirectional tables, latent execution, and MTP tensor ownership;
 4. Metal sparse patterns, latent attention, and general layout/paging ownership.
 
 Metal is no longer treated as unaudited. Its runtime has explicit full-causal and sliding-window paths over ordinary Q/K/V attention, ALiBi, relative-position bias, no-position attention, standard RoPE, ordinary three-axis interleaved M-RoPE in token/decode and batched prefill, all currently modeled Q/K normalization modes, current-value orthogonalization, ordinary sigmoid output gates, and shared-KV publisher/consumer execution. Unsupported pattern, latent, partial-width/scaled M-RoPE, and RoPE-scaling semantics are rejected before execution rather than silently approximated.
@@ -94,7 +94,7 @@ The table is deliberately conservative. `?` means prove it rather than probably 
 | BlockSparse | ✓ | ✓ | △ | ✗ |
 | DynamicSparse | ✓ | ✓ | △ | ✗ |
 | ALiBi | ✓ | ✓ | ✓ | ✓ |
-| Relative-position bias | ✓ | ✓ | ✗ | ✓ |
+| Relative-position bias | ✓ | ✓ | △ | ✓ |
 | No position encoding | ✓ | ✓ | ✓ | ✓ |
 | RoPE | ✓ | ✓ | ✓ | ✓ |
 | M-RoPE, ordinary attention | ✓ | ✓ | ✓ | △ |
@@ -112,6 +112,8 @@ The table is deliberately conservative. `?` means prove it rather than probably 
 | Current-value orthogonalization | ✓ | ✓ | ✓ | ✓ |
 | External-memory / cross-attention | IR only | △ | ✗ | ✗ |
 
+CUDA relative-position bias is `△` because the ordinary unidirectional standard-attention surface is implemented, but bidirectional relative tables, latent execution, and MTP relative-bias tensor ownership remain explicit rejections. The implemented standard surface covers BF16 and INT8 KV, contiguous decode, paged decode, batch-pointer packed decode, graph decode, and contiguous batched prefill. Bias selection is lowered from `AttentionSpec` rather than inferred from incidental buffer presence.
+
 Metal ordinary KV storage remains `△` for contiguous/paged because the runtime uses an internal page-sized physical layout without yet exposing the same general page-table/layout capability surface as CUDA/CPU.
 
 Metal ordinary M-RoPE remains `△` because token/decode and batched prefill execute explicit three-axis positions, but the backend deliberately requires three interleaved axes, split-half pairing, full-width rotation, no RoPE scaling, and theta 10000. Unsupported forms are rejected before dispatch.
@@ -127,7 +129,9 @@ CUDA capability support and semantic-combination validation are separated from k
 Current semantic boundaries include:
 
 - external-memory attention is rejected;
-- relative-position bias tables are rejected; ALiBi is supported;
+- ordinary unidirectional `RelativePositionBiasSpec` is supported by dedicated CUDA bias kernels; `bidirectional=true` relative tables are rejected;
+- relative bias is standard-attention-only; projected/factorized latent execution rejects it;
+- MTP can materialize inherited ALiBi slopes, but MTP relative bias is rejected because no auxiliary-checkpoint tensor ownership/name contract exists yet;
 - bidirectional, Prefix-LM, BlockSparse, and DynamicSparse are standard-attention-only;
 - those constrained patterns currently require no attention bias;
 - Prefix-LM requires a positive prefix length;
@@ -135,7 +139,9 @@ Current semantic boundaries include:
 - latent attention rejects M-RoPE and has additional gate/rank restrictions;
 - malformed LongRoPE factor sets are rejected before dispatch.
 
-Therefore CUDA bidirectional, Prefix-LM, BlockSparse, and DynamicSparse remain `△`, not unconditional `✓`.
+CUDA relative-bias dispatch is intentionally distinct from semantic capability validation. The physical capability registry selects `RelativeBias` for BF16/INT8 contiguous prefill and BF16/INT8 decode over contiguous, paged, and batch-pointer layouts when a device position source is available. Host-scalar decode remains a physical rejection; token execution stages the current host position into the existing device counter before biased dispatch.
+
+Therefore CUDA bidirectional, Prefix-LM, BlockSparse, DynamicSparse, and relative-position bias remain `△`, not unconditional `✓`.
 
 ## CPU evidence already present
 
@@ -270,7 +276,9 @@ Generalize the scoped CPU preprojected-K/V baseline into a backend-neutral bindi
 
 ### Phase 2 — CUDA relative-position bias
 
-Reuse the existing bucket semantics, add CUDA-owned `[query_heads, bucket_count]` device storage, add the bias before softmax, cover paged KV, and differential-test CPU versus CUDA.
+The ordinary unidirectional standard-attention slice is implemented. CUDA owns the resolved `[query_heads, bucket_count]` table, lowers bias selection from `AttentionSpec`, applies the bucket score before softmax, and dispatches dedicated kernels for BF16/INT8 contiguous prefill plus BF16/INT8 contiguous, paged, batch-pointer, and graph decode.
+
+Coverage includes a physical capability-matrix test, compiler semantic tests, and a numerical CUDA fixture where `Q·K = 0` makes the output depend only on known relative-bucket weights. Remaining work is intentionally explicit: bidirectional relative tables, latent execution, MTP relative-bias tensor ownership, and a direct CPU-vs-CUDA differential fixture.
 
 ### Phase 3 — Bidirectional and Prefix-LM mode coverage
 
