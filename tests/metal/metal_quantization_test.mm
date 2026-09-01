@@ -129,7 +129,7 @@ std::vector<float> run_matvec(id<MTLDevice> device,
     [encoder setBytes:&rows length:sizeof(rows) atIndex:3];
     [encoder setBytes:&cols length:sizeof(cols) atIndex:4];
     [encoder setBytes:&row_bytes length:sizeof(row_bytes) atIndex:5];
-    if (tensor.type == celeg::GgmlType::Q6_K) {
+    if (tensor.type == celeg::GgmlType::Q6_K || tensor.type == celeg::GgmlType::Q4_K) {
         [encoder dispatchThreadgroups:MTLSizeMake((rows + 15u) / 16u, 1, 1)
                  threadsPerThreadgroup:MTLSizeMake(128, 1, 1)];
     } else if (tuned) {
@@ -329,7 +329,7 @@ struct Geometry {
 };
 
 Geometry swiglu_geometry(const char* kernel_name) {
-    if (std::strcmp(kernel_name, "celeg_swiglu_matvec_q4k_blocked") == 0) return {8, 256, 0};
+    if (std::strcmp(kernel_name, "celeg_swiglu_matvec_q4k") == 0) return {16, 128, 0};
     if (std::strcmp(kernel_name, "celeg_swiglu_matvec_q6k") == 0) return {16, 128, 0};
     return {2, 128, 8};
 }
@@ -738,7 +738,7 @@ int main(int argc, char** argv) {
         q6k_matmul_pair_checked = check_matmul_pair_quantized(
             file, celeg::GgmlType::Q6_K, "celeg_matmul_tensor_pair_q6k", device);
         swiglu_checked += check_swiglu_matvec(
-            file, celeg::GgmlType::Q4_K, "celeg_swiglu_matvec_q4k_blocked", device) ? 1 : 0;
+            file, celeg::GgmlType::Q4_K, "celeg_swiglu_matvec_q4k", device) ? 1 : 0;
         swiglu_checked += check_swiglu_matvec(
             file, celeg::GgmlType::Q5_K, "celeg_swiglu_matvec_q5k", device) ? 1 : 0;
         swiglu_checked += check_swiglu_matvec(

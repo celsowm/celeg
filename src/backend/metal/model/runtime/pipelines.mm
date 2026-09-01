@@ -21,8 +21,8 @@ std::optional<std::string_view> MetalModel::Impl::linear_kernel(
          "celeg_matmul_tensor_bf16", "celeg_embedding_bf16", "celeg_embedding_bf16_batch", nullptr},
         {"celeg_matvec_q4_0", "celeg_matvec_pair_q4_0", "celeg_matmul_q4_0", "celeg_matmul_pair_q4_0", "celeg_matmul_tensor_q4_0",
          "celeg_embedding_q4_0", "celeg_embedding_q4_0_batch", nullptr},
-        {"celeg_matvec_q4k_blocked", "celeg_matvec_pair_q4k", "celeg_matmul_q4k", "celeg_matmul_pair_q4k", "celeg_matmul_tensor_q4k",
-         "celeg_embedding_q4k", "celeg_embedding_q4k_batch", "celeg_swiglu_matvec_q4k_blocked"},
+        {nullptr, "celeg_matvec_pair_q4k", "celeg_matmul_q4k", "celeg_matmul_pair_q4k", "celeg_matmul_tensor_q4k",
+         "celeg_embedding_q4k", "celeg_embedding_q4k_batch", nullptr},
         {"celeg_matvec_q5k", "celeg_matvec_pair_q5k", "celeg_matmul_q5k", "celeg_matmul_pair_q5k", "celeg_matmul_tensor_q5k",
          "celeg_embedding_q5k", "celeg_embedding_q5k_batch", "celeg_swiglu_matvec_q5k"},
         {nullptr, "celeg_matvec_pair_q6k", "celeg_matmul_q6k", "celeg_matmul_pair_q6k", "celeg_matmul_tensor_q6k",
@@ -35,7 +35,7 @@ std::optional<std::string_view> MetalModel::Impl::linear_kernel(
         {"celeg_matvec_tuned_f16", nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr},
         {"celeg_matvec_tuned_bf16", nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr},
         {"celeg_matvec_q4_0_tuned", nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr},
-        {"celeg_matvec_q4k_packed", nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr},
+        {nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr},
         {"celeg_matvec_q5k_tuned", nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr},
         {nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr},
         {nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr},
@@ -63,7 +63,7 @@ MetalMatvecKernel MetalModel::Impl::matvec_kernel(LinearStorage storage) const {
         case LinearStorage::Float16: return {"celeg_matvec_tuned_f16", 2, 128, 8};
         case LinearStorage::BFloat16: return {"celeg_matvec_tuned_bf16", 2, 128, 8};
         case LinearStorage::Q4_0: return {"celeg_matvec_q4_0_tuned", 2, 128, 8};
-        case LinearStorage::Q4K: return {"celeg_matvec_q4k_packed", 8, 256, 0};
+        case LinearStorage::Q4K: return {"celeg_matvec_q4k", 16, 128, 0};
         case LinearStorage::Q5K: return {"celeg_matvec_q5k_tuned", 2, 128, 8};
         case LinearStorage::Q6K: return {"celeg_matvec_q6k", 16, 128, 0};
         case LinearStorage::Q8_0: return {"celeg_matvec_q8_0", 8, 256, 0};
@@ -79,7 +79,7 @@ MetalMatvecKernel MetalModel::Impl::matvec_kernel(LinearStorage storage) const {
  */
 MetalMatvecKernel MetalModel::Impl::swiglu_matvec_kernel(LinearStorage storage) const {
     switch (storage) {
-        case LinearStorage::Q4K: return {"celeg_swiglu_matvec_q4k_blocked", 8, 256, 0};
+        case LinearStorage::Q4K: return {"celeg_swiglu_matvec_q4k", 16, 128, 0};
         case LinearStorage::Q5K: return {"celeg_swiglu_matvec_q5k", 2, 128, 8};
         case LinearStorage::Q6K: return {"celeg_swiglu_matvec_q6k", 16, 128, 0};
         default: return {};
