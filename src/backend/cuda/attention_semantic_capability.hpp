@@ -51,10 +51,16 @@ inline void validate_cuda_attention_semantics(
         }
     }
 
-    if (std::holds_alternative<RelativePositionBiasSpec>(attention.bias) &&
-        compiled.execution.kind != AttentionExecutionKind::Standard) {
-        throw std::invalid_argument(
-            "CUDA relative-position bias currently supports standard attention only");
+    if (const auto* relative =
+            std::get_if<RelativePositionBiasSpec>(&attention.bias)) {
+        if (relative->bidirectional) {
+            throw std::invalid_argument(
+                "CUDA relative-position bias currently supports unidirectional buckets only");
+        }
+        if (compiled.execution.kind != AttentionExecutionKind::Standard) {
+            throw std::invalid_argument(
+                "CUDA relative-position bias currently supports standard attention only");
+        }
     }
 
     if (compiled.execution.kind != AttentionExecutionKind::Standard) {
