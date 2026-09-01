@@ -84,25 +84,39 @@ void physical_registry_supports_relative_bias() {
     }
 }
 
-void compiler_accepts_unidirectional_standard_relative_bias() {
-    const celeg::CompiledModelProgram compiled =
+void compiler_accepts_standard_relative_bias() {
+    const celeg::CompiledModelProgram causal =
         celeg::CudaModelCompiler{}.compile(relative_model(false));
-    CELEG_TEST_CHECK(compiled.layers.size() == 1);
-    const auto& attention = std::get<celeg::CompiledAttentionProgram>(
-        compiled.layers[0].mixer);
+    CELEG_TEST_CHECK(causal.layers.size() == 1);
+    const auto& causal_attention = std::get<celeg::CompiledAttentionProgram>(
+        causal.layers[0].mixer);
     CELEG_TEST_CHECK(std::holds_alternative<celeg::RelativePositionBiasSpec>(
-        attention.semantics.bias));
-    CELEG_TEST_CHECK(attention.execution.kind ==
+        causal_attention.semantics.bias));
+    CELEG_TEST_CHECK(causal_attention.execution.kind ==
         celeg::AttentionExecutionKind::Standard);
+
+    celeg::ResolvedModel bidirectional = relative_model(true);
+    auto& bidirectional_attention = std::get<celeg::AttentionSpec>(
+        bidirectional.graph.layers[0].mixer);
+    bidirectional_attention.pattern = celeg::BidirectionalPattern{};
+    const celeg::CompiledModelProgram compiled_bidirectional =
+        celeg::CudaModelCompiler{}.compile(bidirectional);
+    const auto& compiled_attention = std::get<celeg::CompiledAttentionProgram>(
+        compiled_bidirectional.layers[0].mixer);
+    CELEG_TEST_CHECK(std::holds_alternative<celeg::BidirectionalPattern>(
+        compiled_attention.semantics.pattern));
+    const auto& relative = std::get<celeg::RelativePositionBiasSpec>(
+        compiled_attention.semantics.bias);
+    CELEG_TEST_CHECK(relative.bidirectional);
 }
 
 void unsupported_relative_semantics_are_explicit() {
     CELEG_TEST_CHECK(compiler_rejects([](auto& attention) {
-        attention.bias = celeg::RelativePositionBiasSpec{32, 128, true};
+        attention.pattern = celeg::PrefixLmPattern{4};
     }));
 
     CELEG_TEST_CHECK(compiler_rejects([](auto& attention) {
-        attention.pattern = celeg::BidirectionalPattern{};
+        attention.pattern = celeg::BlockSparsePattern{16, 2, 1};
     }));
 
     CELEG_TEST_CHECK(compiler_rejects([](auto& attention) {
@@ -114,7 +128,7 @@ void unsupported_relative_semantics_are_explicit() {
 
 int main() {
     physical_registry_supports_relative_bias();
-    compiler_accepts_unidirectional_standard_relative_bias();
+    compiler_accepts_standard_relative_bias();
     unsupported_relative_semantics_are_explicit();
     return 0;
 }
