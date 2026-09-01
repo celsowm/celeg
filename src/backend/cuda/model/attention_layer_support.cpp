@@ -61,6 +61,32 @@ const __nv_bfloat16* require_cuda_factorized_latent_bindings(
     return expansion->data;
 }
 
+AttentionPositionBias cuda_attention_position_bias(const AttentionSpec& attention) {
+    if (std::holds_alternative<AlibiBiasSpec>(attention.bias)) {
+        return AttentionPositionBias::Alibi;
+    }
+    if (std::holds_alternative<RelativePositionBiasSpec>(attention.bias)) {
+        return AttentionPositionBias::Relative;
+    }
+    return AttentionPositionBias::None;
+}
+
+RelativePositionBiasDeviceView cuda_relative_position_bias_view(
+    const AttentionLayer& attention) {
+    const auto* relative =
+        std::get_if<RelativePositionBiasSpec>(&attention.layout.bias);
+    if (!relative) return {};
+    if (!attention.relative_bias) {
+        throw std::logic_error(
+            "CUDA relative-position attention is missing its bias binding");
+    }
+    return {
+        .values = attention.relative_bias,
+        .bucket_count = relative->bucket_count,
+        .max_distance = relative->max_distance,
+        .bidirectional = relative->bidirectional};
+}
+
 Bf16KvView cuda_bf16_kv_view(AttentionLayer& owner) {
     return {
         .keys = owner.key_cache_bf16(),
