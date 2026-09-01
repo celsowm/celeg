@@ -16,6 +16,10 @@ inline void validate_attention_representation(const AttentionSpec& attention) {
             throw std::invalid_argument(
                 "external attention memory cannot also use shared KV ownership");
         }
+        if (!std::holds_alternative<OrdinaryKvStateSpec>(attention.state)) {
+            throw std::invalid_argument(
+                "external attention memory currently represents ordinary projected KV");
+        }
         if (!std::holds_alternative<NoAttentionOutputTransformSpec>(
                 attention.output_transform)) {
             throw std::invalid_argument(
