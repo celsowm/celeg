@@ -14,14 +14,16 @@ namespace celeg {
 
 namespace {
 
-bool requires_sequential_attention_transform(const CompiledModelProgram& program) {
+bool requires_sequential_attention_execution(const CompiledModelProgram& program) {
     return std::any_of(program.layers.begin(), program.layers.end(),
         [](const CompiledLayerProgram& layer) {
             const auto* attention =
                 std::get_if<CompiledAttentionProgram>(&layer.mixer);
             return attention &&
-                !std::holds_alternative<NoAttentionOutputTransformSpec>(
-                    attention->semantics.output_transform);
+                (!std::holds_alternative<NoAttentionOutputTransformSpec>(
+                     attention->semantics.output_transform) ||
+                 (attention->semantics.latent_state() &&
+                  attention->semantics.latent_state()->factorized()));
         });
 }
 
@@ -108,9 +110,9 @@ void CpuModel::prefill_session(const std::vector<int32_t>& tokens,
     state_->session_.phase = SessionPhase::Prefilling;
     state_->session_.prefill_profile = {};
     const auto started = std::chrono::steady_clock::now();
-    const bool sequential_transform =
-        requires_sequential_attention_transform(state_->shared->program);
-    if (sequential_transform ||
+    const bool sequential_attention =
+        requires_sequential_attention_execution(state_->shared->program);
+    if (sequential_attention ||
         tokens.size() < state_->shared->options.prefill_chunk_threshold) {
         for (size_t i = 0; i < tokens.size(); ++i) {
             state_->session_.seen[static_cast<size_t>(tokens[i])] = 1;
