@@ -2,6 +2,7 @@
 #include "support/assertions.hpp"
 
 #include <stdexcept>
+#include <utility>
 
 namespace {
 
