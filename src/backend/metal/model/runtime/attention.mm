@@ -311,7 +311,13 @@ void MetalModel::Impl::encode_attention(
     if (const auto* transform = attention_output_transform(attention)) {
         const uint32_t rows = 1;
         set_buffer(encoder, operation, 0);
-        set_buffer(encoder, value_buffer, 1);
+        if (owns_kv) {
+            set_buffer(encoder, value_buffer, 1);
+        } else {
+            const NSUInteger value_offset =
+                static_cast<NSUInteger>(position_value) * key_width * sizeof(float);
+            [encoder setBuffer:layer.value_cache offset:value_offset atIndex:1];
+        }
         set_bytes(encoder, &rows, sizeof(rows), 2);
         set_bytes(encoder, &query_heads, sizeof(query_heads), 3);
         set_bytes(encoder, &key_heads, sizeof(key_heads), 4);
@@ -569,7 +575,13 @@ void MetalModel::Impl::encode_attention_batch(
 
     if (const auto* transform = attention_output_transform(attention)) {
         set_buffer(encoder, batch_operation, 0);
-        set_buffer(encoder, batch_value, 1);
+        if (owns_kv) {
+            set_buffer(encoder, batch_value, 1);
+        } else {
+            const NSUInteger value_offset =
+                static_cast<NSUInteger>(base_position) * kv_width * sizeof(float);
+            [encoder setBuffer:layer.value_cache offset:value_offset atIndex:1];
+        }
         set_bytes(encoder, &rows, sizeof(rows), 2);
         set_bytes(encoder, &query_heads, sizeof(query_heads), 3);
         set_bytes(encoder, &key_heads, sizeof(key_heads), 4);
