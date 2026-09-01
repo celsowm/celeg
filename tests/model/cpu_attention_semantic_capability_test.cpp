@@ -126,6 +126,28 @@ int main() {
         gate.granularity = celeg::AttentionGateGranularity::HeadWise;
         attention.output_gate = gate;
     }));
+    CELEG_TEST_CHECK(!rejects([](auto& attention) {
+        configure_external(attention);
+        attention.query_norm = celeg::NormSpec{
+            1.0e-5f, celeg::NormWeightKind::Scale,
+            celeg::NormGranularity::PerHead};
+    }));
+    CELEG_TEST_CHECK(!rejects([](auto& attention) {
+        configure_external(attention);
+        attention.query_norm = celeg::NormSpec{
+            1.0e-5f, celeg::NormWeightKind::Scale,
+            celeg::NormGranularity::WholeVector};
+    }));
+    CELEG_TEST_CHECK(!rejects([](auto& attention) {
+        configure_external(attention);
+        attention.query_norm = celeg::NormSpec{
+            1.0e-5f, celeg::NormWeightKind::None,
+            celeg::NormGranularity::PerHead};
+    }));
+    CELEG_TEST_CHECK(rejects([](auto& attention) {
+        configure_external(attention);
+        attention.key_norm = celeg::NormSpec{};
+    }));
     CELEG_TEST_CHECK(rejects([](auto& attention) {
         configure_external(attention);
         attention.pattern = celeg::FullCausalPattern{};
@@ -137,10 +159,6 @@ int main() {
     CELEG_TEST_CHECK(rejects([](auto& attention) {
         configure_external(attention);
         attention.bias = celeg::AlibiBiasSpec{{1.0f}};
-    }));
-    CELEG_TEST_CHECK(rejects([](auto& attention) {
-        configure_external(attention);
-        attention.query_norm = celeg::NormSpec{};
     }));
     CELEG_TEST_CHECK(rejects([](auto& attention) {
         configure_external(attention);
