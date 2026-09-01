@@ -18,6 +18,21 @@ ConcurrentEngine::RequestId CudaSchedulerDriver::submit(
         static_cast<size_t>(max_context_)) {
         throw std::invalid_argument("prompt plus max_new_tokens exceeds max_context");
     }
+    const int required_initial_span = program_.required_initial_attention_span();
+    if (required_initial_span > 0) {
+        if (prompt.size() < static_cast<size_t>(required_initial_span)) {
+            throw std::invalid_argument(
+                "CUDA Prefix-LM prompt is shorter than the required prefix");
+        }
+        if (!options.prompt_embedding.empty()) {
+            throw std::invalid_argument(
+                "CUDA concurrent Prefix-LM does not support prompt embeddings");
+        }
+        if (options.generation.forced_prefix != nullptr) {
+            throw std::invalid_argument(
+                "CUDA concurrent Prefix-LM does not support forced-prefix lane execution");
+        }
+    }
     options.generation.validate();
 
     std::lock_guard<std::mutex> lock(mutex_);
