@@ -104,11 +104,13 @@ bool bind_cuda_attention_layer(CudaCompiledModel& model,
                     {layout.query_heads *
                          (latent.nope_head_dim + factorized->value_head_dim),
                      latent.latent_rank});
-            attention_layer.gate = resources.weight_loader_->load_linear_weight(
-                repo,
-                cuda_tensor_name(resources.model_.weight_plan.requests,
-                                 TensorRole::AttentionGate, layer_index),
-                {layout.output_gate_width(), resources.program_.hidden});
+            if (layout.output_gate.has_value()) {
+                attention_layer.gate = resources.weight_loader_->load_linear_weight(
+                    repo,
+                    cuda_tensor_name(resources.model_.weight_plan.requests,
+                                     TensorRole::AttentionGate, layer_index),
+                    {layout.output_gate_width(), resources.program_.hidden});
+            }
             attention_layer.out = resources.weight_loader_->load_linear_weight(
                 repo,
                 cuda_tensor_name(resources.model_.weight_plan.requests,
