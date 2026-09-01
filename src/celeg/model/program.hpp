@@ -2,6 +2,7 @@
 
 #include "celeg/model/resolved.hpp"
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <optional>
@@ -220,6 +221,20 @@ struct CompiledModelProgram {
             }
         }
         return nullptr;
+    }
+
+    int required_initial_attention_span() const noexcept {
+        int result = 0;
+        for (const CompiledLayerProgram& layer : layers) {
+            const auto* attention =
+                std::get_if<CompiledAttentionProgram>(&layer.mixer);
+            if (!attention) continue;
+            if (const auto* prefix =
+                    std::get_if<PrefixLmPattern>(&attention->semantics.pattern)) {
+                result = std::max(result, prefix->prefix_length);
+            }
+        }
+        return result;
     }
 
     const MoeLayerProgram* first_moe() const noexcept {
