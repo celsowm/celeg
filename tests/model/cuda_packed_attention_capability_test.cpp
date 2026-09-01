@@ -1,5 +1,6 @@
 #include "backend/cuda/packed/attention_capability.hpp"
 #include "backend/cuda/packed/layer_program.hpp"
+#include "backend/cuda/runtime/prefill_policy.hpp"
 #include "support/assertions.hpp"
 
 #include <stdexcept>
@@ -101,6 +102,35 @@ void compiled_program_owns_required_initial_span() {
     CELEG_TEST_CHECK(causal.required_initial_attention_span() == 0);
 }
 
+void prefill_span_policy_preserves_atomic_prefix() {
+    auto decision = celeg::plan_cuda_prefill_span(20, 0, 8, 4, 4, false);
+    CELEG_TEST_CHECK(decision.count == 8);
+    CELEG_TEST_CHECK(decision.requires_packed);
+    CELEG_TEST_CHECK(!decision.defer);
+
+    decision = celeg::plan_cuda_prefill_span(20, 0, 8, 16, 6, true);
+    CELEG_TEST_CHECK(decision.count == 0);
+    CELEG_TEST_CHECK(decision.requires_packed);
+    CELEG_TEST_CHECK(decision.defer);
+
+    decision = celeg::plan_cuda_prefill_span(12, 8, 8, 4, 4, true);
+    CELEG_TEST_CHECK(decision.count == 4);
+    CELEG_TEST_CHECK(!decision.requires_packed);
+    CELEG_TEST_CHECK(!decision.defer);
+
+    decision = celeg::plan_cuda_prefill_span(20, 0, 0, 6, 5, false);
+    CELEG_TEST_CHECK(decision.count == 5);
+    CELEG_TEST_CHECK(!decision.requires_packed);
+
+    bool short_prefix_rejected = false;
+    try {
+        (void)celeg::plan_cuda_prefill_span(3, 0, 4, 8, 8, false);
+    } catch (const std::invalid_argument&) {
+        short_prefix_rejected = true;
+    }
+    CELEG_TEST_CHECK(short_prefix_rejected);
+}
+
 }
 
 int main() {
@@ -112,5 +142,6 @@ int main() {
     check_pattern(celeg::DynamicSparsePattern{16, 8}, true);
     prefix_lm_lifecycle_is_explicit();
     compiled_program_owns_required_initial_span();
+    prefill_span_policy_preserves_atomic_prefix();
     return 0;
 }
