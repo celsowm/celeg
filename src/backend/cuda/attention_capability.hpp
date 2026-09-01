@@ -28,6 +28,7 @@ enum class AttentionPositionSource {
 enum class AttentionPositionBias {
     None,
     Alibi,
+    Relative,
 };
 
 enum class AttentionAlgorithm {
@@ -37,6 +38,7 @@ enum class AttentionAlgorithm {
     Flash,
     Gemm,
     Alibi,
+    RelativeBias,
 };
 
 enum class AttentionUnsupportedReason {
@@ -83,6 +85,9 @@ inline constexpr AttentionCapability kAttentionCapabilities[] = {
     {KvCacheMode::Bf16, AttentionPositionBias::Alibi, AttentionOperation::Prefill,
      AttentionKvLayout::Contiguous, AttentionPositionSource::HostScalar,
      AttentionAlgorithm::Alibi, true, AttentionUnsupportedReason::None},
+    {KvCacheMode::Bf16, AttentionPositionBias::Relative, AttentionOperation::Prefill,
+     AttentionKvLayout::Contiguous, AttentionPositionSource::HostScalar,
+     AttentionAlgorithm::RelativeBias, true, AttentionUnsupportedReason::None},
     {KvCacheMode::Bf16, AttentionPositionBias::None, AttentionOperation::Prefill,
      AttentionKvLayout::Contiguous, AttentionPositionSource::HostScalar,
      AttentionAlgorithm::Strict, true, AttentionUnsupportedReason::None},
@@ -103,6 +108,9 @@ inline constexpr AttentionCapability kAttentionCapabilities[] = {
     {KvCacheMode::Int8, AttentionPositionBias::Alibi, AttentionOperation::Prefill,
      AttentionKvLayout::Contiguous, AttentionPositionSource::HostScalar,
      AttentionAlgorithm::Alibi, true, AttentionUnsupportedReason::None},
+    {KvCacheMode::Int8, AttentionPositionBias::Relative, AttentionOperation::Prefill,
+     AttentionKvLayout::Contiguous, AttentionPositionSource::HostScalar,
+     AttentionAlgorithm::RelativeBias, true, AttentionUnsupportedReason::None},
     {KvCacheMode::Int8, AttentionPositionBias::None, AttentionOperation::Prefill,
      AttentionKvLayout::Contiguous, AttentionPositionSource::HostScalar,
      AttentionAlgorithm::Strict, true, AttentionUnsupportedReason::None},
@@ -122,6 +130,9 @@ inline constexpr AttentionCapability kAttentionCapabilities[] = {
     {KvCacheMode::Bf16, AttentionPositionBias::Alibi, AttentionOperation::Decode,
      AttentionKvLayout::Contiguous, AttentionPositionSource::DeviceCounter,
      AttentionAlgorithm::Alibi, true, AttentionUnsupportedReason::None},
+    {KvCacheMode::Bf16, AttentionPositionBias::Relative, AttentionOperation::Decode,
+     AttentionKvLayout::Contiguous, AttentionPositionSource::DeviceCounter,
+     AttentionAlgorithm::RelativeBias, true, AttentionUnsupportedReason::None},
     {KvCacheMode::Bf16, AttentionPositionBias::None, AttentionOperation::Decode,
      AttentionKvLayout::Contiguous, AttentionPositionSource::DeviceCounter,
      AttentionAlgorithm::Segmented, true, AttentionUnsupportedReason::None},
@@ -135,6 +146,9 @@ inline constexpr AttentionCapability kAttentionCapabilities[] = {
     {KvCacheMode::Int8, AttentionPositionBias::Alibi, AttentionOperation::Decode,
      AttentionKvLayout::Contiguous, AttentionPositionSource::DeviceCounter,
      AttentionAlgorithm::Alibi, true, AttentionUnsupportedReason::None},
+    {KvCacheMode::Int8, AttentionPositionBias::Relative, AttentionOperation::Decode,
+     AttentionKvLayout::Contiguous, AttentionPositionSource::DeviceCounter,
+     AttentionAlgorithm::RelativeBias, true, AttentionUnsupportedReason::None},
     {KvCacheMode::Int8, AttentionPositionBias::None, AttentionOperation::Decode,
      AttentionKvLayout::Contiguous, AttentionPositionSource::DeviceCounter,
      AttentionAlgorithm::Segmented, true, AttentionUnsupportedReason::None},
@@ -155,6 +169,10 @@ inline constexpr AttentionCapability kAttentionCapabilities[] = {
      AttentionKvLayout::Contiguous, AttentionPositionSource::HostScalar,
      AttentionAlgorithm::Alibi, false,
      AttentionUnsupportedReason::PositionSourceNotImplemented},
+    {KvCacheMode::Bf16, AttentionPositionBias::Relative, AttentionOperation::Decode,
+     AttentionKvLayout::Contiguous, AttentionPositionSource::HostScalar,
+     AttentionAlgorithm::RelativeBias, false,
+     AttentionUnsupportedReason::PositionSourceNotImplemented},
     {KvCacheMode::Bf16, AttentionPositionBias::None, AttentionOperation::Decode,
      AttentionKvLayout::Contiguous, AttentionPositionSource::HostScalar,
      AttentionAlgorithm::Segmented, false,
@@ -169,6 +187,10 @@ inline constexpr AttentionCapability kAttentionCapabilities[] = {
      AttentionKvLayout::Contiguous, AttentionPositionSource::HostScalar,
      AttentionAlgorithm::Alibi, false,
      AttentionUnsupportedReason::PositionSourceNotImplemented},
+    {KvCacheMode::Int8, AttentionPositionBias::Relative, AttentionOperation::Decode,
+     AttentionKvLayout::Contiguous, AttentionPositionSource::HostScalar,
+     AttentionAlgorithm::RelativeBias, false,
+     AttentionUnsupportedReason::PositionSourceNotImplemented},
     {KvCacheMode::Int8, AttentionPositionBias::None, AttentionOperation::Decode,
      AttentionKvLayout::Contiguous, AttentionPositionSource::HostScalar,
      AttentionAlgorithm::Segmented, false,
@@ -177,6 +199,9 @@ inline constexpr AttentionCapability kAttentionCapabilities[] = {
     {KvCacheMode::Bf16, AttentionPositionBias::Alibi, AttentionOperation::Decode,
      AttentionKvLayout::Paged, AttentionPositionSource::DeviceCounter,
      AttentionAlgorithm::Alibi, true, AttentionUnsupportedReason::None},
+    {KvCacheMode::Bf16, AttentionPositionBias::Relative, AttentionOperation::Decode,
+     AttentionKvLayout::Paged, AttentionPositionSource::DeviceCounter,
+     AttentionAlgorithm::RelativeBias, true, AttentionUnsupportedReason::None},
     {KvCacheMode::Bf16, AttentionPositionBias::None, AttentionOperation::Decode,
      AttentionKvLayout::Paged, AttentionPositionSource::DeviceCounter,
      AttentionAlgorithm::Segmented, true, AttentionUnsupportedReason::None},
@@ -190,6 +215,9 @@ inline constexpr AttentionCapability kAttentionCapabilities[] = {
     {KvCacheMode::Int8, AttentionPositionBias::Alibi, AttentionOperation::Decode,
      AttentionKvLayout::Paged, AttentionPositionSource::DeviceCounter,
      AttentionAlgorithm::Alibi, true, AttentionUnsupportedReason::None},
+    {KvCacheMode::Int8, AttentionPositionBias::Relative, AttentionOperation::Decode,
+     AttentionKvLayout::Paged, AttentionPositionSource::DeviceCounter,
+     AttentionAlgorithm::RelativeBias, true, AttentionUnsupportedReason::None},
     {KvCacheMode::Int8, AttentionPositionBias::None, AttentionOperation::Decode,
      AttentionKvLayout::Paged, AttentionPositionSource::DeviceCounter,
      AttentionAlgorithm::Segmented, true, AttentionUnsupportedReason::None},
@@ -203,6 +231,9 @@ inline constexpr AttentionCapability kAttentionCapabilities[] = {
     {KvCacheMode::Bf16, AttentionPositionBias::Alibi, AttentionOperation::Decode,
      AttentionKvLayout::BatchPointers, AttentionPositionSource::DeviceCounter,
      AttentionAlgorithm::Alibi, true, AttentionUnsupportedReason::None},
+    {KvCacheMode::Bf16, AttentionPositionBias::Relative, AttentionOperation::Decode,
+     AttentionKvLayout::BatchPointers, AttentionPositionSource::DeviceCounter,
+     AttentionAlgorithm::RelativeBias, true, AttentionUnsupportedReason::None},
     {KvCacheMode::Bf16, AttentionPositionBias::None, AttentionOperation::Decode,
      AttentionKvLayout::BatchPointers, AttentionPositionSource::DeviceCounter,
      AttentionAlgorithm::Online, true, AttentionUnsupportedReason::None},
@@ -216,6 +247,9 @@ inline constexpr AttentionCapability kAttentionCapabilities[] = {
     {KvCacheMode::Int8, AttentionPositionBias::Alibi, AttentionOperation::Decode,
      AttentionKvLayout::BatchPointers, AttentionPositionSource::DeviceCounter,
      AttentionAlgorithm::Alibi, true, AttentionUnsupportedReason::None},
+    {KvCacheMode::Int8, AttentionPositionBias::Relative, AttentionOperation::Decode,
+     AttentionKvLayout::BatchPointers, AttentionPositionSource::DeviceCounter,
+     AttentionAlgorithm::RelativeBias, true, AttentionUnsupportedReason::None},
     {KvCacheMode::Int8, AttentionPositionBias::None, AttentionOperation::Decode,
      AttentionKvLayout::BatchPointers, AttentionPositionSource::DeviceCounter,
      AttentionAlgorithm::Online, true, AttentionUnsupportedReason::None},
@@ -264,6 +298,9 @@ constexpr AttentionCapability resolve_attention_capability(const AttentionReques
     };
     if (request.bias == AttentionPositionBias::Alibi) {
         return answer(AttentionAlgorithm::Alibi);
+    }
+    if (request.bias == AttentionPositionBias::Relative) {
+        return answer(AttentionAlgorithm::RelativeBias);
     }
     if (request.operation == AttentionOperation::Prefill) {
         if (request.layout != AttentionKvLayout::Contiguous ||
@@ -324,6 +361,7 @@ constexpr const char* attention_position_bias_name(AttentionPositionBias bias) {
     switch (bias) {
     case AttentionPositionBias::None: return "no-bias";
     case AttentionPositionBias::Alibi: return "alibi";
+    case AttentionPositionBias::Relative: return "relative-bias";
     }
     return "unknown";
 }
@@ -336,6 +374,7 @@ constexpr const char* attention_algorithm_name(AttentionAlgorithm algorithm) {
     case AttentionAlgorithm::Flash: return "flash";
     case AttentionAlgorithm::Gemm: return "gemm";
     case AttentionAlgorithm::Alibi: return "alibi";
+    case AttentionAlgorithm::RelativeBias: return "relative-bias";
     }
     return "unknown";
 }
