@@ -309,12 +309,10 @@ void MetalModel::Impl::encode_attention_batch(
     uint32_t base_position) {
     const AlibiBiasSpec* alibi = attention_alibi(attention);
     const RelativePositionBiasSpec* relative = attention_relative_bias(attention);
+    const MultiAxisRopeSpec* multi = attention.semantics.multi_axis_position();
     const bool no_position = no_position_encoding(attention);
     const SigmoidAttentionGateSpec* gate = attention.semantics.output_gate
         ? &*attention.semantics.output_gate : nullptr;
-    if (attention.semantics.multi_axis_position()) {
-        throw std::logic_error("M-RoPE reached Metal batched QK preparation");
-    }
     if (alibi && !layer.alibi_slopes) {
         layer.alibi_slopes = buffer(alibi->slopes);
     }
@@ -353,7 +351,8 @@ void MetalModel::Impl::encode_attention_batch(
     const uint32_t head_count = std::max(query_heads, key_heads);
     const float query_scale = layer.query_scale /
         (1.0f / std::sqrt(static_cast<float>(layer.head_dim)));
-    const bool fused_per_head = per_head_norm(attention.semantics.query_norm) &&
+    const bool fused_per_head = !multi &&
+        per_head_norm(attention.semantics.query_norm) &&
         per_head_norm(attention.semantics.key_norm);
 
     if (!fused_per_head) {
@@ -379,19 +378,39 @@ void MetalModel::Impl::encode_attention_batch(
                   query_heads, query_width);
         normalize(batch_key, layer.key_norm, attention.semantics.key_norm,
                   key_heads, key_width);
-        const uint32_t position_mode = standard_position_mode(attention);
-        set_buffer(encoder, batch_query, 0);
-        set_buffer(encoder, batch_key, 1);
-        set_bytes(encoder, &rows, sizeof(rows), 2);
-        set_bytes(encoder, &query_heads, sizeof(query_heads), 3);
-        set_bytes(encoder, &key_heads, sizeof(key_heads), 4);
-        set_bytes(encoder, &head_dim, sizeof(head_dim), 5);
-        set_bytes(encoder, &base_position, sizeof(base_position), 6);
-        set_bytes(encoder, &position_mode, sizeof(position_mode), 7);
-        set_bytes(encoder, &layer.rope_theta, sizeof(layer.rope_theta), 8);
-        set_bytes(encoder, &query_scale, sizeof(query_scale), 9);
-        dispatch(encoder, "celeg_qk_position_batch",
-                 static_cast<NSUInteger>(rows) * head_count);
+
+        if (multi) {
+            const std::array<uint32_t, 3> sections{
+                static_cast<uint32_t>(multi->sections[0]),
+                static_cast<uint32_t>(multi->sections[1]),
+                static_cast<uint32_t>(multi->sections[2])};
+            set_buffer(encoder, batch_query, 0);
+            set_buffer(encoder, batch_key, 1);
+            set_bytes(encoder, &rows, sizeof(rows), 2);
+            set_bytes(encoder, &query_heads, sizeof(query_heads), 3);
+            set_bytes(encoder, &key_heads, sizeof(key_heads), 4);
+            set_bytes(encoder, &head_dim, sizeof(head_dim), 5);
+            set_buffer(encoder, batch_rope_positions, 6);
+            set_bytes(encoder, sections.data(), sizeof(sections), 7);
+            set_bytes(encoder, &layer.rope_theta, sizeof(layer.rope_theta), 8);
+            set_bytes(encoder, &query_scale, sizeof(query_scale), 9);
+            dispatch(encoder, "celeg_qk_mrope_position_batch",
+                     static_cast<NSUInteger>(rows) * head_count);
+        } else {
+            const uint32_t position_mode = standard_position_mode(attention);
+            set_buffer(encoder, batch_query, 0);
+            set_buffer(encoder, batch_key, 1);
+            set_bytes(encoder, &rows, sizeof(rows), 2);
+            set_bytes(encoder, &query_heads, sizeof(query_heads), 3);
+            set_bytes(encoder, &key_heads, sizeof(key_heads), 4);
+            set_bytes(encoder, &head_dim, sizeof(head_dim), 5);
+            set_bytes(encoder, &base_position, sizeof(base_position), 6);
+            set_bytes(encoder, &position_mode, sizeof(position_mode), 7);
+            set_bytes(encoder, &layer.rope_theta, sizeof(layer.rope_theta), 8);
+            set_bytes(encoder, &query_scale, sizeof(query_scale), 9);
+            dispatch(encoder, "celeg_qk_position_batch",
+                     static_cast<NSUInteger>(rows) * head_count);
+        }
     } else {
         set_buffer(encoder, batch_query, 0);
         set_buffer(encoder, layer.query_norm, 1);
