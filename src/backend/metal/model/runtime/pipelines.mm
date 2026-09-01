@@ -35,7 +35,7 @@ std::optional<std::string_view> MetalModel::Impl::linear_kernel(
         {"celeg_matvec_tuned_f16", nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr},
         {"celeg_matvec_tuned_bf16", nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr},
         {"celeg_matvec_q4_0_tuned", nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr},
-        {nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr},
+        {"celeg_matvec_q4k_packed", nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr},
         {"celeg_matvec_q5k_tuned", nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr},
         {"celeg_matvec_q6k_tuned", nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr},
         {nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr},

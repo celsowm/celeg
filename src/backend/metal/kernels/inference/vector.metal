@@ -387,6 +387,51 @@ kernel void celeg_matvec_q4k_blocked(device const uchar* weights [[buffer(0)]],
     if (lane == 0) output[row] = reduced;
 }
 
+kernel void celeg_matvec_q4k_packed(device const uchar* weights [[buffer(0)]],
+                                    device const float* input [[buffer(1)]],
+                                    device float* output [[buffer(2)]],
+                                    constant uint& rows [[buffer(3)]],
+                                    constant uint& cols [[buffer(4)]],
+                                    constant uint& row_bytes [[buffer(5)]],
+                                    uint lane [[thread_index_in_simdgroup]],
+                                    uint simd [[simdgroup_index_in_threadgroup]],
+                                    uint group [[threadgroup_position_in_grid]]) {
+    const uint row = group * 8 + simd;
+    if (row >= rows) return;
+    const device uchar* row_data = weights + static_cast<size_t>(row) * row_bytes;
+    float sum = 0.0f;
+    for (uint block_index = 0; block_index * 256 < cols; ++block_index) {
+        const device uchar* block = row_data + static_cast<size_t>(block_index) * 144;
+        const float d = celeg_half_to_float(static_cast<ushort>(block[0]) |
+                                            (static_cast<ushort>(block[1]) << 8));
+        const float dmin = celeg_half_to_float(static_cast<ushort>(block[2]) |
+                                               (static_cast<ushort>(block[3]) << 8));
+        const uint base = block_index * 256;
+        for (uint pair = 0; pair < 4; ++pair) {
+            const uint first_column = base + pair * 64 + lane;
+            const uint second_column = first_column + 32;
+            if (first_column >= cols) continue;
+            uchar first_scale = 0;
+            uchar first_minimum = 0;
+            uchar second_scale = 0;
+            uchar second_minimum = 0;
+            celeg_q4k_scale_min(block + 4, pair * 2, first_scale, first_minimum);
+            celeg_q4k_scale_min(block + 4, pair * 2 + 1, second_scale, second_minimum);
+            const uchar packed = block[16 + pair * 32 + lane];
+            const float first_weight = d * static_cast<float>(first_scale) *
+                    static_cast<float>(packed & 0x0f) -
+                dmin * static_cast<float>(first_minimum);
+            const float second_weight = d * static_cast<float>(second_scale) *
+                    static_cast<float>(packed >> 4) -
+                dmin * static_cast<float>(second_minimum);
+            sum += first_weight * input[first_column];
+            if (second_column < cols) sum += second_weight * input[second_column];
+        }
+    }
+    const float reduced = simd_sum(sum);
+    if (lane == 0) output[row] = reduced;
+}
+
 kernel void celeg_swiglu_matvec_q4k_blocked(
     device const uchar* weights [[buffer(0)]],
     device const float* gate_up [[buffer(1)]],

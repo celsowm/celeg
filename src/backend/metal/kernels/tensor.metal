@@ -272,18 +272,48 @@ kernel void celeg_matmul_tensor_q4k(
         if (result.is_valid_element(index)) result[index] = 0.0f;
     }
     for (int offset = 0; offset < static_cast<int>(cols); offset += tile_k) {
-        for (int index = static_cast<int>(thread_index); index < tile_rows * tile_k;
-             index += 128) {
-            const int row = index / tile_k;
-            const int column = index % tile_k;
-            const int source_row = row_offset + row;
-            const int source_column = offset + column;
-            weights_tile[index] = source_row < static_cast<int>(output_rows) &&
-                    source_column < static_cast<int>(cols)
-                ? celeg_tensor_q4k_weight(weights, row_bytes,
-                                           static_cast<uint>(source_row),
-                                           static_cast<uint>(source_column))
-                : static_cast<half>(0);
+        for (int work = static_cast<int>(thread_index);
+             work < (tile_rows / 4) * (tile_k / 4); work += 128) {
+            const int row_offset_tile = (work / (tile_k / 4)) * 4;
+            const int column_offset_tile = (work % (tile_k / 4)) * 4;
+            for (int row = 0; row < 4; ++row) {
+                const int source_row = row_offset + row_offset_tile + row;
+                const uint source_column_base = static_cast<uint>(offset + column_offset_tile);
+                const bool valid_row = source_row < static_cast<int>(output_rows);
+                const bool valid_column = source_column_base < static_cast<uint>(cols);
+                const device uchar* row_data = valid_row
+                    ? weights + static_cast<size_t>(source_row) * row_bytes : nullptr;
+                const device uchar* block = valid_row && valid_column
+                    ? row_data + static_cast<size_t>(source_column_base / 256) * 144 : nullptr;
+                uchar scale = 0;
+                uchar minimum = 0;
+                ushort d_bits = 0;
+                ushort dmin_bits = 0;
+                if (block) {
+                    const uint within = source_column_base & 255;
+                    celeg_tensor_q4k_scale_min(block + 4, within >> 5, scale, minimum);
+                    d_bits = static_cast<ushort>(block[0]) |
+                        (static_cast<ushort>(block[1]) << 8);
+                    dmin_bits = static_cast<ushort>(block[2]) |
+                        (static_cast<ushort>(block[3]) << 8);
+                }
+                for (int column = 0; column < 4; ++column) {
+                    const uint source_column = source_column_base + static_cast<uint>(column);
+                    const int tile_index = (row_offset_tile + row) * tile_k +
+                        column_offset_tile + column;
+                    if (!block || source_column >= static_cast<uint>(cols)) {
+                        weights_tile[tile_index] = static_cast<half>(0);
+                        continue;
+                    }
+                    const uint within = source_column & 255;
+                    weights_tile[tile_index] = static_cast<half>(
+                        static_cast<float>(as_type<half>(d_bits)) *
+                            static_cast<float>(scale) *
+                            static_cast<float>(celeg_tensor_q4k_value(block, within)) -
+                        static_cast<float>(as_type<half>(dmin_bits)) *
+                            static_cast<float>(minimum));
+                }
+            }
         }
         threadgroup_barrier(mem_flags::mem_threadgroup);
         const int extent = min(tile_k, static_cast<int>(cols) - offset);
