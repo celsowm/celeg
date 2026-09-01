@@ -16,16 +16,6 @@
 
 namespace {
 
-celeg::TensorRequest request(celeg::TensorRole role, int layer,
-                             std::string name, std::vector<int64_t> shape) {
-    celeg::TensorRequest result;
-    result.role = role;
-    result.layer = layer;
-    result.expected_shape = std::move(shape);
-    result.source_name = std::move(name);
-    return result;
-}
-
 class FixtureArchitecture final : public celeg::IArchitecture {
 public:
     explicit FixtureArchitecture(bool shared) : shared_(shared) {}
@@ -77,20 +67,30 @@ public:
         model.topology = celeg::compose_runtime_topology(
             std::move(dimensions), model.graph);
 
+        using celeg::test_support::tensor_request;
         model.weight_plan.requests = {
-            request(celeg::TensorRole::TokenEmbedding, -1, "embed", {8, 4}),
-            request(celeg::TensorRole::AttentionQuery, 0, "l0.q", {4, 4}),
-            request(celeg::TensorRole::AttentionKey, 0, "l0.k", {4, 4}),
-            request(celeg::TensorRole::AttentionValue, 0, "l0.v", {4, 4}),
-            request(celeg::TensorRole::AttentionOutput, 0, "l0.out", {4, 4}),
-            request(celeg::TensorRole::AttentionQuery, 1, "l1.q", {4, 4}),
-            request(celeg::TensorRole::AttentionOutput, 1, "l1.out", {4, 4}),
+            tensor_request(celeg::TensorRole::TokenEmbedding, -1,
+                           "embed", {8, 4}),
+            tensor_request(celeg::TensorRole::AttentionQuery, 0,
+                           "l0.q", {4, 4}),
+            tensor_request(celeg::TensorRole::AttentionKey, 0,
+                           "l0.k", {4, 4}),
+            tensor_request(celeg::TensorRole::AttentionValue, 0,
+                           "l0.v", {4, 4}),
+            tensor_request(celeg::TensorRole::AttentionOutput, 0,
+                           "l0.out", {4, 4}),
+            tensor_request(celeg::TensorRole::AttentionQuery, 1,
+                           "l1.q", {4, 4}),
+            tensor_request(celeg::TensorRole::AttentionOutput, 1,
+                           "l1.out", {4, 4}),
         };
         if (!shared_) {
             model.weight_plan.requests.push_back(
-                request(celeg::TensorRole::AttentionKey, 1, "l1.k", {4, 4}));
+                tensor_request(celeg::TensorRole::AttentionKey, 1,
+                               "l1.k", {4, 4}));
             model.weight_plan.requests.push_back(
-                request(celeg::TensorRole::AttentionValue, 1, "l1.v", {4, 4}));
+                tensor_request(celeg::TensorRole::AttentionValue, 1,
+                               "l1.v", {4, 4}));
         }
         return model;
     }
