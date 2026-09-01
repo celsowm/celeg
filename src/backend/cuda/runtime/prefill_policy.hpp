@@ -1,5 +1,7 @@
 #pragma once
 
+#include "celeg/model/program.hpp"
+
 #include <algorithm>
 #include <cstddef>
 #include <stdexcept>
@@ -11,6 +13,17 @@ struct CudaPrefillSpanDecision {
     bool defer = false;
     bool requires_packed = false;
 };
+
+inline bool cuda_requires_full_prompt_prefill(
+    const CompiledModelProgram& program) {
+    return std::any_of(program.layers.begin(), program.layers.end(),
+        [](const CompiledLayerProgram& layer) {
+            const auto* attention =
+                std::get_if<CompiledAttentionProgram>(&layer.mixer);
+            return attention && std::holds_alternative<BidirectionalPattern>(
+                attention->semantics.pattern);
+        });
+}
 
 inline CudaPrefillSpanDecision plan_cuda_prefill_span(
     std::size_t remaining,
