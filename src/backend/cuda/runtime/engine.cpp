@@ -85,8 +85,10 @@ CudaSchedulerDriver::CudaSchedulerDriver(std::string model_path,
             model_options_.kv_cache_mode, topology_.exec, program_);
     }
     if (paged_kv_) {
+        const bool prefix_cache_enabled =
+            engine_options_.prefix_cache && required_initial_span == 0;
         prefix_cache_ = std::make_unique<PrefixCacheManager>(
-            *paged_kv_, engine_options_.prefix_cache,
+            *paged_kv_, prefix_cache_enabled,
             engine_options_.prefix_cache_entries);
     }
     lanes_.reserve(active);
