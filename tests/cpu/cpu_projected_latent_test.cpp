@@ -5,6 +5,7 @@
 #include "cpu/support/synthetic_checkpoint.hpp"
 #include "support/assertions.hpp"
 
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -128,6 +129,7 @@ int main() {
     generation.seed = 19;
     generation.top_k = 1;
     const std::vector<int32_t> prompt = {1, 2, 3, 4, 5};
+    const std::vector<int32_t> peer_prompt = {2, 3, 1, 5, 4};
 
     try {
         celeg::CpuModel scalar(
@@ -151,6 +153,49 @@ int main() {
                        chunked.diagnostics().copy_logits());
         CELEG_TEST_CHECK(scalar.session().position() ==
                          chunked.session().position());
+
+        celeg::CpuModel packed(
+            directory.string(), 32, scalar_options, generation,
+            fixture_runtime());
+        std::unique_ptr<celeg::CpuModel> packed_peer = packed.clone_session();
+        celeg::CpuModel packed_reference(
+            directory.string(), 32, scalar_options, generation,
+            fixture_runtime());
+        celeg::CpuModel peer_reference(
+            directory.string(), 32, scalar_options, generation,
+            fixture_runtime());
+        packed_reference.session().prefill(prompt);
+        peer_reference.session().prefill(peer_prompt);
+
+        for (std::size_t index = 0; index < prompt.size(); ++index) {
+            const bool final_token = index + 1 == prompt.size();
+            const std::array<celeg::CpuPrefillItem, 2> items{{
+                {&packed, prompt[index], final_token},
+                {packed_peer.get(), peer_prompt[index], final_token},
+            }};
+            const celeg::CpuBatchMetrics metrics =
+                celeg::CpuModel::prefill_batch(items);
+            CELEG_TEST_CHECK(metrics.batch_size == 2);
+        }
+        compare_logits(packed_reference.diagnostics().copy_logits(),
+                       packed.diagnostics().copy_logits());
+        compare_logits(peer_reference.diagnostics().copy_logits(),
+                       packed_peer->diagnostics().copy_logits());
+
+        const int32_t reference_token = packed_reference.session().decode();
+        const int32_t peer_reference_token = peer_reference.session().decode();
+        const std::array<celeg::CpuModel*, 2> batch_models{
+            &packed, packed_peer.get()};
+        auto [batch_tokens, batch_metrics] =
+            celeg::CpuModel::decode_batch(batch_models);
+        CELEG_TEST_CHECK(batch_metrics.batch_size == 2);
+        CELEG_TEST_CHECK(batch_tokens.size() == 2);
+        CELEG_TEST_CHECK(batch_tokens[0] == reference_token);
+        CELEG_TEST_CHECK(batch_tokens[1] == peer_reference_token);
+        compare_logits(packed_reference.diagnostics().copy_logits(),
+                       packed.diagnostics().copy_logits());
+        compare_logits(peer_reference.diagnostics().copy_logits(),
+                       packed_peer->diagnostics().copy_logits());
     } catch (...) {
         std::filesystem::remove_all(directory);
         throw;
