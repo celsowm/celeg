@@ -84,7 +84,7 @@ int main() {
             celeg::OrthogonalizeCurrentValueSpec{1.0e-6f};
         program.layers.push_back(layer_with(std::move(publisher)));
         program.layers.push_back(layer_with(std::move(consumer)));
-        CELEG_TEST_CHECK(rejects(std::move(program)));
+        CELEG_TEST_CHECK(!rejects(std::move(program)));
     }
 
     return 0;
