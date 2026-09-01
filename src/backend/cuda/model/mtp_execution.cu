@@ -1,4 +1,5 @@
 #include "detail/compiled_model.hpp"
+#include "attention_layer_support.hpp"
 #include "backend/cuda/attention_norm.hpp"
 #include "kernels/kernels.cuh"
 #include "backend/cuda/moe.hpp"
@@ -117,8 +118,7 @@ void CudaCompiledModel::run_mtp_forward_device(const int32_t* token_device) {
     attention_request.operation = AttentionOperation::Decode;
     attention_request.layout = AttentionKvLayout::Contiguous;
     attention_request.position_source = AttentionPositionSource::DeviceCounter;
-    attention_request.bias = attention->alibi_slopes.data()
-        ? AttentionPositionBias::Alibi : AttentionPositionBias::None;
+    attention_request.bias = cuda_attention_position_bias(layout);
     attention_request.fast_attention = resources_.options().fast_attention;
     attention_request.head_dim = layout.head_dim;
     const AttentionCapability attention_plan =
@@ -169,6 +169,9 @@ void CudaCompiledModel::run_mtp_forward_device(const int32_t* token_device) {
                 .stream = stream});
         }
         break;
+    case AttentionAlgorithm::RelativeBias:
+        throw std::logic_error(
+            "CUDA MTP relative-position bias must be rejected during weight setup");
     case AttentionAlgorithm::Online:
         if (int8_kv) {
             launch_gqa_decode_online_int8_device({
