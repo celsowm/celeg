@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <stdexcept>
 
 namespace celeg {
 
@@ -34,6 +35,15 @@ bool split_half_rope(const CompiledAttentionProgram& attention) {
     return rope && rope->pairing == RopePairingKind::SplitHalf;
 }
 
+bool per_head_norm(const std::optional<NormSpec>& norm) {
+    return norm && norm->granularity == NormGranularity::PerHead;
+}
+
+uint32_t standard_position_mode(const CompiledAttentionProgram& attention) {
+    if (no_position_encoding(attention)) return 0;
+    return split_half_rope(attention) ? 1u : 2u;
+}
+
 }
 
 void MetalModel::Impl::encode_attention(
@@ -60,63 +70,132 @@ void MetalModel::Impl::encode_attention(
     const uint32_t query_heads = static_cast<uint32_t>(layer.query_heads);
     const uint32_t key_heads = static_cast<uint32_t>(layer.key_value_heads);
     const uint32_t head_dim = static_cast<uint32_t>(layer.head_dim);
+    const uint32_t query_width = query_heads * head_dim;
+    const uint32_t key_width = key_heads * head_dim;
     const uint32_t position_value = static_cast<uint32_t>(position);
     const float query_scale = layer.query_scale /
         (1.0f / std::sqrt(static_cast<float>(layer.head_dim)));
     const uint32_t page_tokens = static_cast<uint32_t>(layer.page_tokens);
-    set_buffer(encoder, query_buffer, 0);
-    set_buffer(encoder, layer.query_norm, 1);
-    set_buffer(encoder, key_buffer, 2);
-    set_buffer(encoder, layer.key_norm, 3);
-    set_buffer(encoder, value_buffer, 4);
-    set_buffer(encoder, layer.key_cache, 5);
-    set_buffer(encoder, layer.value_cache, 6);
-    set_bytes(encoder, &query_heads, sizeof(query_heads), 7);
-    set_bytes(encoder, &key_heads, sizeof(key_heads), 8);
-    set_bytes(encoder, &head_dim, sizeof(head_dim), 9);
-    if (no_position) {
-        set_bytes(encoder, &position_value, sizeof(position_value), 10);
-        set_bytes(encoder, &query_scale, sizeof(query_scale), 11);
-        set_bytes(encoder, &layer.query_norm_epsilon,
-                  sizeof(layer.query_norm_epsilon), 12);
-        set_bytes(encoder, &layer.key_norm_epsilon,
-                  sizeof(layer.key_norm_epsilon), 13);
-        set_bytes(encoder, &page_tokens, sizeof(page_tokens), 14);
-        dispatch(encoder, "celeg_qk_norm_store_kv",
-                 std::max(query_heads, key_heads));
-    } else if (multi) {
-        const std::array<int32_t, 3>& resolved_position =
-            rope_position ? *rope_position : next_rope_position;
-        const std::array<uint32_t, 3> sections{
-            static_cast<uint32_t>(multi->sections[0]),
-            static_cast<uint32_t>(multi->sections[1]),
-            static_cast<uint32_t>(multi->sections[2])};
-        set_bytes(encoder, &position_value, sizeof(position_value), 10);
-        set_bytes(encoder, resolved_position.data(), sizeof(resolved_position), 11);
-        set_bytes(encoder, sections.data(), sizeof(sections), 12);
-        set_bytes(encoder, &layer.rope_theta, sizeof(layer.rope_theta), 13);
-        set_bytes(encoder, &query_scale, sizeof(query_scale), 14);
-        set_bytes(encoder, &layer.query_norm_epsilon,
-                  sizeof(layer.query_norm_epsilon), 15);
-        set_bytes(encoder, &layer.key_norm_epsilon,
-                  sizeof(layer.key_norm_epsilon), 16);
-        set_bytes(encoder, &page_tokens, sizeof(page_tokens), 17);
-        dispatch(encoder, "celeg_qk_norm_mrope_store_kv",
-                 std::max(query_heads, key_heads));
+    const bool fused_per_head = per_head_norm(attention.semantics.query_norm) &&
+        per_head_norm(attention.semantics.key_norm);
+
+    if (!fused_per_head) {
+        const auto normalize = [&](id<MTLBuffer> data, id<MTLBuffer> weight,
+                                   const std::optional<NormSpec>& norm,
+                                   uint32_t heads, uint32_t width) {
+            if (!norm) return;
+            if (norm->granularity == NormGranularity::WholeVector) {
+                encode_rmsnorm(encoder, data, weight, data, width, norm->epsilon);
+                return;
+            }
+            set_buffer(encoder, data, 0);
+            set_buffer(encoder, weight, 1);
+            set_bytes(encoder, &heads, sizeof(heads), 2);
+            set_bytes(encoder, &head_dim, sizeof(head_dim), 3);
+            set_bytes(encoder, &norm->epsilon, sizeof(norm->epsilon), 4);
+            dispatch(encoder, "celeg_head_rmsnorm_inplace", heads);
+        };
+        normalize(query_buffer, layer.query_norm, attention.semantics.query_norm,
+                  query_heads, query_width);
+        normalize(key_buffer, layer.key_norm, attention.semantics.key_norm,
+                  key_heads, key_width);
+
+        if (multi) {
+            const std::array<int32_t, 3>& resolved_position =
+                rope_position ? *rope_position : next_rope_position;
+            const std::array<uint32_t, 3> sections{
+                static_cast<uint32_t>(multi->sections[0]),
+                static_cast<uint32_t>(multi->sections[1]),
+                static_cast<uint32_t>(multi->sections[2])};
+            set_buffer(encoder, query_buffer, 0);
+            set_buffer(encoder, key_buffer, 1);
+            set_buffer(encoder, value_buffer, 2);
+            set_buffer(encoder, layer.key_cache, 3);
+            set_buffer(encoder, layer.value_cache, 4);
+            set_bytes(encoder, &query_heads, sizeof(query_heads), 5);
+            set_bytes(encoder, &key_heads, sizeof(key_heads), 6);
+            set_bytes(encoder, &head_dim, sizeof(head_dim), 7);
+            set_bytes(encoder, &position_value, sizeof(position_value), 8);
+            set_bytes(encoder, resolved_position.data(), sizeof(resolved_position), 9);
+            set_bytes(encoder, sections.data(), sizeof(sections), 10);
+            set_bytes(encoder, &layer.rope_theta, sizeof(layer.rope_theta), 11);
+            set_bytes(encoder, &query_scale, sizeof(query_scale), 12);
+            set_bytes(encoder, &page_tokens, sizeof(page_tokens), 13);
+            dispatch(encoder, "celeg_qk_mrope_position_store_kv",
+                     std::max(query_heads, key_heads));
+        } else {
+            const uint32_t position_mode = standard_position_mode(attention);
+            set_buffer(encoder, query_buffer, 0);
+            set_buffer(encoder, key_buffer, 1);
+            set_buffer(encoder, value_buffer, 2);
+            set_buffer(encoder, layer.key_cache, 3);
+            set_buffer(encoder, layer.value_cache, 4);
+            set_bytes(encoder, &query_heads, sizeof(query_heads), 5);
+            set_bytes(encoder, &key_heads, sizeof(key_heads), 6);
+            set_bytes(encoder, &head_dim, sizeof(head_dim), 7);
+            set_bytes(encoder, &position_value, sizeof(position_value), 8);
+            set_bytes(encoder, &position_mode, sizeof(position_mode), 9);
+            set_bytes(encoder, &layer.rope_theta, sizeof(layer.rope_theta), 10);
+            set_bytes(encoder, &query_scale, sizeof(query_scale), 11);
+            set_bytes(encoder, &page_tokens, sizeof(page_tokens), 12);
+            dispatch(encoder, "celeg_qk_position_store_kv",
+                     std::max(query_heads, key_heads));
+        }
     } else {
-        set_bytes(encoder, &position_value, sizeof(position_value), 10);
-        set_bytes(encoder, &layer.rope_theta, sizeof(layer.rope_theta), 11);
-        set_bytes(encoder, &query_scale, sizeof(query_scale), 12);
-        set_bytes(encoder, &layer.query_norm_epsilon,
-                  sizeof(layer.query_norm_epsilon), 13);
-        set_bytes(encoder, &layer.key_norm_epsilon,
-                  sizeof(layer.key_norm_epsilon), 14);
-        set_bytes(encoder, &page_tokens, sizeof(page_tokens), 15);
-        dispatch(encoder,
-                 split_half_rope(attention)
-                     ? "celeg_qk_norm_rope_store_kv_split"
-                     : "celeg_qk_norm_rope_store_kv",
-                 std::max(query_heads, key_heads));
+        set_buffer(encoder, query_buffer, 0);
+        set_buffer(encoder, layer.query_norm, 1);
+        set_buffer(encoder, key_buffer, 2);
+        set_buffer(encoder, layer.key_norm, 3);
+        set_buffer(encoder, value_buffer, 4);
+        set_buffer(encoder, layer.key_cache, 5);
+        set_buffer(encoder, layer.value_cache, 6);
+        set_bytes(encoder, &query_heads, sizeof(query_heads), 7);
+        set_bytes(encoder, &key_heads, sizeof(key_heads), 8);
+        set_bytes(encoder, &head_dim, sizeof(head_dim), 9);
+        if (no_position) {
+            set_bytes(encoder, &position_value, sizeof(position_value), 10);
+            set_bytes(encoder, &query_scale, sizeof(query_scale), 11);
+            set_bytes(encoder, &layer.query_norm_epsilon,
+                      sizeof(layer.query_norm_epsilon), 12);
+            set_bytes(encoder, &layer.key_norm_epsilon,
+                      sizeof(layer.key_norm_epsilon), 13);
+            set_bytes(encoder, &page_tokens, sizeof(page_tokens), 14);
+            dispatch(encoder, "celeg_qk_norm_store_kv",
+                     std::max(query_heads, key_heads));
+        } else if (multi) {
+            const std::array<int32_t, 3>& resolved_position =
+                rope_position ? *rope_position : next_rope_position;
+            const std::array<uint32_t, 3> sections{
+                static_cast<uint32_t>(multi->sections[0]),
+                static_cast<uint32_t>(multi->sections[1]),
+                static_cast<uint32_t>(multi->sections[2])};
+            set_bytes(encoder, &position_value, sizeof(position_value), 10);
+            set_bytes(encoder, resolved_position.data(), sizeof(resolved_position), 11);
+            set_bytes(encoder, sections.data(), sizeof(sections), 12);
+            set_bytes(encoder, &layer.rope_theta, sizeof(layer.rope_theta), 13);
+            set_bytes(encoder, &query_scale, sizeof(query_scale), 14);
+            set_bytes(encoder, &layer.query_norm_epsilon,
+                      sizeof(layer.query_norm_epsilon), 15);
+            set_bytes(encoder, &layer.key_norm_epsilon,
+                      sizeof(layer.key_norm_epsilon), 16);
+            set_bytes(encoder, &page_tokens, sizeof(page_tokens), 17);
+            dispatch(encoder, "celeg_qk_norm_mrope_store_kv",
+                     std::max(query_heads, key_heads));
+        } else {
+            set_bytes(encoder, &position_value, sizeof(position_value), 10);
+            set_bytes(encoder, &layer.rope_theta, sizeof(layer.rope_theta), 11);
+            set_bytes(encoder, &query_scale, sizeof(query_scale), 12);
+            set_bytes(encoder, &layer.query_norm_epsilon,
+                      sizeof(layer.query_norm_epsilon), 13);
+            set_bytes(encoder, &layer.key_norm_epsilon,
+                      sizeof(layer.key_norm_epsilon), 14);
+            set_bytes(encoder, &page_tokens, sizeof(page_tokens), 15);
+            dispatch(encoder,
+                     split_half_rope(attention)
+                         ? "celeg_qk_norm_rope_store_kv_split"
+                         : "celeg_qk_norm_rope_store_kv",
+                     std::max(query_heads, key_heads));
+        }
     }
 
     const float attention_scale = 1.0f /
@@ -181,6 +260,9 @@ void MetalModel::Impl::encode_attention_batch(
     const AlibiBiasSpec* alibi = attention_alibi(attention);
     const RelativePositionBiasSpec* relative = attention_relative_bias(attention);
     const bool no_position = no_position_encoding(attention);
+    if (attention.semantics.multi_axis_position()) {
+        throw std::logic_error("M-RoPE reached Metal batched QK preparation");
+    }
     if (alibi && !layer.alibi_slopes) {
         layer.alibi_slopes = buffer(alibi->slopes);
     }
@@ -197,34 +279,77 @@ void MetalModel::Impl::encode_attention_batch(
     const uint32_t query_heads = static_cast<uint32_t>(layer.query_heads);
     const uint32_t key_heads = static_cast<uint32_t>(layer.key_value_heads);
     const uint32_t head_dim = static_cast<uint32_t>(layer.head_dim);
+    const uint32_t query_width = query_heads * head_dim;
+    const uint32_t key_width = key_heads * head_dim;
     const uint32_t head_count = std::max(query_heads, key_heads);
     const float query_scale = layer.query_scale /
         (1.0f / std::sqrt(static_cast<float>(layer.head_dim)));
-    set_buffer(encoder, batch_query, 0);
-    set_buffer(encoder, layer.query_norm, 1);
-    set_buffer(encoder, batch_key, 2);
-    set_buffer(encoder, layer.key_norm, 3);
-    set_bytes(encoder, &rows, sizeof(rows), 4);
-    set_bytes(encoder, &query_heads, sizeof(query_heads), 5);
-    set_bytes(encoder, &key_heads, sizeof(key_heads), 6);
-    set_bytes(encoder, &head_dim, sizeof(head_dim), 7);
-    if (no_position) {
-        set_bytes(encoder, &query_scale, sizeof(query_scale), 8);
-        set_bytes(encoder, &layer.query_norm_epsilon, sizeof(layer.query_norm_epsilon), 9);
-        set_bytes(encoder, &layer.key_norm_epsilon, sizeof(layer.key_norm_epsilon), 10);
-        dispatch(encoder, "celeg_qk_norm_batch_no_position",
+    const bool fused_per_head = per_head_norm(attention.semantics.query_norm) &&
+        per_head_norm(attention.semantics.key_norm);
+
+    if (!fused_per_head) {
+        const auto normalize = [&](id<MTLBuffer> data, id<MTLBuffer> weight,
+                                   const std::optional<NormSpec>& norm,
+                                   uint32_t heads, uint32_t width) {
+            if (!norm) return;
+            if (norm->granularity == NormGranularity::WholeVector) {
+                encode_rmsnorm_batch(encoder, data, weight, data,
+                                     rows, width, norm->epsilon);
+                return;
+            }
+            set_buffer(encoder, data, 0);
+            set_buffer(encoder, weight, 1);
+            set_bytes(encoder, &rows, sizeof(rows), 2);
+            set_bytes(encoder, &heads, sizeof(heads), 3);
+            set_bytes(encoder, &head_dim, sizeof(head_dim), 4);
+            set_bytes(encoder, &norm->epsilon, sizeof(norm->epsilon), 5);
+            dispatch(encoder, "celeg_head_rmsnorm_batch_inplace",
+                     static_cast<NSUInteger>(rows) * heads);
+        };
+        normalize(batch_query, layer.query_norm, attention.semantics.query_norm,
+                  query_heads, query_width);
+        normalize(batch_key, layer.key_norm, attention.semantics.key_norm,
+                  key_heads, key_width);
+        const uint32_t position_mode = standard_position_mode(attention);
+        set_buffer(encoder, batch_query, 0);
+        set_buffer(encoder, batch_key, 1);
+        set_bytes(encoder, &rows, sizeof(rows), 2);
+        set_bytes(encoder, &query_heads, sizeof(query_heads), 3);
+        set_bytes(encoder, &key_heads, sizeof(key_heads), 4);
+        set_bytes(encoder, &head_dim, sizeof(head_dim), 5);
+        set_bytes(encoder, &base_position, sizeof(base_position), 6);
+        set_bytes(encoder, &position_mode, sizeof(position_mode), 7);
+        set_bytes(encoder, &layer.rope_theta, sizeof(layer.rope_theta), 8);
+        set_bytes(encoder, &query_scale, sizeof(query_scale), 9);
+        dispatch(encoder, "celeg_qk_position_batch",
                  static_cast<NSUInteger>(rows) * head_count);
     } else {
-        set_bytes(encoder, &base_position, sizeof(base_position), 8);
-        set_bytes(encoder, &layer.rope_theta, sizeof(layer.rope_theta), 9);
-        set_bytes(encoder, &query_scale, sizeof(query_scale), 10);
-        set_bytes(encoder, &layer.query_norm_epsilon, sizeof(layer.query_norm_epsilon), 11);
-        set_bytes(encoder, &layer.key_norm_epsilon, sizeof(layer.key_norm_epsilon), 12);
-        dispatch(encoder,
-                 split_half_rope(attention)
-                     ? "celeg_qk_norm_rope_batch_split"
-                     : "celeg_qk_norm_rope_batch",
-                 static_cast<NSUInteger>(rows) * head_count);
+        set_buffer(encoder, batch_query, 0);
+        set_buffer(encoder, layer.query_norm, 1);
+        set_buffer(encoder, batch_key, 2);
+        set_buffer(encoder, layer.key_norm, 3);
+        set_bytes(encoder, &rows, sizeof(rows), 4);
+        set_bytes(encoder, &query_heads, sizeof(query_heads), 5);
+        set_bytes(encoder, &key_heads, sizeof(key_heads), 6);
+        set_bytes(encoder, &head_dim, sizeof(head_dim), 7);
+        if (no_position) {
+            set_bytes(encoder, &query_scale, sizeof(query_scale), 8);
+            set_bytes(encoder, &layer.query_norm_epsilon, sizeof(layer.query_norm_epsilon), 9);
+            set_bytes(encoder, &layer.key_norm_epsilon, sizeof(layer.key_norm_epsilon), 10);
+            dispatch(encoder, "celeg_qk_norm_batch_no_position",
+                     static_cast<NSUInteger>(rows) * head_count);
+        } else {
+            set_bytes(encoder, &base_position, sizeof(base_position), 8);
+            set_bytes(encoder, &layer.rope_theta, sizeof(layer.rope_theta), 9);
+            set_bytes(encoder, &query_scale, sizeof(query_scale), 10);
+            set_bytes(encoder, &layer.query_norm_epsilon, sizeof(layer.query_norm_epsilon), 11);
+            set_bytes(encoder, &layer.key_norm_epsilon, sizeof(layer.key_norm_epsilon), 12);
+            dispatch(encoder,
+                     split_half_rope(attention)
+                         ? "celeg_qk_norm_rope_batch_split"
+                         : "celeg_qk_norm_rope_batch",
+                     static_cast<NSUInteger>(rows) * head_count);
+        }
     }
 
     const uint32_t kv_width = key_heads * head_dim;
