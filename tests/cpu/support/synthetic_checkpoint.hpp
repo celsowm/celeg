@@ -1,11 +1,14 @@
 #pragma once
 
+#include "celeg/model/weights/roles.hpp"
+
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -47,6 +50,17 @@ inline SyntheticTensor constant_tensor(std::string name, std::vector<int> shape,
     SyntheticTensor tensor{std::move(name), std::move(shape), {}};
     tensor.values.assign(element_count(tensor.shape), bf16(value));
     return tensor;
+}
+
+inline TensorRequest tensor_request(TensorRole role, int layer,
+                                    std::string name,
+                                    std::vector<int64_t> shape) {
+    TensorRequest result;
+    result.role = role;
+    result.layer = layer;
+    result.expected_shape = std::move(shape);
+    result.source_name = std::move(name);
+    return result;
 }
 
 inline void write_safetensors_checkpoint(
