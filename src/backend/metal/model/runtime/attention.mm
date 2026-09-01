@@ -60,6 +60,8 @@ void MetalModel::Impl::encode_attention(
     const RelativePositionBiasSpec* relative = attention_relative_bias(attention);
     const MultiAxisRopeSpec* multi = attention.semantics.multi_axis_position();
     const bool no_position = no_position_encoding(attention);
+    const SigmoidAttentionGateSpec* gate = attention.semantics.output_gate
+        ? &*attention.semantics.output_gate : nullptr;
     if (alibi && !layer.alibi_slopes) {
         layer.alibi_slopes = buffer(alibi->slopes);
     }
@@ -70,14 +72,30 @@ void MetalModel::Impl::encode_attention(
             layer.query_heads * relative->bucket_count);
     }
 
-    encode_matvec(encoder, layer.query, normed, query_buffer);
-    encode_matvec(encoder, layer.key, normed, key_buffer);
-    encode_matvec(encoder, layer.value, normed, value_buffer);
     const uint32_t query_heads = static_cast<uint32_t>(layer.query_heads);
     const uint32_t key_heads = static_cast<uint32_t>(layer.key_value_heads);
     const uint32_t head_dim = static_cast<uint32_t>(layer.head_dim);
     const uint32_t query_width = query_heads * head_dim;
     const uint32_t key_width = key_heads * head_dim;
+
+    if (gate && gate->packed_with_query) {
+        encode_matvec(encoder, layer.query, normed, projected);
+        const uint32_t rows = 1;
+        set_buffer(encoder, projected, 0);
+        set_buffer(encoder, query_buffer, 1);
+        set_bytes(encoder, &rows, sizeof(rows), 2);
+        set_bytes(encoder, &query_width, sizeof(query_width), 3);
+        set_bytes(encoder, &head_dim, sizeof(head_dim), 4);
+        dispatch(encoder, "celeg_extract_attention_query_batch", query_width);
+    } else {
+        encode_matvec(encoder, layer.query, normed, query_buffer);
+        if (gate) {
+            encode_matvec(encoder, layer.attention_gate, normed, projected);
+        }
+    }
+    encode_matvec(encoder, layer.key, normed, key_buffer);
+    encode_matvec(encoder, layer.value, normed, value_buffer);
+
     const uint32_t position_value = static_cast<uint32_t>(position);
     const float query_scale = layer.query_scale /
         (1.0f / std::sqrt(static_cast<float>(layer.head_dim)));
@@ -270,6 +288,18 @@ void MetalModel::Impl::encode_attention(
         dispatch(encoder, "celeg_attention_orthogonalize_current_value",
                  query_heads);
     }
+    if (gate) {
+        const uint32_t head_wise =
+            gate->granularity == AttentionGateGranularity::HeadWise ? 1u : 0u;
+        const uint32_t packed = gate->packed_with_query ? 1u : 0u;
+        set_buffer(encoder, operation, 0);
+        set_buffer(encoder, projected, 1);
+        set_bytes(encoder, &query_width, sizeof(query_width), 2);
+        set_bytes(encoder, &head_dim, sizeof(head_dim), 3);
+        set_bytes(encoder, &head_wise, sizeof(head_wise), 4);
+        set_bytes(encoder, &packed, sizeof(packed), 5);
+        dispatch(encoder, "celeg_attention_output_gate", query_width);
+    }
     encode_matvec(encoder, layer.attention_out, operation, hidden);
 }
 
@@ -280,6 +310,8 @@ void MetalModel::Impl::encode_attention_batch(
     const AlibiBiasSpec* alibi = attention_alibi(attention);
     const RelativePositionBiasSpec* relative = attention_relative_bias(attention);
     const bool no_position = no_position_encoding(attention);
+    const SigmoidAttentionGateSpec* gate = attention.semantics.output_gate
+        ? &*attention.semantics.output_gate : nullptr;
     if (attention.semantics.multi_axis_position()) {
         throw std::logic_error("M-RoPE reached Metal batched QK preparation");
     }
@@ -293,14 +325,31 @@ void MetalModel::Impl::encode_attention_batch(
             layer.query_heads * relative->bucket_count);
     }
 
-    encode_matmul(encoder, layer.query, batch_normed, batch_query, rows);
-    encode_matmul(encoder, layer.key, batch_normed, batch_key, rows);
-    encode_matmul(encoder, layer.value, batch_normed, batch_value, rows);
     const uint32_t query_heads = static_cast<uint32_t>(layer.query_heads);
     const uint32_t key_heads = static_cast<uint32_t>(layer.key_value_heads);
     const uint32_t head_dim = static_cast<uint32_t>(layer.head_dim);
     const uint32_t query_width = query_heads * head_dim;
     const uint32_t key_width = key_heads * head_dim;
+
+    if (gate && gate->packed_with_query) {
+        encode_matmul(encoder, layer.query, batch_normed, batch_projected, rows);
+        set_buffer(encoder, batch_projected, 0);
+        set_buffer(encoder, batch_query, 1);
+        set_bytes(encoder, &rows, sizeof(rows), 2);
+        set_bytes(encoder, &query_width, sizeof(query_width), 3);
+        set_bytes(encoder, &head_dim, sizeof(head_dim), 4);
+        dispatch(encoder, "celeg_extract_attention_query_batch",
+                 static_cast<NSUInteger>(rows) * query_width);
+    } else {
+        encode_matmul(encoder, layer.query, batch_normed, batch_query, rows);
+        if (gate) {
+            encode_matmul(encoder, layer.attention_gate, batch_normed,
+                          batch_projected, rows);
+        }
+    }
+    encode_matmul(encoder, layer.key, batch_normed, batch_key, rows);
+    encode_matmul(encoder, layer.value, batch_normed, batch_value, rows);
+
     const uint32_t head_count = std::max(query_heads, key_heads);
     const float query_scale = layer.query_scale /
         (1.0f / std::sqrt(static_cast<float>(layer.head_dim)));
@@ -468,6 +517,24 @@ void MetalModel::Impl::encode_attention_batch(
                   sizeof(transform->minimum_norm_squared), 6);
         dispatch(encoder, "celeg_attention_orthogonalize_current_value",
                  static_cast<NSUInteger>(rows) * query_heads);
+    }
+    if (gate) {
+        const uint32_t head_wise =
+            gate->granularity == AttentionGateGranularity::HeadWise ? 1u : 0u;
+        const uint32_t packed = gate->packed_with_query ? 1u : 0u;
+        const uint32_t gate_row_stride = packed != 0
+            ? 2 * query_width
+            : (head_wise != 0 ? query_heads : query_width);
+        set_buffer(encoder, batch_operation, 0);
+        set_buffer(encoder, batch_projected, 1);
+        set_bytes(encoder, &rows, sizeof(rows), 2);
+        set_bytes(encoder, &query_width, sizeof(query_width), 3);
+        set_bytes(encoder, &head_dim, sizeof(head_dim), 4);
+        set_bytes(encoder, &head_wise, sizeof(head_wise), 5);
+        set_bytes(encoder, &packed, sizeof(packed), 6);
+        set_bytes(encoder, &gate_row_stride, sizeof(gate_row_stride), 7);
+        dispatch(encoder, "celeg_attention_output_gate_batch",
+                 static_cast<NSUInteger>(rows) * query_width);
     }
     encode_matmul(encoder, layer.attention_out, batch_operation, batch_hidden, rows);
 }
