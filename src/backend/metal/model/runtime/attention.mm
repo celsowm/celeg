@@ -50,12 +50,39 @@ uint32_t standard_position_mode(const CompiledAttentionProgram& attention) {
     return split_half_rope(attention) ? 1u : 2u;
 }
 
+template <typename Layer>
+void bind_shared_kv(Layer& layer,
+                    const CompiledAttentionProgram& attention,
+                    std::vector<Layer>& layers,
+                    const CompiledModelProgram& program) {
+    const auto* consumer =
+        std::get_if<SharedKvConsumer>(&attention.semantics.kv_sharing);
+    if (!consumer || layer.kv_owner_layer >= 0) return;
+
+    const int layer_index = static_cast<int>(&layer - layers.data());
+    for (int owner = 0; owner < layer_index; ++owner) {
+        const auto* candidate = std::get_if<CompiledAttentionProgram>(
+            &program.layers[static_cast<size_t>(owner)].mixer);
+        const auto* publisher = candidate
+            ? std::get_if<SharedKvPublisher>(&candidate->semantics.kv_sharing)
+            : nullptr;
+        if (!publisher || publisher->group != consumer->group) continue;
+        layer.kv_owner_layer = owner;
+        layer.key_cache = layers[static_cast<size_t>(owner)].key_cache;
+        layer.value_cache = layers[static_cast<size_t>(owner)].value_cache;
+        return;
+    }
+    throw std::logic_error("Metal shared KV consumer has no runtime publisher");
+}
+
 }
 
 void MetalModel::Impl::encode_attention(
     id<MTLComputeCommandEncoder> encoder, Layer& layer,
     const CompiledAttentionProgram& attention,
     const std::array<int32_t, 3>* rope_position) {
+    bind_shared_kv(layer, attention, layers, program);
+    const bool owns_kv = attention.execution.has_key_value;
     const AlibiBiasSpec* alibi = attention_alibi(attention);
     const RelativePositionBiasSpec* relative = attention_relative_bias(attention);
     const MultiAxisRopeSpec* multi = attention.semantics.multi_axis_position();
@@ -74,6 +101,7 @@ void MetalModel::Impl::encode_attention(
 
     const uint32_t query_heads = static_cast<uint32_t>(layer.query_heads);
     const uint32_t key_heads = static_cast<uint32_t>(layer.key_value_heads);
+    const uint32_t prepared_key_heads = owns_kv ? key_heads : 0;
     const uint32_t head_dim = static_cast<uint32_t>(layer.head_dim);
     const uint32_t query_width = query_heads * head_dim;
     const uint32_t key_width = key_heads * head_dim;
@@ -93,14 +121,17 @@ void MetalModel::Impl::encode_attention(
             encode_matvec(encoder, layer.attention_gate, normed, projected);
         }
     }
-    encode_matvec(encoder, layer.key, normed, key_buffer);
-    encode_matvec(encoder, layer.value, normed, value_buffer);
+    if (owns_kv) {
+        encode_matvec(encoder, layer.key, normed, key_buffer);
+        encode_matvec(encoder, layer.value, normed, value_buffer);
+    }
 
     const uint32_t position_value = static_cast<uint32_t>(position);
     const float query_scale = layer.query_scale /
         (1.0f / std::sqrt(static_cast<float>(layer.head_dim)));
     const uint32_t page_tokens = static_cast<uint32_t>(layer.page_tokens);
-    const bool fused_per_head = per_head_norm(attention.semantics.query_norm) &&
+    const bool fused_per_head = owns_kv &&
+        per_head_norm(attention.semantics.query_norm) &&
         per_head_norm(attention.semantics.key_norm);
 
     if (!fused_per_head) {
@@ -121,8 +152,10 @@ void MetalModel::Impl::encode_attention(
         };
         normalize(query_buffer, layer.query_norm, attention.semantics.query_norm,
                   query_heads, query_width);
-        normalize(key_buffer, layer.key_norm, attention.semantics.key_norm,
-                  key_heads, key_width);
+        if (owns_kv) {
+            normalize(key_buffer, layer.key_norm, attention.semantics.key_norm,
+                      key_heads, key_width);
+        }
 
         if (multi) {
             const std::array<int32_t, 3>& resolved_position =
@@ -137,7 +170,7 @@ void MetalModel::Impl::encode_attention(
             set_buffer(encoder, layer.key_cache, 3);
             set_buffer(encoder, layer.value_cache, 4);
             set_bytes(encoder, &query_heads, sizeof(query_heads), 5);
-            set_bytes(encoder, &key_heads, sizeof(key_heads), 6);
+            set_bytes(encoder, &prepared_key_heads, sizeof(prepared_key_heads), 6);
             set_bytes(encoder, &head_dim, sizeof(head_dim), 7);
             set_bytes(encoder, &position_value, sizeof(position_value), 8);
             set_bytes(encoder, resolved_position.data(), sizeof(resolved_position), 9);
@@ -146,7 +179,7 @@ void MetalModel::Impl::encode_attention(
             set_bytes(encoder, &query_scale, sizeof(query_scale), 12);
             set_bytes(encoder, &page_tokens, sizeof(page_tokens), 13);
             dispatch(encoder, "celeg_qk_mrope_position_store_kv",
-                     std::max(query_heads, key_heads));
+                     std::max(query_heads, prepared_key_heads));
         } else {
             const uint32_t position_mode = standard_position_mode(attention);
             set_buffer(encoder, query_buffer, 0);
@@ -155,7 +188,7 @@ void MetalModel::Impl::encode_attention(
             set_buffer(encoder, layer.key_cache, 3);
             set_buffer(encoder, layer.value_cache, 4);
             set_bytes(encoder, &query_heads, sizeof(query_heads), 5);
-            set_bytes(encoder, &key_heads, sizeof(key_heads), 6);
+            set_bytes(encoder, &prepared_key_heads, sizeof(prepared_key_heads), 6);
             set_bytes(encoder, &head_dim, sizeof(head_dim), 7);
             set_bytes(encoder, &position_value, sizeof(position_value), 8);
             set_bytes(encoder, &position_mode, sizeof(position_mode), 9);
@@ -163,7 +196,7 @@ void MetalModel::Impl::encode_attention(
             set_bytes(encoder, &query_scale, sizeof(query_scale), 11);
             set_bytes(encoder, &page_tokens, sizeof(page_tokens), 12);
             dispatch(encoder, "celeg_qk_position_store_kv",
-                     std::max(query_heads, key_heads));
+                     std::max(query_heads, prepared_key_heads));
         }
     } else {
         set_buffer(encoder, query_buffer, 0);
@@ -174,7 +207,7 @@ void MetalModel::Impl::encode_attention(
         set_buffer(encoder, layer.key_cache, 5);
         set_buffer(encoder, layer.value_cache, 6);
         set_bytes(encoder, &query_heads, sizeof(query_heads), 7);
-        set_bytes(encoder, &key_heads, sizeof(key_heads), 8);
+        set_bytes(encoder, &prepared_key_heads, sizeof(prepared_key_heads), 8);
         set_bytes(encoder, &head_dim, sizeof(head_dim), 9);
         if (no_position) {
             set_bytes(encoder, &position_value, sizeof(position_value), 10);
@@ -185,7 +218,7 @@ void MetalModel::Impl::encode_attention(
                       sizeof(layer.key_norm_epsilon), 13);
             set_bytes(encoder, &page_tokens, sizeof(page_tokens), 14);
             dispatch(encoder, "celeg_qk_norm_store_kv",
-                     std::max(query_heads, key_heads));
+                     std::max(query_heads, prepared_key_heads));
         } else if (multi) {
             const std::array<int32_t, 3>& resolved_position =
                 rope_position ? *rope_position : next_rope_position;
@@ -204,7 +237,7 @@ void MetalModel::Impl::encode_attention(
                       sizeof(layer.key_norm_epsilon), 16);
             set_bytes(encoder, &page_tokens, sizeof(page_tokens), 17);
             dispatch(encoder, "celeg_qk_norm_mrope_store_kv",
-                     std::max(query_heads, key_heads));
+                     std::max(query_heads, prepared_key_heads));
         } else {
             set_bytes(encoder, &position_value, sizeof(position_value), 10);
             set_bytes(encoder, &layer.rope_theta, sizeof(layer.rope_theta), 11);
@@ -218,7 +251,7 @@ void MetalModel::Impl::encode_attention(
                      split_half_rope(attention)
                          ? "celeg_qk_norm_rope_store_kv_split"
                          : "celeg_qk_norm_rope_store_kv",
-                     std::max(query_heads, key_heads));
+                     std::max(query_heads, prepared_key_heads));
         }
     }
 
@@ -307,6 +340,8 @@ void MetalModel::Impl::encode_attention_batch(
     id<MTLComputeCommandEncoder> encoder, Layer& layer,
     const CompiledAttentionProgram& attention, uint32_t rows,
     uint32_t base_position) {
+    bind_shared_kv(layer, attention, layers, program);
+    const bool owns_kv = attention.execution.has_key_value;
     const AlibiBiasSpec* alibi = attention_alibi(attention);
     const RelativePositionBiasSpec* relative = attention_relative_bias(attention);
     const MultiAxisRopeSpec* multi = attention.semantics.multi_axis_position();
@@ -325,6 +360,7 @@ void MetalModel::Impl::encode_attention_batch(
 
     const uint32_t query_heads = static_cast<uint32_t>(layer.query_heads);
     const uint32_t key_heads = static_cast<uint32_t>(layer.key_value_heads);
+    const uint32_t prepared_key_heads = owns_kv ? key_heads : 0;
     const uint32_t head_dim = static_cast<uint32_t>(layer.head_dim);
     const uint32_t query_width = query_heads * head_dim;
     const uint32_t key_width = key_heads * head_dim;
@@ -345,13 +381,15 @@ void MetalModel::Impl::encode_attention_batch(
                           batch_projected, rows);
         }
     }
-    encode_matmul(encoder, layer.key, batch_normed, batch_key, rows);
-    encode_matmul(encoder, layer.value, batch_normed, batch_value, rows);
+    if (owns_kv) {
+        encode_matmul(encoder, layer.key, batch_normed, batch_key, rows);
+        encode_matmul(encoder, layer.value, batch_normed, batch_value, rows);
+    }
 
-    const uint32_t head_count = std::max(query_heads, key_heads);
+    const uint32_t head_count = std::max(query_heads, prepared_key_heads);
     const float query_scale = layer.query_scale /
         (1.0f / std::sqrt(static_cast<float>(layer.head_dim)));
-    const bool fused_per_head = !multi &&
+    const bool fused_per_head = owns_kv && !multi &&
         per_head_norm(attention.semantics.query_norm) &&
         per_head_norm(attention.semantics.key_norm);
 
@@ -376,8 +414,10 @@ void MetalModel::Impl::encode_attention_batch(
         };
         normalize(batch_query, layer.query_norm, attention.semantics.query_norm,
                   query_heads, query_width);
-        normalize(batch_key, layer.key_norm, attention.semantics.key_norm,
-                  key_heads, key_width);
+        if (owns_kv) {
+            normalize(batch_key, layer.key_norm, attention.semantics.key_norm,
+                      key_heads, key_width);
+        }
 
         if (multi) {
             const std::array<uint32_t, 3> sections{
@@ -388,7 +428,7 @@ void MetalModel::Impl::encode_attention_batch(
             set_buffer(encoder, batch_key, 1);
             set_bytes(encoder, &rows, sizeof(rows), 2);
             set_bytes(encoder, &query_heads, sizeof(query_heads), 3);
-            set_bytes(encoder, &key_heads, sizeof(key_heads), 4);
+            set_bytes(encoder, &prepared_key_heads, sizeof(prepared_key_heads), 4);
             set_bytes(encoder, &head_dim, sizeof(head_dim), 5);
             set_buffer(encoder, batch_rope_positions, 6);
             set_bytes(encoder, sections.data(), sizeof(sections), 7);
@@ -402,7 +442,7 @@ void MetalModel::Impl::encode_attention_batch(
             set_buffer(encoder, batch_key, 1);
             set_bytes(encoder, &rows, sizeof(rows), 2);
             set_bytes(encoder, &query_heads, sizeof(query_heads), 3);
-            set_bytes(encoder, &key_heads, sizeof(key_heads), 4);
+            set_bytes(encoder, &prepared_key_heads, sizeof(prepared_key_heads), 4);
             set_bytes(encoder, &head_dim, sizeof(head_dim), 5);
             set_bytes(encoder, &base_position, sizeof(base_position), 6);
             set_bytes(encoder, &position_mode, sizeof(position_mode), 7);
@@ -418,7 +458,7 @@ void MetalModel::Impl::encode_attention_batch(
         set_buffer(encoder, layer.key_norm, 3);
         set_bytes(encoder, &rows, sizeof(rows), 4);
         set_bytes(encoder, &query_heads, sizeof(query_heads), 5);
-        set_bytes(encoder, &key_heads, sizeof(key_heads), 6);
+        set_bytes(encoder, &prepared_key_heads, sizeof(prepared_key_heads), 6);
         set_bytes(encoder, &head_dim, sizeof(head_dim), 7);
         if (no_position) {
             set_bytes(encoder, &query_scale, sizeof(query_scale), 8);
@@ -442,16 +482,18 @@ void MetalModel::Impl::encode_attention_batch(
 
     const uint32_t kv_width = key_heads * head_dim;
     const uint32_t page_tokens = static_cast<uint32_t>(layer.page_tokens);
-    set_buffer(encoder, batch_key, 0);
-    set_buffer(encoder, batch_value, 1);
-    set_buffer(encoder, layer.key_cache, 2);
-    set_buffer(encoder, layer.value_cache, 3);
-    set_bytes(encoder, &rows, sizeof(rows), 4);
-    set_bytes(encoder, &base_position, sizeof(base_position), 5);
-    set_bytes(encoder, &kv_width, sizeof(kv_width), 6);
-    set_bytes(encoder, &page_tokens, sizeof(page_tokens), 7);
-    dispatch(encoder, "celeg_store_kv_batch",
-             static_cast<NSUInteger>(rows) * kv_width);
+    if (owns_kv) {
+        set_buffer(encoder, batch_key, 0);
+        set_buffer(encoder, batch_value, 1);
+        set_buffer(encoder, layer.key_cache, 2);
+        set_buffer(encoder, layer.value_cache, 3);
+        set_bytes(encoder, &rows, sizeof(rows), 4);
+        set_bytes(encoder, &base_position, sizeof(base_position), 5);
+        set_bytes(encoder, &kv_width, sizeof(kv_width), 6);
+        set_bytes(encoder, &page_tokens, sizeof(page_tokens), 7);
+        dispatch(encoder, "celeg_store_kv_batch",
+                 static_cast<NSUInteger>(rows) * kv_width);
+    }
 
     const float attention_scale = 1.0f /
         std::sqrt(static_cast<float>(layer.head_dim));
