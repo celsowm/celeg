@@ -32,9 +32,12 @@ void execute_cpu_attention_token(
                     execution.shared.linear.gemv(attention.gate,
                                                  execution.workspace.normed.data(),
                                                  execution.workspace.attention_gate.data());
-                    apply_cpu_attention_output_gate(execution.workspace.op_output.data(),
-                                         execution.workspace.attention_gate.data(),
-                                         static_cast<size_t>(q_width));
+                    apply_cpu_attention_output_gate(
+                        execution.workspace.op_output.data(),
+                        execution.workspace.attention_gate.data(),
+                        static_cast<size_t>(q_width),
+                        layout.output_gate->granularity,
+                        layout.query_heads, layout.head_dim);
                 }
                 execution.shared.linear.gemv(attention.out, execution.workspace.op_output.data(),
                                     execution.workspace.hidden.data());
@@ -195,9 +198,11 @@ void execute_cpu_attention_token(
                                                  execution.workspace.attention_gate.data());
                     gate = execution.workspace.attention_gate.data();
                 }
-                    apply_cpu_attention_output_gate(execution.workspace.op_output.data(),
-                                     gate,
-                                     static_cast<size_t>(q_width));
+                apply_cpu_attention_output_gate(
+                    execution.workspace.op_output.data(), gate,
+                    static_cast<size_t>(q_width),
+                    layout.output_gate->granularity,
+                    layout.query_heads, layout.head_dim);
             }
             execution.shared.linear.gemv(attention.out, execution.workspace.op_output.data(), execution.workspace.hidden.data());
             }
