@@ -27,6 +27,15 @@ bool has_attention_output_transform(const CompiledModelProgram& program) {
         });
 }
 
+void validate_prefix_lm_prompt(const CompiledModelProgram& program,
+                               std::size_t token_count) {
+    const int required = program.required_initial_attention_span();
+    if (required > 0 && token_count < static_cast<std::size_t>(required)) {
+        throw std::invalid_argument(
+            "CUDA Prefix-LM prompt is shorter than the required prefix");
+    }
+}
+
 }
 
 void CudaCompiledModel::validate_token_ids(
@@ -46,6 +55,32 @@ void CudaCompiledModel::prefill(const std::vector<int32_t>& tokens) {
         throw std::invalid_argument("prefill exceeds max_context");
     }
     validate_token_ids(tokens);
+    validate_prefix_lm_prompt(resources_.program_, tokens.size());
+    const bool prefix_lm = resources_.program_.required_initial_attention_span() > 0;
+    if (prefix_lm) {
+        if (resources_.mtp_.available()) {
+            throw std::invalid_argument(
+                "CUDA direct Prefix-LM prefill does not support MTP execution");
+        }
+        if (has_attention_output_transform(resources_.program_)) {
+            throw std::invalid_argument(
+                "CUDA direct Prefix-LM with attention output transforms requires packed prefill");
+        }
+        if (resources_.options().expert_offload.enabled() &&
+            resources_.options().expert_offload.backing == ExpertBackingMode::DiskCached) {
+            throw std::invalid_argument(
+                "CUDA direct Prefix-LM with disk-cached experts requires packed prefill");
+        }
+        const auto begin = std::chrono::steady_clock::now();
+        prefill_batched(tokens);
+        const auto end = std::chrono::steady_clock::now();
+        session_.metrics_.last_prefill_ms =
+            std::chrono::duration<double, std::milli>(end - begin).count();
+        session_.metrics_.prefill_tokens = tokens.size();
+        session_.metrics_.cumulative_decode_ms = 0.0;
+        session_.metrics_.decoded_tokens = 0;
+        return;
+    }
     if (resources_.mtp_.available()) {
         prefill_chunk(tokens, true, true);
         return;
@@ -74,6 +109,11 @@ void CudaCompiledModel::prefill(const std::vector<int32_t>& tokens,
     if (tokens.empty()) throw std::invalid_argument("prefill needs at least one token");
     if (tokens.size() > static_cast<size_t>(max_context_)) {
         throw std::invalid_argument("prefill exceeds max_context");
+    }
+    validate_prefix_lm_prompt(resources_.program_, tokens.size());
+    if (resources_.program_.required_initial_attention_span() > 0) {
+        throw std::invalid_argument(
+            "CUDA Prefix-LM prompt embeddings require a batched embedding prefill path");
     }
     if (!embeddings.empty() &&
         (embeddings.width <= 0 ||
@@ -123,6 +163,12 @@ void CudaCompiledModel::prefill_chunk(const std::vector<int32_t>& tokens,
         throw std::invalid_argument("prefill_chunk needs at least one token");
     }
     validate_token_ids(tokens);
+    const int required_prefix = resources_.program_.required_initial_attention_span();
+    if (required_prefix > 0 &&
+        (begin || session_.position_ < required_prefix)) {
+        throw std::invalid_argument(
+            "CUDA Prefix-LM initial prefix cannot use token-wise prefill_chunk");
+    }
     if (begin) {
         reset();
         session_.metrics_ = {};
