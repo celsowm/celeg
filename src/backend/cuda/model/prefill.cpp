@@ -2,6 +2,7 @@
 #include "kernels/kernels.cuh"
 #include "backend/cuda/paged_kv.hpp"
 #include "backend/cuda/phase_profile.hpp"
+#include "backend/cuda/runtime/prefill_policy.hpp"
 #include "backend/cuda/weight_layout.hpp"
 #include "backend/cuda/moe.hpp"
 
@@ -57,19 +58,24 @@ void CudaCompiledModel::prefill(const std::vector<int32_t>& tokens) {
     validate_token_ids(tokens);
     validate_prefix_lm_prompt(resources_.program_, tokens.size());
     const bool prefix_lm = resources_.program_.required_initial_attention_span() > 0;
-    if (prefix_lm) {
+    const bool full_prompt_attention =
+        cuda_requires_full_prompt_prefill(resources_.program_);
+    if (prefix_lm || full_prompt_attention) {
         if (resources_.mtp_.available()) {
-            throw std::invalid_argument(
-                "CUDA direct Prefix-LM prefill does not support MTP execution");
+            throw std::invalid_argument(full_prompt_attention
+                ? "CUDA direct bidirectional prefill does not support MTP execution"
+                : "CUDA direct Prefix-LM prefill does not support MTP execution");
         }
         if (has_attention_output_transform(resources_.program_)) {
-            throw std::invalid_argument(
-                "CUDA direct Prefix-LM with attention output transforms requires packed prefill");
+            throw std::invalid_argument(full_prompt_attention
+                ? "CUDA direct bidirectional prefill does not support attention output transforms"
+                : "CUDA direct Prefix-LM with attention output transforms requires packed prefill");
         }
         if (resources_.options().expert_offload.enabled() &&
             resources_.options().expert_offload.backing == ExpertBackingMode::DiskCached) {
-            throw std::invalid_argument(
-                "CUDA direct Prefix-LM with disk-cached experts requires packed prefill");
+            throw std::invalid_argument(full_prompt_attention
+                ? "CUDA direct bidirectional prefill does not support disk-cached experts"
+                : "CUDA direct Prefix-LM with disk-cached experts requires packed prefill");
         }
         const auto begin = std::chrono::steady_clock::now();
         prefill_batched(tokens);
@@ -111,6 +117,10 @@ void CudaCompiledModel::prefill(const std::vector<int32_t>& tokens,
         throw std::invalid_argument("prefill exceeds max_context");
     }
     validate_prefix_lm_prompt(resources_.program_, tokens.size());
+    if (cuda_requires_full_prompt_prefill(resources_.program_)) {
+        throw std::invalid_argument(
+            "CUDA bidirectional prompt embeddings require a batched embedding prefill path");
+    }
     if (resources_.program_.required_initial_attention_span() > 0) {
         throw std::invalid_argument(
             "CUDA Prefix-LM prompt embeddings require a batched embedding prefill path");
@@ -163,6 +173,10 @@ void CudaCompiledModel::prefill_chunk(const std::vector<int32_t>& tokens,
         throw std::invalid_argument("prefill_chunk needs at least one token");
     }
     validate_token_ids(tokens);
+    if (cuda_requires_full_prompt_prefill(resources_.program_)) {
+        throw std::invalid_argument(
+            "CUDA bidirectional attention cannot use token-wise prefill_chunk");
+    }
     const int required_prefix = resources_.program_.required_initial_attention_span();
     if (required_prefix > 0 &&
         (begin || session_.position_ < required_prefix)) {
