@@ -13,7 +13,6 @@ AttentionCapability CudaCompiledModel::token_attention_plan(
         kv.position_source,
         resources_.options().fast_attention,
         kv.paged() && use_segmented_attention(session_.position_),
-        attention.alibi_slopes.data() != nullptr,
         owner_layout.head_dim).plan;
 }
 
