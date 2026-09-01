@@ -73,6 +73,15 @@ void launch_gqa_decode_alibi_int8_batch_ptrs(const GqaBatchPtrInt8Args& args);
 void launch_gqa_decode_alibi_paged_batch(const GqaPagedArgs& args);
 void launch_gqa_decode_alibi_int8_paged_batch(const GqaPagedInt8Args& args);
 
+void launch_gqa_decode_relative_device(const GqaContiguousArgs& args);
+void launch_gqa_decode_relative_int8_device(const GqaContiguousInt8Args& args);
+void launch_gqa_prefill_relative(const GqaContiguousArgs& args);
+void launch_gqa_prefill_relative_int8(const GqaContiguousInt8Args& args);
+void launch_gqa_decode_relative_batch_ptrs(const GqaBatchPtrArgs& args);
+void launch_gqa_decode_relative_int8_batch_ptrs(const GqaBatchPtrInt8Args& args);
+void launch_gqa_decode_relative_paged_batch(const GqaPagedArgs& args);
+void launch_gqa_decode_relative_int8_paged_batch(const GqaPagedInt8Args& args);
+
 void launch_latent_attention_device(const LatentContiguousArgs& args);
 void launch_latent_attention_prefill(const LatentContiguousArgs& args);
 void launch_latent_attention_paged_batch(const LatentPagedArgs& args);
