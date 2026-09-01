@@ -20,7 +20,8 @@ foreach(test_name IN ITEMS
     cpu_granite_test
     cpu_mrope_test
     cpu_shared_kv_test
-    cpu_projected_latent_test)
+    cpu_projected_latent_test
+    cpu_factorized_latent_test)
     if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/cpu/${test_name}.cpp")
         add_executable(${test_name} tests/cpu/${test_name}.cpp)
         target_include_directories(${test_name} PRIVATE include src tests)
