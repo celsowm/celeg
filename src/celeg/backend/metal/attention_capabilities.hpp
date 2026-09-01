@@ -63,11 +63,8 @@ inline void validate_metal_attention_capabilities(
                 throw std::invalid_argument(
                     "Metal shared KV consumer geometry does not match its publisher");
             }
-            if (!std::holds_alternative<NoAttentionOutputTransformSpec>(
-                    attention.output_transform)) {
-                throw std::invalid_argument(
-                    "Metal shared KV consumers currently do not support output transforms");
-            }
+            throw std::invalid_argument(
+                "Metal shared KV consumers are validated but not executable yet");
         }
         if (!std::holds_alternative<OrdinaryKvStateSpec>(attention.state)) {
             throw std::invalid_argument(
