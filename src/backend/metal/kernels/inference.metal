@@ -15,3 +15,4 @@
 #include "inference/position.metal"
 #include "inference/no_position.metal"
 #include "inference/qk_position.metal"
+#include "inference/qk_norm.metal"
