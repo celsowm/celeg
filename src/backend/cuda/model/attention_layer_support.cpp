@@ -43,10 +43,13 @@ const __nv_bfloat16* require_cuda_factorized_latent_bindings(
         !attention.latent_query_norm ||
         !attention.latent_key_projection ||
         !attention.latent_key_norm ||
-        !attention.latent_expansion ||
-        !attention.gate || !attention.out) {
+        !attention.latent_expansion || !attention.out) {
         throw std::logic_error(
             "CUDA factorized latent attention has incomplete bindings");
+    }
+    if (attention.layout.output_gate.has_value() && !attention.gate) {
+        throw std::logic_error(
+            "CUDA factorized latent attention is missing its output gate binding");
     }
 
     const auto* expansion =
