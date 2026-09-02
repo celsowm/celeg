@@ -53,8 +53,10 @@ jobs:
         run: python scripts/metal_shortconv_batch_parallel.py --build-only
       - name: Compile one-exp attention harness
         run: python scripts/metal_attention_one_exp.py --build-only
+      - name: Compile materialized simdgroup attention harness
+        run: python scripts/metal_attention_materialized_simdgroup.py --build-only
       - name: Check Metal policy benchmark runner
-        run: python -m py_compile scripts/metal_prefill_policy_compare.py scripts/metal_prefill_next_relaxed.py scripts/metal_counter_capabilities.py scripts/metal_attention_one_exp.py scripts/metal_shortconv_batch_parallel.py scripts/metal_q4k_k32_llama_relaxed.py
+        run: python -m py_compile scripts/metal_prefill_policy_compare.py scripts/metal_prefill_next_relaxed.py scripts/metal_counter_capabilities.py scripts/metal_attention_one_exp.py scripts/metal_attention_materialized_simdgroup.py scripts/metal_shortconv_batch_parallel.py scripts/metal_q4k_k32_llama_relaxed.py
       - name: Build Metal backend and test targets
         run: python scripts/dev.py build --backend metal --celeg-tests off --build-type Release --jobs 2
       - name: Upload diagnostics
