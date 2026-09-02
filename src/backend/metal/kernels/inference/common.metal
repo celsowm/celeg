@@ -153,8 +153,7 @@ void celeg_attention_span(device const float* query,
     for (uint position = span.start + simd; position < span.sequence_length;
          position += simd_count) {
         const size_t key_base =
-            (static_cast<size_t>(position / span.page_tokens) * span.page_tokens +
-             position % span.page_tokens) * key_width + key_offset;
+            static_cast<size_t>(position) * key_width + key_offset;
         float partial = 0.0f;
         for (uint slot = 0; slot < kCelegAttentionSlots; ++slot) {
             const uint dimension = lane + slot * 32u;
