@@ -45,10 +45,10 @@ def benchmark(build_dir: pathlib.Path, output: pathlib.Path, *, relaxed: bool) -
 
 def prefill_dispatch_profile(
     build_dir: pathlib.Path, checkpoint: pathlib.Path, *, relaxed: bool
-) -> tuple[list[tuple[str, int]], list[tuple[str, float]]]:
+) -> list[tuple[str, int]]:
     env = policy_env(relaxed=relaxed)
     env["CELEG_METAL_DISPATCH_PROFILE"] = "1"
-    env["CELEG_METAL_GPU_PROFILE"] = "1"
+    env.pop("CELEG_METAL_GPU_PROFILE", None)
     binary = build_dir / "celeg-metal-bench"
     result = subprocess.run([
         str(binary),
@@ -63,60 +63,21 @@ def prefill_dispatch_profile(
         raise RuntimeError(result.stdout + result.stderr)
 
     histogram: dict[str, int] = {}
-    gpu_ms: dict[str, float] = {}
-    section = ""
     for line in result.stderr.splitlines():
-        if line == "metal gpu dispatch profile":
-            section = "gpu"
-            continue
-        if line == "metal dispatch profile":
-            section = "count"
-            continue
-        if section == "gpu":
-            match = re.fullmatch(r"\s{2}(\S+)=([0-9.eE+-]+)ms", line)
-            if match:
-                gpu_ms[match.group(1)] = gpu_ms.get(match.group(1), 0.0) + float(match.group(2))
-                continue
-        if section == "count":
-            match = re.fullmatch(r"\s{2}(\S+)=(\d+)", line)
-            if match:
-                histogram[match.group(1)] = histogram.get(match.group(1), 0) + int(match.group(2))
-
-    if histogram and not gpu_ms:
-        raise RuntimeError(
-            "Metal dispatch counts were captured but no valid GPU timestamps were resolved:\n"
-            + result.stderr
-        )
-
-    counts = sorted(histogram.items(), key=lambda item: (-item[1], item[0]))
-    timings = sorted(gpu_ms.items(), key=lambda item: (-item[1], item[0]))
-    return counts, timings
+        match = re.fullmatch(r"\s{2}(\S+)=(\d+)", line)
+        if match:
+            histogram[match.group(1)] = histogram.get(match.group(1), 0) + int(match.group(2))
+    return sorted(histogram.items(), key=lambda item: (-item[1], item[0]))
 
 
 def metric(report: dict[str, object], name: str) -> float:
     return float(report[name])
 
 
-def print_profile(
-    label: str,
-    counts: list[tuple[str, int]],
-    timings: list[tuple[str, float]],
-) -> None:
-    gpu_by_name = dict(timings)
-    names = [name for name, _ in timings]
-    for name, _ in counts:
-        if name not in gpu_by_name:
-            names.append(name)
-    count_by_name = dict(counts)
-
-    print(f"\n{label} prefill GPU dispatch profile")
-    print(f"  {'kernel':48} {'count':>7} {'gpu ms':>10}")
-    for name in names:
-        timing = gpu_by_name.get(name)
-        timing_text = f"{timing:10.3f}" if timing is not None else f"{'n/a':>10}"
-        print(f"  {name:48} {count_by_name.get(name, 0):7d} {timing_text}")
-    if timings:
-        print(f"  {'TOTAL SAMPLED':48} {'':7} {sum(value for _, value in timings):10.3f}")
+def print_profile(label: str, entries: list[tuple[str, int]]) -> None:
+    print(f"\n{label} prefill dispatch profile")
+    for name, count in entries:
+        print(f"  {name}={count}")
 
 
 def main() -> int:
@@ -159,14 +120,14 @@ def main() -> int:
     print(f"relaxed result: {RELAXED_RESULT}")
 
     checkpoint = pathlib.Path(str(strict["checkpoint"]))
-    strict_counts, strict_timings = prefill_dispatch_profile(
-        build_dir, checkpoint, relaxed=False
+    print_profile(
+        "strict",
+        prefill_dispatch_profile(build_dir, checkpoint, relaxed=False),
     )
-    relaxed_counts, relaxed_timings = prefill_dispatch_profile(
-        build_dir, checkpoint, relaxed=True
+    print_profile(
+        "relaxed",
+        prefill_dispatch_profile(build_dir, checkpoint, relaxed=True),
     )
-    print_profile("strict", strict_counts, strict_timings)
-    print_profile("relaxed", relaxed_counts, relaxed_timings)
     return 0
 
 
