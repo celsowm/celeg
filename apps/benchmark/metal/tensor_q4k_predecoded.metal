@@ -22,7 +22,7 @@ inline void celeg_q4k_predecode32(device half* destination,
     const float bias = dmin * static_cast<float>(minimum);
     const device uchar* qs = block + 16 + (sub >> 1) * 32;
     const bool high = (sub & 1u) != 0u;
-    #pragma unroll full
+    #pragma unroll
     for (uint index = 0; index < 32u; ++index) {
         const uint packed = qs[index];
         const uint value = high ? (packed >> 4) : (packed & 0x0fu);
