@@ -37,6 +37,8 @@ jobs:
         run: python scripts/metal_q4k_stage128.py --build-only
       - name: Compile static-full Q4_K tensor harness
         run: python scripts/metal_q4k_static_full.py --build-only
+      - name: Compile static-stage128 Q4_K tensor harness
+        run: python scripts/metal_q4k_static_stage128.py --build-only
       - name: Compile vectorized K32 Q4_K tensor harness
         run: python scripts/metal_q4k_k32_vector.py --build-only
       - name: Compile vectorized K64 Q4_K tensor harness
