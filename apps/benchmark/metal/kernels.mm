@@ -119,7 +119,6 @@ constexpr uint32_t kPrefillIntermediate = 4608;
 constexpr uint32_t kPrefillQueryHeads = 16;
 constexpr uint32_t kPrefillKeyHeads = 8;
 constexpr uint32_t kPrefillHeadDim = 64;
-constexpr uint32_t kPrefillPageTokens = 16;
 
 class Harness {
 public:
@@ -371,6 +370,8 @@ std::vector<Row> measure_prefill_aux(Harness& harness) {
     id<MTLBuffer> residual = harness.float_buffer(hidden_count);
     id<MTLBuffer> hidden_output = harness.zero_buffer(
         static_cast<size_t>(hidden_count) * sizeof(float));
+    id<MTLBuffer> normed_output = harness.zero_buffer(
+        static_cast<size_t>(hidden_count) * sizeof(float));
     id<MTLBuffer> norm_weight = harness.float_buffer(kPrefillHidden);
     const float epsilon = 1.0e-5f;
 
@@ -391,31 +392,40 @@ std::vector<Row> measure_prefill_aux(Harness& harness) {
     rows.push_back({"celeg_rmsnorm_batch", "pp512_hidden1024", rmsnorm_traffic,
                     rmsnorm_ms, static_cast<double>(rmsnorm_traffic) / (rmsnorm_ms * 1.0e6)});
 
-    id<MTLComputePipelineState> residual_state = harness.pipeline("celeg_residual_batch");
+    id<MTLComputePipelineState> residual_norm =
+        harness.pipeline("celeg_residual_rmsnorm_batch_cached");
     const float multiplier = 1.0f;
-    const double residual_ms = harness.time_dispatches(
+    const NSUInteger residual_scratch = kPrefillHidden * sizeof(float);
+    const double residual_norm_ms = harness.time_dispatches(
         5, 16, ^(id<MTLComputeCommandEncoder> encoder) {
-            [encoder setComputePipelineState:residual_state];
+            [encoder setComputePipelineState:residual_norm];
             [encoder setBuffer:hidden offset:0 atIndex:0];
             [encoder setBuffer:residual offset:0 atIndex:1];
-            [encoder setBuffer:hidden_output offset:0 atIndex:2];
-            [encoder setBytes:&hidden_count length:sizeof(hidden_count) atIndex:3];
-            [encoder setBytes:&multiplier length:sizeof(multiplier) atIndex:4];
-            [encoder dispatchThreads:MTLSizeMake(hidden_count, 1, 1)
-               threadsPerThreadgroup:MTLSizeMake(
-                   std::min<NSUInteger>(hidden_count,
-                                        residual_state.maxTotalThreadsPerThreadgroup), 1, 1)];
+            [encoder setBuffer:norm_weight offset:0 atIndex:2];
+            [encoder setBuffer:hidden_output offset:0 atIndex:3];
+            [encoder setBuffer:normed_output offset:0 atIndex:4];
+            [encoder setBytes:&kPrefillTokens length:sizeof(kPrefillTokens) atIndex:5];
+            [encoder setBytes:&kPrefillHidden length:sizeof(kPrefillHidden) atIndex:6];
+            [encoder setBytes:&multiplier length:sizeof(multiplier) atIndex:7];
+            [encoder setBytes:&epsilon length:sizeof(epsilon) atIndex:8];
+            [encoder setThreadgroupMemoryLength:residual_scratch atIndex:0];
+            [encoder dispatchThreadgroups:MTLSizeMake(kPrefillTokens, 1, 1)
+                    threadsPerThreadgroup:MTLSizeMake(256, 1, 1)];
         });
-    const size_t residual_traffic = static_cast<size_t>(hidden_count) * sizeof(float) * 3;
-    rows.push_back({"celeg_residual_batch", "pp512_hidden1024", residual_traffic,
-                    residual_ms,
-                    static_cast<double>(residual_traffic) / (residual_ms * 1.0e6)});
+    const size_t residual_norm_traffic =
+        static_cast<size_t>(hidden_count) * sizeof(float) * 5;
+    rows.push_back({"celeg_residual_rmsnorm_batch_cached", "pp512_hidden1024",
+                    residual_norm_traffic, residual_norm_ms,
+                    static_cast<double>(residual_norm_traffic) /
+                        (residual_norm_ms * 1.0e6)});
 
     const uint32_t swiglu_count = kPrefillTokens * kPrefillIntermediate;
     id<MTLBuffer> gate_up = harness.float_buffer(static_cast<size_t>(swiglu_count) * 2);
     id<MTLBuffer> activated = harness.zero_buffer(
         static_cast<size_t>(swiglu_count) * sizeof(float));
-    id<MTLComputePipelineState> swiglu = harness.pipeline("celeg_swiglu_batch");
+    id<MTLComputePipelineState> swiglu = harness.pipeline("celeg_swiglu_batch_2d");
+    const NSUInteger swiglu_threads = std::min<NSUInteger>(
+        kPrefillIntermediate, swiglu.maxTotalThreadsPerThreadgroup);
     const double swiglu_ms = harness.time_dispatches(
         5, 8, ^(id<MTLComputeCommandEncoder> encoder) {
             [encoder setComputePipelineState:swiglu];
@@ -423,13 +433,11 @@ std::vector<Row> measure_prefill_aux(Harness& harness) {
             [encoder setBuffer:activated offset:0 atIndex:1];
             [encoder setBytes:&kPrefillTokens length:sizeof(kPrefillTokens) atIndex:2];
             [encoder setBytes:&kPrefillIntermediate length:sizeof(kPrefillIntermediate) atIndex:3];
-            [encoder dispatchThreads:MTLSizeMake(swiglu_count, 1, 1)
-               threadsPerThreadgroup:MTLSizeMake(
-                   std::min<NSUInteger>(swiglu_count, swiglu.maxTotalThreadsPerThreadgroup),
-                   1, 1)];
+            [encoder dispatchThreads:MTLSizeMake(kPrefillIntermediate, kPrefillTokens, 1)
+               threadsPerThreadgroup:MTLSizeMake(swiglu_threads, 1, 1)];
         });
     const size_t swiglu_traffic = static_cast<size_t>(swiglu_count) * sizeof(float) * 3;
-    rows.push_back({"celeg_swiglu_batch", "pp512_intermediate4608", swiglu_traffic,
+    rows.push_back({"celeg_swiglu_batch_2d", "pp512_intermediate4608", swiglu_traffic,
                     swiglu_ms, static_cast<double>(swiglu_traffic) / (swiglu_ms * 1.0e6)});
 
     const uint32_t query_width = kPrefillQueryHeads * kPrefillHeadDim;
@@ -442,7 +450,7 @@ std::vector<Row> measure_prefill_aux(Harness& harness) {
         static_cast<size_t>(kPrefillTokens) * key_width);
     id<MTLBuffer> query_weight = harness.float_buffer(kPrefillHeadDim);
     id<MTLBuffer> key_weight = harness.float_buffer(kPrefillHeadDim);
-    id<MTLComputePipelineState> qk = harness.pipeline("celeg_qk_norm_rope_batch");
+    id<MTLComputePipelineState> qk = harness.pipeline("celeg_qk_norm_rope_batch_split");
     const uint32_t base_position = 0;
     const float theta = 10000.0f;
     const float query_scale = 1.0f;
@@ -470,7 +478,7 @@ std::vector<Row> measure_prefill_aux(Harness& harness) {
     const size_t qk_elements = static_cast<size_t>(kPrefillTokens) *
         (query_width + key_width);
     const size_t qk_traffic = qk_elements * sizeof(float) * 2;
-    rows.push_back({"celeg_qk_norm_rope_batch", "pp512_q16_kv8_hd64", qk_traffic,
+    rows.push_back({"celeg_qk_norm_rope_batch_split", "pp512_q16_kv8_hd64", qk_traffic,
                     qk_ms, static_cast<double>(qk_traffic) / (qk_ms * 1.0e6)});
 
     id<MTLBuffer> value = harness.float_buffer(
@@ -479,7 +487,11 @@ std::vector<Row> measure_prefill_aux(Harness& harness) {
         static_cast<size_t>(kPrefillTokens) * key_width * sizeof(float));
     id<MTLBuffer> value_cache = harness.zero_buffer(
         static_cast<size_t>(kPrefillTokens) * key_width * sizeof(float));
-    id<MTLComputePipelineState> store = harness.pipeline("celeg_store_kv_batch");
+    id<MTLComputePipelineState> store = harness.pipeline("celeg_store_kv_batch_2d");
+    constexpr NSUInteger store_threads = 256;
+    if (store.maxTotalThreadsPerThreadgroup < store_threads) {
+        throw std::runtime_error("batch KV store benchmark needs 256 Metal threads");
+    }
     const uint32_t store_count = kPrefillTokens * key_width;
     const double store_ms = harness.time_dispatches(
         5, 8, ^(id<MTLComputeCommandEncoder> encoder) {
@@ -491,14 +503,12 @@ std::vector<Row> measure_prefill_aux(Harness& harness) {
             [encoder setBytes:&kPrefillTokens length:sizeof(kPrefillTokens) atIndex:4];
             [encoder setBytes:&base_position length:sizeof(base_position) atIndex:5];
             [encoder setBytes:&key_width length:sizeof(key_width) atIndex:6];
-            [encoder setBytes:&kPrefillPageTokens length:sizeof(kPrefillPageTokens) atIndex:7];
-            [encoder dispatchThreads:MTLSizeMake(store_count, 1, 1)
-               threadsPerThreadgroup:MTLSizeMake(
-                   std::min<NSUInteger>(store_count, store.maxTotalThreadsPerThreadgroup),
-                   1, 1)];
+            [encoder dispatchThreadgroups:MTLSizeMake(
+                (key_width + store_threads - 1u) / store_threads, kPrefillTokens, 1)
+               threadsPerThreadgroup:MTLSizeMake(store_threads, 1, 1)];
         });
     const size_t store_traffic = static_cast<size_t>(store_count) * sizeof(float) * 4;
-    rows.push_back({"celeg_store_kv_batch", "pp512_kv8_hd64", store_traffic,
+    rows.push_back({"celeg_store_kv_batch_2d", "pp512_kv8_hd64", store_traffic,
                     store_ms, static_cast<double>(store_traffic) / (store_ms * 1.0e6)});
 
     return rows;
