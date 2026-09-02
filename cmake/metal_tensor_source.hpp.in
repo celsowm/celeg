@@ -4,5 +4,6 @@ namespace celeg::metal_detail {
 inline constexpr const char* kTensorShader = R"CELEGTENSOR(
 @CELEG_METAL_TENSOR_SOURCE@
 @CELEG_METAL_TENSOR_Q4K_STATIC_STAGE128_SOURCE@
+@CELEG_METAL_TENSOR_Q4K_RELAXED_SOURCE@
 )CELEGTENSOR";
 }
