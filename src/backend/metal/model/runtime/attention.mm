@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdlib>
 #include <stdexcept>
 
 namespace celeg {
@@ -36,11 +37,20 @@ bool no_position_encoding(const CompiledAttentionProgram& attention) {
     return std::holds_alternative<NoPositionEncodingSpec>(attention.semantics.position);
 }
 
+bool relaxed_attention_enabled() {
+    const char* value = std::getenv("CELEG_METAL_TENSOR_RELAXED_PRECISION");
+    return value != nullptr && value[0] == '1' && value[1] == '\0';
+}
+
 /// @brief Simdgroups per attention threadgroup; see @c celeg_attention_span.
 constexpr uint32_t kAttentionSimdgroups = 8;
 
 /// @brief Widest head dimension @c celeg_attention_span keeps in registers.
 constexpr uint32_t kAttentionMaxHeadDim = 32 * 8;
+
+constexpr NSUInteger kTiledAttentionThreads = 128;
+constexpr NSUInteger kTiledAttentionQueries = 32;
+constexpr NSUInteger kTiledAttentionSharedFloats = 2400;
 
 bool split_half_rope(const CompiledAttentionProgram& attention) {
     const RopePositionSpec* rope = attention.semantics.rope_position();
@@ -539,26 +549,52 @@ void MetalModel::Impl::encode_attention_batch(
     set_bytes(encoder, &head_dim, sizeof(head_dim), 8);
     set_bytes(encoder, &attention_scale, sizeof(attention_scale), 9);
     set_bytes(encoder, &page_tokens, sizeof(page_tokens), 10);
-    std::string_view attention_kernel = "celeg_attention_batch";
-    if (relative) {
-        const uint32_t bucket_count = static_cast<uint32_t>(relative->bucket_count);
-        const uint32_t max_distance = static_cast<uint32_t>(relative->max_distance);
-        const uint32_t bidirectional = relative->bidirectional ? 1u : 0u;
-        set_bytes(encoder, &window_size, sizeof(window_size), 11);
-        set_buffer(encoder, layer.relative_bias, 12);
-        set_bytes(encoder, &bucket_count, sizeof(bucket_count), 13);
-        set_bytes(encoder, &max_distance, sizeof(max_distance), 14);
-        set_bytes(encoder, &bidirectional, sizeof(bidirectional), 15);
-        attention_kernel = "celeg_attention_batch_relative_bias";
-    } else if (alibi) {
-        set_bytes(encoder, &window_size, sizeof(window_size), 11);
-        set_buffer(encoder, layer.alibi_slopes, 12);
-        attention_kernel = "celeg_attention_batch_alibi";
-    } else if (window_size > 0) {
-        set_bytes(encoder, &window_size, sizeof(window_size), 11);
-        attention_kernel = "celeg_attention_batch_sliding";
+
+    bool tiled_encoded = false;
+    const bool tiled_candidate =
+        relaxed_attention_enabled() && relative == nullptr && alibi == nullptr &&
+        window_size == 0u && base_position == 0u && head_dim == 64u &&
+        (rows % kTiledAttentionQueries) == 0u;
+    if (tiled_candidate) {
+        id<MTLComputePipelineState> state =
+            pipeline("celeg_attention_tiled_simdgroup");
+        const NSUInteger shared_bytes =
+            kTiledAttentionSharedFloats * sizeof(float);
+        if (state.maxTotalThreadsPerThreadgroup >= kTiledAttentionThreads &&
+            state.staticThreadgroupMemoryLength + shared_bytes <=
+                device.maxThreadgroupMemoryLength) {
+            [encoder setComputePipelineState:state];
+            [encoder setThreadgroupMemoryLength:shared_bytes atIndex:0];
+            [encoder dispatchThreadgroups:MTLSizeMake(
+                query_heads, rows / kTiledAttentionQueries, 1)
+                   threadsPerThreadgroup:MTLSizeMake(kTiledAttentionThreads, 1, 1)];
+            record_dispatch("celeg_attention_tiled_simdgroup");
+            tiled_encoded = true;
+        }
     }
-    encode_attention_span(encoder, attention_kernel, query_heads, rows, head_dim);
+
+    if (!tiled_encoded) {
+        std::string_view attention_kernel = "celeg_attention_batch";
+        if (relative) {
+            const uint32_t bucket_count = static_cast<uint32_t>(relative->bucket_count);
+            const uint32_t max_distance = static_cast<uint32_t>(relative->max_distance);
+            const uint32_t bidirectional = relative->bidirectional ? 1u : 0u;
+            set_bytes(encoder, &window_size, sizeof(window_size), 11);
+            set_buffer(encoder, layer.relative_bias, 12);
+            set_bytes(encoder, &bucket_count, sizeof(bucket_count), 13);
+            set_bytes(encoder, &max_distance, sizeof(max_distance), 14);
+            set_bytes(encoder, &bidirectional, sizeof(bidirectional), 15);
+            attention_kernel = "celeg_attention_batch_relative_bias";
+        } else if (alibi) {
+            set_bytes(encoder, &window_size, sizeof(window_size), 11);
+            set_buffer(encoder, layer.alibi_slopes, 12);
+            attention_kernel = "celeg_attention_batch_alibi";
+        } else if (window_size > 0) {
+            set_bytes(encoder, &window_size, sizeof(window_size), 11);
+            attention_kernel = "celeg_attention_batch_sliding";
+        }
+        encode_attention_span(encoder, attention_kernel, query_heads, rows, head_dim);
+    }
 
     if (const auto* transform = attention_output_transform(attention)) {
         set_buffer(encoder, batch_operation, 0);
