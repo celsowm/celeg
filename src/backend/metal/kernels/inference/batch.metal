@@ -290,8 +290,7 @@ kernel void celeg_store_kv_batch(device const float* key [[buffer(0)]],
     const uint column = index % width;
     if (row >= rows) return;
     const uint position = base_position + row;
-    const size_t offset = (static_cast<size_t>(position / page_tokens) * page_tokens +
-        position % page_tokens) * width + column;
+    const size_t offset = static_cast<size_t>(position) * width + column;
     key_cache[offset] = key[static_cast<size_t>(row) * width + column];
     value_cache[offset] = value[static_cast<size_t>(row) * width + column];
 }
