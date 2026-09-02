@@ -23,7 +23,7 @@ struct CelegTensorQ4KVector {
         const device uchar* qs = block + 16 + (sub >> 1) * 32;
         const bool high = (sub & 1u) != 0u;
 
-        #pragma unroll full
+        #pragma unroll
         for (uint group = 0; group < 8u; ++group) {
             const uchar4 packed =
                 *reinterpret_cast<device const uchar4*>(qs + group * 4u);
