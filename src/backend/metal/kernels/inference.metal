@@ -13,6 +13,7 @@
 #include "inference/batch.metal"
 #undef celeg_attention_batch
 #include "inference/attention_one_exp.metal"
+#include "inference/attention_tiled_simdgroup.metal"
 #include "inference/kv_store.metal"
 #include "inference/feed_forward.metal"
 #include "inference/normalization.metal"
