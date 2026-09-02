@@ -22,6 +22,13 @@ def build() -> None:
     BUILD_DIR.mkdir(parents=True, exist_ok=True)
     source = BASE_HOST_SOURCE.read_text(encoding="utf-8")
     source = source.replace("4608", "6656")
+    # Exercise the Q4_K minimum/bias term as well as the scale term. The base
+    # relaxed benchmark intentionally used dmin=0, which was too weak a gate
+    # for promoting a decoder rewrite into production.
+    source = source.replace(
+        "block[2] = 0x00;\n    block[3] = 0x00;  // zero minimum term",
+        "block[2] = 0x00;\n    block[3] = 0x34;  // half(0.25), non-zero minimum term",
+    )
     source = source.replace(
         "tensor_relaxed_precision.metal", "tensor_q4k_k64_vector.metal"
     )
