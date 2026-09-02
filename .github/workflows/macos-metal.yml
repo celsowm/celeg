@@ -39,12 +39,16 @@ jobs:
         run: python scripts/metal_q4k_static_full.py --build-only
       - name: Compile static-stage128 Q4_K tensor harness
         run: python scripts/metal_q4k_static_stage128.py --build-only
+      - name: Compile strided static-stage128 Q4_K harness
+        run: python scripts/metal_q4k_static_stage128_strided.py --build-only
       - name: Compile vectorized K32 Q4_K tensor harness
         run: python scripts/metal_q4k_k32_vector.py --build-only
       - name: Compile vectorized K64 Q4_K tensor harness
         run: python scripts/metal_q4k_k64_vector.py --build-only
       - name: Compile predecoded Q4_K tensor harness
         run: python scripts/metal_q4k_predecoded.py --build-only
+      - name: Check Metal policy benchmark runner
+        run: python -m py_compile scripts/metal_prefill_policy_compare.py
       - name: Build Metal backend and test targets
         run: python scripts/dev.py build --backend metal --celeg-tests off --build-type Release --jobs 2
       - name: Upload diagnostics
