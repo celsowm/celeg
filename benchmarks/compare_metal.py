@@ -3,6 +3,7 @@
 import argparse
 import hashlib
 import json
+import os
 import platform
 import statistics
 import subprocess
@@ -89,6 +90,16 @@ def parse_args():
     parser.add_argument("--warmup", type=int, default=5)
     parser.add_argument("--repetitions", type=int, default=15)
     parser.add_argument("--storage-mode", choices=["shared", "private"], default="shared")
+    parser.add_argument(
+        "--celeg-policy",
+        choices=["strict", "relaxed"],
+        default="relaxed",
+        help=(
+            "Celeg numerical policy. 'relaxed' enables the explicit Metal fast path "
+            "used for apples-to-apples performance comparison with llama.cpp TensorOps; "
+            "'strict' preserves Celeg's default numerical contract."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -107,12 +118,22 @@ def resolve_models(model_dir, requested):
     return [model for model in models if model.name in selected]
 
 
-def run_json(command):
+def celeg_env(policy):
+    env = os.environ.copy()
+    if policy == "relaxed":
+        env["CELEG_METAL_TENSOR_RELAXED_PRECISION"] = "1"
+    else:
+        env.pop("CELEG_METAL_TENSOR_RELAXED_PRECISION", None)
+    return env
+
+
+def run_json(command, *, env=None):
     process = subprocess.run(
         [str(value) for value in command],
         capture_output=True,
         text=True,
         check=False,
+        env=env,
     )
     if process.returncode != 0:
         detail = process.stderr.strip().splitlines()
@@ -124,10 +145,13 @@ def run_json(command):
         raise RuntimeError(f"invalid JSON: {error}") from error
 
 
-def run_warmups(celeg_command, llama_command, warmup):
+def run_warmups(celeg_command, llama_command, warmup, celeg_process_env):
     if warmup <= 0:
         return
-    run_json([*celeg_command, "--warmup", warmup, "--repetitions", 1])
+    run_json(
+        [*celeg_command, "--warmup", warmup, "--repetitions", 1],
+        env=celeg_process_env,
+    )
     run_json([*llama_command, "-r", warmup, "--no-warmup"])
 
 
@@ -184,6 +208,7 @@ def collect_workload(model, args, workload):
     context = workload["context"]
     prompt_tokens = workload["prompt_tokens"]
     decode_tokens = workload["decode_tokens"]
+    celeg_process_env = celeg_env(args.celeg_policy)
     celeg_command = [
         args.celeg,
         "--model", model,
@@ -205,7 +230,7 @@ def collect_workload(model, args, workload):
         "-ngl", 99,
         "-o", "json",
     ]
-    run_warmups(celeg_command, llama_command, args.warmup)
+    run_warmups(celeg_command, llama_command, args.warmup, celeg_process_env)
     celeg_samples = []
     llama_samples = []
     order = []
@@ -216,7 +241,10 @@ def collect_workload(model, args, workload):
         for engine, command in commands:
             order.append(engine)
             if engine == "celeg":
-                result = run_json([*command, "--warmup", 0, "--repetitions", 1])
+                result = run_json(
+                    [*command, "--warmup", 0, "--repetitions", 1],
+                    env=celeg_process_env,
+                )
                 celeg_samples.append(celeg_result(result))
             else:
                 result = run_json([*command, "-r", 1, "--no-warmup"])
@@ -230,9 +258,10 @@ def collect_workload(model, args, workload):
     celeg_distribution = distribution(celeg_combined, prompt_tokens + decode_tokens)
     llama_distribution = distribution(llama_combined, prompt_tokens + decode_tokens)
     return {
-        "configuration": workload,
+        "configuration": {**workload, "celeg_policy": args.celeg_policy},
         "order": order,
         "celeg": {
+            "policy": args.celeg_policy,
             "combined": celeg_distribution,
             "prefill": distribution(celeg_prefill, prompt_tokens),
             "decode": distribution(celeg_decode, decode_tokens),
@@ -296,6 +325,7 @@ def main():
     workloads = workload_args(args)
     celeg_provenance = git_provenance(Path("."))
     llama_cpp_provenance = git_provenance(Path(".externals/llama.cpp"))
+    print(f"Celeg numerical policy: {args.celeg_policy}")
     for workload in workloads:
         if workload["context"] <= 0 or workload["prompt_tokens"] <= 0 or workload["decode_tokens"] < 0:
             raise SystemExit(f"invalid workload dimensions: {workload}")
@@ -308,6 +338,7 @@ def main():
                 "size_bytes": model.stat().st_size,
                 "sha256": file_sha256(model),
                 "workload": workload["name"],
+                "celeg_policy": args.celeg_policy,
                 "celeg_commit": celeg_provenance["commit"],
                 "llama_cpp_commit": llama_cpp_provenance["commit"],
             }
@@ -324,7 +355,7 @@ def main():
                 celeg_decode = entry["celeg"]["decode"]["median_tokens_per_second"]
                 llama_decode = entry["llama_cpp"]["decode"]["median_tokens_per_second"]
                 print(
-                    f"{model.name} [{workload['name']}]: "
+                    f"{model.name} [{workload['name']}, {args.celeg_policy}]: "
                     f"Celeg {celeg_rate:.2f} tok/s ({celeg_decode:.2f} decode) | "
                     f"llama.cpp {llama_rate:.2f} tok/s ({llama_decode:.2f} decode)"
                 )
@@ -341,6 +372,7 @@ def main():
             "warmup": args.warmup,
             "repetitions": args.repetitions,
             "storage_mode": args.storage_mode,
+            "celeg_policy": args.celeg_policy,
             "models": [model.name for model in models],
             "llama_cpp": (
                 "-p <prompt> -n 0 -pg <prompt>,<decode> "
