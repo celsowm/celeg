@@ -10,15 +10,22 @@ import subprocess
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 BUILD_DIR = ROOT / "build" / "metal-shortconv-batch-parallel"
 SOURCE = ROOT / "apps" / "benchmark" / "metal" / "shortconv_batch_parallel.mm"
-GENERATED_SOURCE = BUILD_DIR / "shortconv_batch_parallel_production.mm"
-BINARY = BUILD_DIR / "celeg-metal-shortconv-batch-parallel-benchmark"
+CURSORS = (0, 1, 2)
 
 
 def run(command: list[str]) -> None:
     subprocess.run(command, cwd=ROOT, check=True)
 
 
-def build() -> None:
+def generated_source(cursor: int) -> pathlib.Path:
+    return BUILD_DIR / f"shortconv_batch_parallel_production_cursor{cursor}.mm"
+
+
+def binary(cursor: int) -> pathlib.Path:
+    return BUILD_DIR / f"celeg-metal-shortconv-batch-parallel-cursor{cursor}-benchmark"
+
+
+def build(cursor: int) -> None:
     BUILD_DIR.mkdir(parents=True, exist_ok=True)
     source = SOURCE.read_text(encoding="utf-8")
     source = source.replace(
@@ -26,14 +33,27 @@ def build() -> None:
         '            read_text("apps/benchmark/metal/shortconv_batch_parallel.metal");',
         '            read_text("src/backend/metal/kernels/inference/convolution.metal");',
     )
-    GENERATED_SOURCE.write_text(source, encoding="utf-8")
+    source = source.replace(
+        "constexpr uint32_t kInitialCursor = 2;",
+        f"constexpr uint32_t kInitialCursor = {cursor};",
+    )
+    source = source.replace(
+        "constexpr uint32_t kRows[] = {128, 256, 512};",
+        "constexpr uint32_t kRows[] = {1, 2, 3, 128, 256, 512};",
+    )
+    source = source.replace(
+        'std::cout << "width=1024 cache_length=3 output_and_state_bit_exact=required\\n\\n";',
+        f'std::cout << "width=1024 cache_length=3 initial_cursor={cursor} output_and_state_bit_exact=required\\n\\n";',
+    )
+    output_source = generated_source(cursor)
+    output_source.write_text(source, encoding="utf-8")
     run([
         "xcrun", "--sdk", "macosx", "clang++",
         "-std=c++20", "-fobjc-arc",
-        str(GENERATED_SOURCE),
+        str(output_source),
         "-framework", "Foundation",
         "-framework", "Metal",
-        "-o", str(BINARY),
+        "-o", str(binary(cursor)),
     ])
 
 
@@ -46,9 +66,13 @@ def main() -> int:
         help="compile the Objective-C++ harness without running it",
     )
     args = parser.parse_args()
-    build()
-    if not args.build_only:
-        run([str(BINARY)])
+    if args.build_only:
+        build(0)
+        return 0
+    for cursor in CURSORS:
+        print(f"\n=== shortconv initial cursor {cursor} ===", flush=True)
+        build(cursor)
+        run([str(binary(cursor))])
     return 0
 
 
