@@ -1,18 +1,11 @@
 #pragma once
 
-#include "celeg/backend/metal/model.hpp"
-#include "celeg/checkpoint/tensor_codec.hpp"
-#include "checkpoint/detail/bootstrap.hpp"
-#include "celeg/model/program.hpp"
-#include "celeg/model/linear_operation.hpp"
-#include "celeg/model/weights/roles.hpp"
-#include "linear_bindings.hpp"
+#include "../detail.hpp"
 
-#import <Metal/Metal.h>
+#include <Metal/Metal.h>
 
 #include <array>
 #include <chrono>
-#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -22,48 +15,19 @@
 #include <unordered_map>
 #include <vector>
 
-namespace celeg::metal_model_detail {
-
-std::string ns_string(NSString* value);
-const TensorRequest& request_for(std::span<const TensorRequest> requests,
-                                 TensorRole role, int layer = -1,
-                                 int expert = -1);
-std::string request_name(std::span<const TensorRequest> requests,
-                         TensorRole role, int layer = -1,
-                         int expert = -1);
-
-}
-
 namespace celeg {
 
-struct MetalPipelineCache {
-    id<MTLDevice> device = nil;
-    id<MTLLibrary> library = nil;
-    id<MTLLibrary> tensor_library = nil;
-    bool tensor_matmul_f16 = false;
-    bool tensor_matmul_bf16 = false;
-    bool tensor_matmul_q4_0 = false;
-    bool tensor_matmul_q4k = false;
-    bool tensor_matmul_q5k = false;
-    bool tensor_matmul_q6k = false;
-    bool tensor_matmul_q8_0 = false;
-    std::string tensor_compile_error;
-    std::unordered_map<std::string, id<MTLComputePipelineState>> pipelines;
-
-    id<MTLComputePipelineState> pipeline(std::string_view name);
-    id<MTLComputePipelineState> tensor_pipeline(std::string_view name);
-};
-
-/// @brief Kernel name and launch geometry for one matrix-vector binding.
-struct MetalMatvecKernel {
-    const char* name = nullptr;
-    uint32_t rows_per_threadgroup = 0;
-    uint32_t threads = 0;
-    uint32_t threadgroup_floats = 0;
-};
-
 struct MetalModel::Impl {
-    using LinearStorage = metal_model_detail::MetalLinearStorage;
+    enum class LinearStorage {
+        Float32,
+        Float16,
+        BFloat16,
+        Q4_0,
+        Q4K,
+        Q5K,
+        Q6K,
+        Q8_0,
+    };
 
     struct Linear {
         id<MTLBuffer> buffer = nil;
@@ -73,59 +37,51 @@ struct MetalModel::Impl {
         LinearStorage storage = LinearStorage::Float32;
     };
 
-    struct MetalKernelBinding {
-        const char* generic = nullptr;
-        const char* tuned = nullptr;
+    struct Moe {
+        Linear gate;
+        std::vector<Linear> gate_up;
+        std::vector<Linear> down;
+        uint32_t experts = 0;
+        uint32_t experts_per_token = 0;
+        uint32_t intermediate = 0;
+        bool normalize_topk = true;
+        float routed_scaling_factor = 1.0f;
+        MoeScoreKind score_kind = MoeScoreKind::Softmax;
+        MoeRouteScaleOrder route_scale_order = MoeRouteScaleOrder::AfterNormalize;
+        bool add_shared_expert = false;
+        Linear shared_gate;
+        Linear shared_up;
+        Linear shared_down;
+        Linear shared_router;
     };
 
     struct Layer {
-        enum class MixerKind : uint8_t {
-            Attention,
+        enum class MixerKind {
             ShortConvolution,
             GatedDelta,
             Mamba2,
+            Attention,
         };
 
-        struct Expert {
-            std::string gate_name;
-            std::string up_name;
-            std::string down_name;
-        };
-
-        struct Moe {
-            RouterProgram router;
-            std::vector<float> router_weight;
-            std::vector<float> router_bias;
-            std::vector<Expert> experts;
-        };
-
-        id<MTLBuffer> operator_norm = nil;
-        id<MTLBuffer> ffn_norm = nil;
-        MixerKind mixer_kind = MixerKind::Attention;
-        int cache_length = 0;
-        int page_tokens = 16;
+        MixerKind mixer_kind = MixerKind::ShortConvolution;
+        Linear operator_norm;
+        Linear ffn_norm;
         Linear mixer_in;
         Linear mixer_out;
         id<MTLBuffer> convolution_taps = nil;
-        id<MTLBuffer> recurrent_conv_weight = nil;
-        id<MTLBuffer> recurrent_conv_bias = nil;
-        id<MTLBuffer> recurrent_dt_bias = nil;
-        id<MTLBuffer> recurrent_a_log = nil;
-        id<MTLBuffer> recurrent_d = nil;
-        id<MTLBuffer> recurrent_norm = nil;
-        id<MTLBuffer> recurrent_conv_state = nil;
-        id<MTLBuffer> recurrent_state = nil;
-        int recurrent_conv_kernel = 0;
-        int recurrent_key_head_dim = 0;
-        int recurrent_value_head_dim = 0;
+        int cache_length = 0;
+        int page_tokens = 0;
         int recurrent_key_heads = 0;
         int recurrent_value_heads = 0;
+        int recurrent_key_head_dim = 0;
+        int recurrent_value_head_dim = 0;
         int recurrent_inner = 0;
         int recurrent_state_size = 0;
         int recurrent_group_count = 0;
+        int recurrent_conv_kernel = 0;
         bool recurrent_vector_decay = false;
         bool recurrent_safe_decay = false;
-        float recurrent_decay_lower_bound = -5.0f;
+        float recurrent_decay_lower_bound = -10.0f;
         bool recurrent_sigmoid_output_gate = false;
         bool recurrent_a_log_needs_exp = true;
         Linear recurrent_in;
@@ -213,30 +169,34 @@ struct MetalModel::Impl {
     bool ready = false;
     RuntimeMetrics metrics;
     MetalExecutionMetrics execution_metrics;
-    std::chrono::steady_clock::time_point command_started;
     uint64_t command_dispatches = 0;
     std::unordered_map<std::string, uint64_t> dispatch_histogram;
+    std::chrono::steady_clock::time_point command_started;
 
+    Impl(std::string model_path, int max_context, MetalModelOptions options,
+         std::shared_ptr<const RuntimeContext> runtime);
+
+    void ensure_batch_capacity(uint32_t rows);
+    void reset_state();
+    id<MTLBuffer> buffer(size_t bytes);
     id<MTLBuffer> buffer(const std::vector<float>& values);
-    id<MTLBuffer> immutable_buffer(const void* data, size_t bytes) const;
     id<MTLBuffer> zero_buffer(size_t bytes);
-    id<MTLBuffer> raw_buffer(const std::byte* data, size_t bytes);
-
-    std::vector<float> load_vector_values(TensorRole role, int layer, int width,
-                                          bool allow_missing = false) const;
-    id<MTLBuffer> load_vector(TensorRole role, int layer, int width,
-                              bool allow_missing = false);
-    Linear load_linear(TensorRole role, int layer, int rows, int cols);
-    Linear load_linear_source(const std::string& name, int rows, int cols);
-    id<MTLBuffer> load_conv_kernel(int layer, int width, int cache_length);
-
-    id<MTLComputePipelineState> pipeline(std::string_view name);
-    id<MTLComputePipelineState> tensor_pipeline(std::string_view name);
+    id<MTLBuffer> load_vector(TensorRole role, int layer, int64_t expected_count);
+    Linear load_linear(TensorRole role, int layer, int64_t rows, int64_t cols);
+    Linear load_linear_any(TensorRole role, int layer, int64_t rows, int64_t cols,
+                           std::span<const TensorRole> alternatives = {});
+    bool load_linear_optional(Linear& target, TensorRole role, int layer,
+                              int64_t rows, int64_t cols,
+                              std::span<const TensorRole> alternatives = {});
+    void load_layer(size_t layer_index, Layer& layer);
     std::optional<std::string_view> linear_kernel(
         LinearStorage storage, LinearOperationKind operation) const;
     MetalMatvecKernel matvec_kernel(LinearStorage storage) const;
     MetalMatvecKernel swiglu_matvec_kernel(LinearStorage storage) const;
     bool tensor_matmul_available(LinearStorage storage, uint32_t rows) const;
+
+    id<MTLComputePipelineState> pipeline(std::string_view name);
+    id<MTLComputePipelineState> tensor_pipeline(std::string_view name);
     void begin_commands(id<MTLCommandBuffer>& command_buffer,
                         id<MTLComputeCommandEncoder>& encoder);
     void finish_commands(id<MTLCommandBuffer>& command_buffer,
@@ -252,7 +212,7 @@ struct MetalModel::Impl {
                    NSUInteger length, NSUInteger index);
     void encode_matvec(id<MTLComputeCommandEncoder> encoder, const Linear& weight,
                        id<MTLBuffer> input, id<MTLBuffer> output,
-                       NSUInteger output_offset = 0);
+                       NSUInteger output_offset = 0, NSUInteger input_offset = 0);
     bool encode_swiglu_matvec(id<MTLComputeCommandEncoder> encoder,
                               const Linear& weight, id<MTLBuffer> gate_up,
                               id<MTLBuffer> output);
@@ -329,13 +289,13 @@ struct MetalModel::Impl {
     void encode_token(id<MTLCommandBuffer>& command_buffer,
                       id<MTLComputeCommandEncoder>& encoder, int32_t token,
                       const std::array<int32_t, 3>* rope_position = nullptr);
-    void apply_logits_transforms();
     void run_token(int32_t token,
                    const std::array<int32_t, 3>* rope_position = nullptr);
-    void reset();
-    static std::vector<float> copy_buffer(id<MTLBuffer> source, size_t elements);
-    MetalSessionSnapshot export_snapshot() const;
-    void restore_snapshot(MetalSessionSnapshot snapshot);
+    void run_prefill(std::span<const int32_t> tokens,
+                     std::span<const std::array<int32_t, 3>> rope_positions = {});
+    void sample();
+    void apply_logits_transforms();
+    void read_logits(std::vector<float>& target);
 };
 
 }
