@@ -192,11 +192,24 @@ void MetalModel::Impl::encode_prefill_batch(
         set_bytes(encoder, &hidden_width, sizeof(hidden_width), 6);
         set_bytes(encoder, &multiplier, sizeof(multiplier), 7);
         set_bytes(encoder, &epsilon, sizeof(epsilon), 8);
-        id<MTLComputePipelineState> state = pipeline("celeg_residual_rmsnorm_batch");
+
+        const NSUInteger scratch_bytes =
+            static_cast<NSUInteger>(hidden_width) * sizeof(float);
+        id<MTLComputePipelineState> cached_state =
+            pipeline("celeg_residual_rmsnorm_batch_cached");
+        const bool use_cached = cached_state.staticThreadgroupMemoryLength + scratch_bytes <=
+            device.maxThreadgroupMemoryLength;
+        const std::string_view kernel = use_cached
+            ? "celeg_residual_rmsnorm_batch_cached"
+            : "celeg_residual_rmsnorm_batch";
+        id<MTLComputePipelineState> state = use_cached ? cached_state : pipeline(kernel);
         [encoder setComputePipelineState:state];
+        if (use_cached) {
+            [encoder setThreadgroupMemoryLength:scratch_bytes atIndex:0];
+        }
         [encoder dispatchThreadgroups:MTLSizeMake(rows, 1, 1)
                threadsPerThreadgroup:MTLSizeMake(256, 1, 1)];
-        record_dispatch("celeg_residual_rmsnorm_batch");
+        record_dispatch(kernel);
     };
 
     encode_embedding_batch(encoder, rows, tokens);
