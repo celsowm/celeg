@@ -17,6 +17,20 @@ constexpr NSUInteger kTensorTileRows = 64;
 constexpr NSUInteger kTensorTileTokens = 128;
 constexpr NSUInteger kTensorTileK = 64;
 constexpr NSUInteger kTensorTileThreads = 128;
+constexpr NSUInteger kQ4KStrictStageK = 128;
+constexpr NSUInteger kTensorTileBytes =
+    kTensorTileRows * kTensorTileK * sizeof(uint16_t);
+constexpr NSUInteger kQ4KStrictStageBytes =
+    kTensorTileRows * kQ4KStrictStageK * sizeof(uint16_t);
+constexpr std::string_view kQ4KStrictKernel =
+    "celeg_matmul_tensor_q4k_static_stage128";
+constexpr std::string_view kQ4KRelaxedKernel =
+    "celeg_matmul_tensor_q4k_relaxed";
+
+bool relaxed_tensor_precision_enabled() {
+    const char* value = std::getenv("CELEG_METAL_TENSOR_RELAXED_PRECISION");
+    return value != nullptr && value[0] == '1' && value[1] == '\0';
+}
 
 }
 
@@ -327,19 +341,54 @@ void MetalModel::Impl::encode_matmul(id<MTLComputeCommandEncoder> encoder,
     if (!dense) set_bytes(encoder, &weight.row_bytes, sizeof(weight.row_bytes), 7);
     const bool tensor = tensor_matmul_available(weight.storage, rows);
     if (tensor) {
-        const auto kernel = linear_kernel(weight.storage,
-                                           LinearOperationKind::MatMulTensor);
-        if (!kernel) throw std::runtime_error("unsupported Metal tensor matmul binding");
-        id<MTLComputePipelineState> state = tensor_pipeline(*kernel);
+        const auto generic_kernel = linear_kernel(
+            weight.storage, LinearOperationKind::MatMulTensor);
+        if (!generic_kernel) {
+            throw std::runtime_error("unsupported Metal tensor matmul binding");
+        }
+
+        std::string_view selected_kernel = *generic_kernel;
+        NSUInteger shared_bytes = kTensorTileBytes;
+        bool exact_groups = false;
+        bool custom_q4k = false;
+
+        if (weight.storage == LinearStorage::Q4K) {
+            if (relaxed_tensor_precision_enabled()) {
+                selected_kernel = kQ4KRelaxedKernel;
+                custom_q4k = true;
+            } else if ((rows % kTensorTileTokens) == 0u &&
+                       (weight.cols % kQ4KStrictStageK) == 0u &&
+                       (weight.rows % kTensorTileRows) == 0u &&
+                       device.maxThreadgroupMemoryLength >= kQ4KStrictStageBytes) {
+                selected_kernel = kQ4KStrictKernel;
+                shared_bytes = kQ4KStrictStageBytes;
+                exact_groups = true;
+                custom_q4k = true;
+            }
+        }
+
+        id<MTLComputePipelineState> state = tensor_pipeline(selected_kernel);
+        if (custom_q4k &&
+            (state.maxTotalThreadsPerThreadgroup < kTensorTileThreads ||
+             state.staticThreadgroupMemoryLength + shared_bytes >
+                 device.maxThreadgroupMemoryLength)) {
+            selected_kernel = *generic_kernel;
+            shared_bytes = kTensorTileBytes;
+            exact_groups = false;
+            state = tensor_pipeline(selected_kernel);
+        }
+
         [encoder setComputePipelineState:state];
-        [encoder setThreadgroupMemoryLength:kTensorTileRows * kTensorTileK *
-                                            sizeof(uint16_t)
-                                    atIndex:0];
-        [encoder dispatchThreadgroups:MTLSizeMake(
-            (weight.rows + kTensorTileRows - 1u) / kTensorTileRows,
-            (rows + kTensorTileTokens - 1u) / kTensorTileTokens, 1)
-         threadsPerThreadgroup:MTLSizeMake(kTensorTileThreads, 1, 1)];
-        record_dispatch(*kernel);
+        [encoder setThreadgroupMemoryLength:shared_bytes atIndex:0];
+        const NSUInteger row_groups = exact_groups
+            ? weight.rows / kTensorTileRows
+            : (weight.rows + kTensorTileRows - 1u) / kTensorTileRows;
+        const NSUInteger token_groups = exact_groups
+            ? rows / kTensorTileTokens
+            : (rows + kTensorTileTokens - 1u) / kTensorTileTokens;
+        [encoder dispatchThreadgroups:MTLSizeMake(row_groups, token_groups, 1)
+             threadsPerThreadgroup:MTLSizeMake(kTensorTileThreads, 1, 1)];
+        record_dispatch(selected_kernel);
         return;
     }
     const auto kernel = linear_kernel(weight.storage, LinearOperationKind::MatMul);
