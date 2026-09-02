@@ -10,10 +10,6 @@ import subprocess
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 BUILD_DIR = ROOT / "build" / "metal-relaxed-precision"
 HOST_SOURCE = ROOT / "apps" / "benchmark" / "metal" / "relaxed_precision.mm"
-BASE_SHADER = ROOT / "src" / "backend" / "metal" / "kernels" / "tensor.metal"
-EXPERIMENT_SHADER = ROOT / "apps" / "benchmark" / "metal" / "tensor_relaxed_precision.metal"
-COMBINED_SHADER = BUILD_DIR / "relaxed_precision.metal"
-AIR = BUILD_DIR / "relaxed_precision.air"
 BINARY = BUILD_DIR / "celeg-metal-relaxed-precision-benchmark"
 
 
@@ -23,14 +19,6 @@ def run(command: list[str], *, cwd: pathlib.Path = ROOT) -> None:
 
 def build() -> None:
     BUILD_DIR.mkdir(parents=True, exist_ok=True)
-    COMBINED_SHADER.write_text(
-        BASE_SHADER.read_text() + "\n" + EXPERIMENT_SHADER.read_text(),
-        encoding="utf-8",
-    )
-    run([
-        "xcrun", "--sdk", "macosx", "metal",
-        "-c", str(COMBINED_SHADER), "-o", str(AIR),
-    ])
     run([
         "xcrun", "--sdk", "macosx", "clang++",
         "-std=c++20", "-fobjc-arc",
@@ -47,7 +35,7 @@ def main() -> int:
     )
     parser.add_argument(
         "--build-only", action="store_true",
-        help="compile the experiment without executing it",
+        help="compile the Objective-C++ harness without running it",
     )
     args = parser.parse_args()
     build()
