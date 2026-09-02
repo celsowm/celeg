@@ -56,8 +56,8 @@ kernel void celeg_qk_norm_rope_store_kv_split(
             key[first] = x * c - y * s;
             key[second] = y * c + x * s;
         }
-        const size_t cache_base = (static_cast<size_t>(position / page_tokens) * page_tokens +
-            position % page_tokens) * static_cast<size_t>(key_heads) * head_dim + base;
+        const size_t cache_base = static_cast<size_t>(position) *
+            static_cast<size_t>(key_heads) * head_dim + base;
         for (uint d = 0; d < head_dim; ++d) {
             key_cache[cache_base + d] = key[base + d];
             value_cache[cache_base + d] = value[base + d];
@@ -193,8 +193,8 @@ kernel void celeg_qk_norm_mrope_store_kv(
             key[first] = x * c - y * s;
             key[second] = y * c + x * s;
         }
-        const size_t cache_base = (static_cast<size_t>(cache_position / page_tokens) * page_tokens +
-            cache_position % page_tokens) * static_cast<size_t>(key_heads) * head_dim + base;
+        const size_t cache_base = static_cast<size_t>(cache_position) *
+            static_cast<size_t>(key_heads) * head_dim + base;
         for (uint d = 0; d < head_dim; ++d) {
             key_cache[cache_base + d] = key[base + d];
             value_cache[cache_base + d] = value[base + d];
