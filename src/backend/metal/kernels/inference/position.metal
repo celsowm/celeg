@@ -245,3 +245,84 @@ kernel void celeg_qk_norm_mrope_store_kv(
         }
     }
 }
+
+kernel void celeg_qk_norm_rope_batch_split_cooperative_store_kv(
+    device float* query [[buffer(0)]],
+    device const float* query_weight [[buffer(1)]],
+    device const float* key [[buffer(2)]],
+    device const float* key_weight [[buffer(3)]],
+    constant uint& rows [[buffer(4)]],
+    constant uint& query_heads [[buffer(5)]],
+    constant uint& key_heads [[buffer(6)]],
+    constant uint& head_dim [[buffer(7)]],
+    constant uint& base_position [[buffer(8)]],
+    constant float& theta [[buffer(9)]],
+    constant float& query_scale [[buffer(10)]],
+    constant float& query_epsilon [[buffer(11)]],
+    constant float& key_epsilon [[buffer(12)]],
+    device const float* value [[buffer(13)]],
+    device float* key_cache [[buffer(14)]],
+    device float* value_cache [[buffer(15)]],
+    uint2 local [[thread_position_in_threadgroup]],
+    uint2 group [[threadgroup_position_in_grid]]) {
+    constexpr uint cooperative_threads = 32;
+    constexpr uint max_pairs = 128;
+    const uint lane = local.x;
+    const uint token = group.x;
+    if (token >= rows) return;
+    const uint pairs = head_dim / 2;
+    if (pairs > max_pairs) return;
+    const uint position = base_position + token;
+
+    threadgroup float cosines[max_pairs];
+    threadgroup float sines[max_pairs];
+    for (uint pair = lane; pair < pairs; pair += cooperative_threads) {
+        const float frequency = pow(theta, -2.0f * static_cast<float>(pair) /
+                                          static_cast<float>(head_dim));
+        const float angle = static_cast<float>(position) * frequency;
+        cosines[pair] = cos(angle);
+        sines[pair] = sin(angle);
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    for (uint head = lane; head < query_heads; head += cooperative_threads) {
+        const size_t base = static_cast<size_t>(token) * query_heads * head_dim +
+            static_cast<size_t>(head) * head_dim;
+        float sum = 0.0f;
+        for (uint d = 0; d < head_dim; ++d) sum += query[base + d] * query[base + d];
+        const float inverse = rsqrt(sum / static_cast<float>(head_dim) + query_epsilon);
+        for (uint pair = 0; pair < pairs; ++pair) {
+            const size_t first = base + pair;
+            const size_t second = base + pairs + pair;
+            const float x = query[first] * (inverse * query_weight[pair]);
+            const float y = query[second] * (inverse * query_weight[pairs + pair]);
+            const float c = cosines[pair];
+            const float s = sines[pair];
+            query[first] = (x * c - y * s) * query_scale;
+            query[second] = (y * c + x * s) * query_scale;
+        }
+    }
+
+    for (uint head = lane; head < key_heads; head += cooperative_threads) {
+        const size_t source_base = static_cast<size_t>(token) * key_heads * head_dim +
+            static_cast<size_t>(head) * head_dim;
+        float sum = 0.0f;
+        for (uint d = 0; d < head_dim; ++d) sum += key[source_base + d] * key[source_base + d];
+        const float inverse = rsqrt(sum / static_cast<float>(head_dim) + key_epsilon);
+        const size_t cache_base = static_cast<size_t>(position) * key_heads * head_dim +
+            static_cast<size_t>(head) * head_dim;
+        for (uint pair = 0; pair < pairs; ++pair) {
+            const size_t first = source_base + pair;
+            const size_t second = source_base + pairs + pair;
+            const float x = key[first] * (inverse * key_weight[pair]);
+            const float y = key[second] * (inverse * key_weight[pairs + pair]);
+            const float c = cosines[pair];
+            const float s = sines[pair];
+            key_cache[cache_base + pair] = x * c - y * s;
+            key_cache[cache_base + pairs + pair] = y * c + x * s;
+        }
+        for (uint d = 0; d < head_dim; ++d) {
+            value_cache[cache_base + d] = value[source_base + d];
+        }
+    }
+}
