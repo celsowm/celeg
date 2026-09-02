@@ -41,6 +41,7 @@ set(CELEG_METAL_SHADER_SOURCES
     src/backend/metal/kernels/inference/attention_gate.metal
     src/backend/metal/kernels/tensor.metal
     src/backend/metal/kernels/tensor_q4k_static_stage128.metal
+    src/backend/metal/kernels/tensor_q4k_relaxed.metal
 )
 
 set(_CELEG_METAL_KV_STORE_SOURCE_FILE
@@ -133,6 +134,13 @@ file(READ "${_CELEG_METAL_TENSOR_Q4K_STATIC_STAGE128_SOURCE_FILE}"
     CELEG_METAL_TENSOR_Q4K_STATIC_STAGE128_SOURCE)
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
     "${_CELEG_METAL_TENSOR_Q4K_STATIC_STAGE128_SOURCE_FILE}")
+
+set(_CELEG_METAL_TENSOR_Q4K_RELAXED_SOURCE_FILE
+    "${CMAKE_CURRENT_LIST_DIR}/kernels/tensor_q4k_relaxed.metal")
+file(READ "${_CELEG_METAL_TENSOR_Q4K_RELAXED_SOURCE_FILE}"
+    CELEG_METAL_TENSOR_Q4K_RELAXED_SOURCE)
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+    "${_CELEG_METAL_TENSOR_Q4K_RELAXED_SOURCE_FILE}")
 
 set(CELEG_METAL_APP_SOURCES
     apps/benchmark/metal/inference.cpp
