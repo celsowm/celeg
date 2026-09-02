@@ -17,7 +17,7 @@ def run(command: list[str]) -> None:
     subprocess.run(command, cwd=ROOT, check=True)
 
 
-def build(build_dir: pathlib.Path, jobs: int) -> pathlib.Path:
+def build_backend(build_dir: pathlib.Path, jobs: int) -> None:
     run([
         sys.executable,
         str(ROOT / "scripts" / "dev.py"),
@@ -28,6 +28,12 @@ def build(build_dir: pathlib.Path, jobs: int) -> pathlib.Path:
         "--build-dir", str(build_dir),
         "--jobs", str(jobs),
     ])
+
+
+def compile_harness(build_dir: pathlib.Path) -> pathlib.Path:
+    generated = build_dir / "generated" / "metal_inference_source.hpp"
+    if not generated.exists():
+        raise SystemExit(f"generated Metal inference source does not exist: {generated}")
     binary = build_dir / "celeg-metal-rope-table-benchmark"
     run([
         "xcrun", "--sdk", "macosx", "clang++",
@@ -52,12 +58,9 @@ def main() -> int:
     args = parser.parse_args()
     build_dir = args.build_dir.expanduser().resolve()
 
-    if args.no_build:
-        binary = build_dir / "celeg-metal-rope-table-benchmark"
-        if not binary.exists():
-            raise SystemExit(f"benchmark binary does not exist: {binary}")
-    else:
-        binary = build(build_dir, args.jobs)
+    if not args.no_build:
+        build_backend(build_dir, args.jobs)
+    binary = compile_harness(build_dir)
 
     if not args.build_only:
         run([str(binary)])
