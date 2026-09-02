@@ -16,11 +16,7 @@ def run(script: str) -> None:
 
 
 def main() -> int:
-    run("metal_counter_capabilities.py")
-    run("metal_q4k_k32_llama_relaxed.py")
     run("metal_shortconv_batch_parallel.py")
-    run("metal_attention_one_exp.py")
-    run("metal_attention_materialized_simdgroup.py")
     run("metal_attention_tiled_simdgroup.py")
     return 0
 
