@@ -14,6 +14,7 @@ EXPERIMENTS = (
     ("cooperative Q4_K input", ROOT / "scripts" / "metal_cooperative_q4k.py"),
     ("modern Q4_K K32", ROOT / "scripts" / "metal_q4k_k32.py"),
     ("vectorized Q4_K K32", ROOT / "scripts" / "metal_q4k_k32_vector.py"),
+    ("vectorized production Q4_K K64", ROOT / "scripts" / "metal_q4k_k64_vector.py"),
 )
 
 
