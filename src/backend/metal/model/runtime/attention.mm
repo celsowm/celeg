@@ -506,9 +506,16 @@ void MetalModel::Impl::encode_attention_batch(
         set_bytes(encoder, &rows, sizeof(rows), 4);
         set_bytes(encoder, &base_position, sizeof(base_position), 5);
         set_bytes(encoder, &kv_width, sizeof(kv_width), 6);
-        set_bytes(encoder, &page_tokens, sizeof(page_tokens), 7);
-        dispatch(encoder, "celeg_store_kv_batch",
-                 static_cast<NSUInteger>(rows) * kv_width);
+        id<MTLComputePipelineState> state = pipeline("celeg_store_kv_batch_2d");
+        constexpr NSUInteger threads = 256;
+        if (state.maxTotalThreadsPerThreadgroup < threads) {
+            throw std::runtime_error("Metal pipeline cannot run the batch KV store kernel");
+        }
+        [encoder setComputePipelineState:state];
+        [encoder dispatchThreadgroups:MTLSizeMake(
+            (kv_width + threads - 1u) / threads, rows, 1)
+               threadsPerThreadgroup:MTLSizeMake(threads, 1, 1)];
+        record_dispatch("celeg_store_kv_batch_2d");
     }
 
     const float attention_scale = 1.0f /
