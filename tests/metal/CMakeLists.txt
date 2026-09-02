@@ -26,6 +26,11 @@ if(TARGET celeg_metal_backend)
         endif()
     endforeach()
 
+    add_executable(metal_rope_table_benchmark apps/benchmark/metal/rope_table.mm)
+    target_include_directories(metal_rope_table_benchmark PRIVATE
+        include src tests src/backend/metal "${CMAKE_BINARY_DIR}/generated")
+    target_link_libraries(metal_rope_table_benchmark PRIVATE celeg_base celeg_metal_backend)
+
     if(TARGET celeg_serve_metal)
         target_link_libraries(metal_inference_test PRIVATE celeg_cpu_backend celeg_serve_metal)
 
