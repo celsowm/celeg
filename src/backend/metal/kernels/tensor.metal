@@ -21,7 +21,7 @@ constant int kCelegBlockValues = 32;
 template <typename T>
 kernel void celeg_matmul_tensor(
         device const T* weights [[buffer(0)]],
-        device half* input [[buffer(1)]],
+        device float* input [[buffer(1)]],
         device float* output [[buffer(2)]],
         constant uint& rows [[buffer(3)]],
         constant uint& cols [[buffer(4)]],
@@ -89,13 +89,13 @@ kernel void celeg_matmul_tensor(
 
 template [[host_name("celeg_matmul_tensor_f16")]]
 kernel void celeg_matmul_tensor<half>(
-        device const half*, device half*, device float*,
+        device const half*, device float*, device float*,
         constant uint&, constant uint&, constant uint&, constant uint&,
         threadgroup half*, uint, uint2);
 
 template [[host_name("celeg_matmul_tensor_bf16")]]
 kernel void celeg_matmul_tensor<bfloat>(
-        device const bfloat*, device half*, device float*,
+        device const bfloat*, device float*, device float*,
         constant uint&, constant uint&, constant uint&, constant uint&,
         threadgroup bfloat*, uint, uint2);
 
@@ -245,7 +245,7 @@ struct CelegTensorQ6K {
  */
 template <typename Decoder>
 void celeg_matmul_tensor_quantized(
-        device const uchar* weights, device half* input, device float* output,
+        device const uchar* weights, device float* input, device float* output,
         uint rows, uint cols, uint output_rows, uint output_stride, uint row_bytes,
         Decoder decoder, threadgroup half* weights_tile, uint thread_index, uint2 grid) {
     const int row_offset = static_cast<int>(grid.x) * kCelegTileRows;
@@ -315,7 +315,7 @@ void celeg_matmul_tensor_quantized(
 #define CELEG_TENSOR_QUANTIZED_MATMUL(NAME, DECODER) \
 kernel void NAME( \
         device const uchar* weights [[buffer(0)]], \
-        device half* input [[buffer(1)]], \
+        device float* input [[buffer(1)]], \
         device float* output [[buffer(2)]], \
         constant uint& rows [[buffer(3)]], \
         constant uint& cols [[buffer(4)]], \

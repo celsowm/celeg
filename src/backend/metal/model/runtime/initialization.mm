@@ -274,8 +274,6 @@ MetalModel::MetalModel(const std::string& path, int context,
         static_cast<size_t>(context) * max_batch_intermediate * 2 * sizeof(float));
     (*impl_).batch_activated = (*impl_).zero_buffer(
         static_cast<size_t>(context) * max_batch_intermediate * sizeof(float));
-    (*impl_).batch_activation_half = (*impl_).zero_buffer(
-        static_cast<size_t>(context) * max_batch_intermediate * sizeof(uint16_t));
 
     (*impl_).layers.reserve((*impl_).model.graph.layers.size());
     for (size_t index = 0; index < (*impl_).program.layers.size(); ++index) {

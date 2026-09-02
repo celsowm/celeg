@@ -23,24 +23,6 @@ std::string ns_string(NSString* value) {
     return value ? std::string(value.UTF8String) : std::string{};
 }
 
-/// @brief Round-to-nearest-even float32 to float16 bit conversion, valid for
-/// the well-behaved (non-subnormal, non-infinite) magnitudes this test uses.
-uint16_t half_bits(float value) {
-    uint32_t bits;
-    std::memcpy(&bits, &value, sizeof(bits));
-    const uint32_t sign = (bits >> 16u) & 0x8000u;
-    const int32_t exponent = static_cast<int32_t>((bits >> 23u) & 0xffu) - 127 + 15;
-    const uint32_t mantissa = bits & 0x7fffffu;
-    if (exponent <= 0) return static_cast<uint16_t>(sign);
-    if (exponent >= 0x1f) return static_cast<uint16_t>(sign | 0x7c00u);
-    const uint32_t half_mantissa = mantissa >> 13u;
-    const uint32_t remainder = mantissa & 0x1fffu;
-    uint16_t result = static_cast<uint16_t>(
-        sign | (static_cast<uint32_t>(exponent) << 10u) | half_mantissa);
-    if (remainder > 0x1000u || (remainder == 0x1000u && (half_mantissa & 1u))) ++result;
-    return result;
-}
-
 std::vector<float> run_embedding(id<MTLDevice> device,
                                  const celeg::GgufTensorView& tensor) {
     NSError* error = nil;
@@ -170,10 +152,8 @@ std::vector<float> run_matmul_quantized(id<MTLDevice> device,
     id<MTLBuffer> weights = [device newBufferWithBytes:tensor.data
                                                  length:tensor.bytes
                                                 options:MTLResourceStorageModeShared];
-    std::vector<uint16_t> input_half(input.size());
-    for (size_t index = 0; index < input.size(); ++index) input_half[index] = half_bits(input[index]);
-    id<MTLBuffer> input_buffer = [device newBufferWithBytes:input_half.data()
-                                                       length:input_half.size() * sizeof(uint16_t)
+    id<MTLBuffer> input_buffer = [device newBufferWithBytes:input.data()
+                                                       length:input.size() * sizeof(float)
                                                      options:MTLResourceStorageModeShared];
     std::vector<float> output(static_cast<size_t>(input_rows) * output_rows, 0.0f);
     id<MTLBuffer> output_buffer = [device newBufferWithBytes:output.data()
