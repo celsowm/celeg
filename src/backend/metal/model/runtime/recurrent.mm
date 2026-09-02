@@ -75,14 +75,15 @@ void MetalModel::Impl::encode_short_convolution(
     encode_matvec(encoder, layer.mixer_in, normed, projected);
     const uint32_t cache_length = static_cast<uint32_t>(layer.cache_length);
     const uint32_t position_value = static_cast<uint32_t>(position);
+    const uint32_t cursor = position_value % cache_length;
     set_buffer(encoder, projected, 0);
     set_buffer(encoder, layer.convolution_taps, 1);
     set_buffer(encoder, layer.key_cache, 2);
     set_buffer(encoder, operation, 3);
     set_bytes(encoder, &hidden_width, sizeof(hidden_width), 4);
     set_bytes(encoder, &cache_length, sizeof(cache_length), 5);
-    set_bytes(encoder, &position_value, sizeof(position_value), 6);
-    dispatch(encoder, "celeg_shortconv", hidden_width);
+    set_bytes(encoder, &cursor, sizeof(cursor), 6);
+    dispatch(encoder, "celeg_shortconv_ring", hidden_width);
     encode_matvec(encoder, layer.mixer_out, operation, hidden);
 }
 
@@ -91,6 +92,7 @@ void MetalModel::Impl::encode_short_convolution_batch(
     uint32_t base_position) {
     const uint32_t hidden_width = static_cast<uint32_t>(model.graph.hidden);
     const uint32_t cache_length = static_cast<uint32_t>(layer.cache_length);
+    const uint32_t initial_cursor = base_position % cache_length;
     set_buffer(encoder, batch_projected, 0);
     set_buffer(encoder, layer.convolution_taps, 1);
     set_buffer(encoder, layer.key_cache, 2);
@@ -98,12 +100,12 @@ void MetalModel::Impl::encode_short_convolution_batch(
     set_bytes(encoder, &rows, sizeof(rows), 4);
     set_bytes(encoder, &hidden_width, sizeof(hidden_width), 5);
     set_bytes(encoder, &cache_length, sizeof(cache_length), 6);
-    set_bytes(encoder, &base_position, sizeof(base_position), 7);
-    id<MTLComputePipelineState> state = pipeline("celeg_shortconv_batch");
+    set_bytes(encoder, &initial_cursor, sizeof(initial_cursor), 7);
+    id<MTLComputePipelineState> state = pipeline("celeg_shortconv_batch_ring");
     [encoder setComputePipelineState:state];
     [encoder dispatchThreadgroups:MTLSizeMake((hidden_width + 255) / 256, 1, 1)
        threadsPerThreadgroup:MTLSizeMake(256, 1, 1)];
-    record_dispatch("celeg_shortconv_batch");
+    record_dispatch("celeg_shortconv_batch_ring");
     encode_matmul(encoder, layer.mixer_out, batch_operation, batch_hidden, rows);
 }
 
