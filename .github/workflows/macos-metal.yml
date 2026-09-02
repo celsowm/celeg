@@ -33,6 +33,8 @@ jobs:
         run: python scripts/metal_q4k_k32.py --build-only
       - name: Compile strict llama-style K32 Q4_K tensor harness
         run: python scripts/metal_q4k_k32_llama_strict.py --build-only
+      - name: Compile relaxed llama-style K32 Q4_K tensor harness
+        run: python scripts/metal_q4k_k32_llama_relaxed.py --build-only
       - name: Compile stage128 Q4_K tensor harness
         run: python scripts/metal_q4k_stage128.py --build-only
       - name: Compile static-full Q4_K tensor harness
