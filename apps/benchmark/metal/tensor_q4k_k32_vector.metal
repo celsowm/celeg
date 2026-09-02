@@ -32,7 +32,7 @@ inline void celeg_q4k_store16_vector(threadgroup half* destination,
     const device uchar* qs = block + 16 + (sub >> 1) * 32 + index_base;
     const bool high = (sub & 1u) != 0u;
 
-    #pragma unroll full
+    #pragma unroll
     for (uint group = 0; group < 4u; ++group) {
         const uchar4 packed = *reinterpret_cast<device const uchar4*>(qs + group * 4u);
         const uint4 raw = uint4(packed);
@@ -83,7 +83,7 @@ kernel void celeg_matmul_tensor_q4k_k32_vector(
         array<int32_t, 2>({1, static_cast<int32_t>(cols)}));
     auto result = operation.get_destination_cooperative_tensor<
         decltype(first_input), decltype(weights_type), float>();
-    #pragma unroll full
+    #pragma unroll
     for (uint16_t index = 0; index < result.get_capacity(); ++index) {
         if (result.is_valid_element(index)) result[index] = 0.0f;
     }
@@ -105,7 +105,7 @@ kernel void celeg_matmul_tensor_q4k_k32_vector(
                 weights + static_cast<size_t>(source_row) * row_bytes,
                 static_cast<uint>(source_column));
         } else {
-            #pragma unroll full
+            #pragma unroll
             for (int index = 0; index < kCelegK32VectorChunk; ++index) {
                 destination[index] = static_cast<half>(0);
             }
