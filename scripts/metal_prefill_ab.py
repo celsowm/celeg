@@ -13,6 +13,7 @@ EXPERIMENTS = (
     ("relaxed precision", ROOT / "scripts" / "metal_relaxed_precision.py"),
     ("cooperative Q4_K input", ROOT / "scripts" / "metal_cooperative_q4k.py"),
     ("modern Q4_K K32", ROOT / "scripts" / "metal_q4k_k32.py"),
+    ("vectorized Q4_K K32", ROOT / "scripts" / "metal_q4k_k32_vector.py"),
 )
 
 
