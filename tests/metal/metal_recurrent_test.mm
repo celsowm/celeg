@@ -71,6 +71,141 @@ void check_close(float actual, float expected, const char* label) {
     }
 }
 
+void check_shortconv_ring(id<MTLDevice> device, id<MTLCommandQueue> queue,
+                          id<MTLLibrary> library) {
+    constexpr uint32_t width = 3;
+    constexpr uint32_t cache_length = 4;
+    constexpr uint32_t base_position = 7;
+    constexpr uint32_t rows = 6;
+    const std::vector<float> taps{
+        0.25f, -0.5f, 0.75f,
+        -1.0f, 0.5f, 0.125f,
+        0.75f, 0.25f, -0.25f,
+        0.5f, -0.75f, 1.0f};
+    std::vector<float> projected(static_cast<size_t>(rows) * 3 * width);
+    for (uint32_t row = 0; row < rows; ++row) {
+        for (uint32_t column = 0; column < width; ++column) {
+            const size_t base = static_cast<size_t>(row) * 3 * width;
+            projected[base + column] = 0.5f + 0.1f * static_cast<float>(row + column);
+            projected[base + width + column] = 1.0f + 0.05f * static_cast<float>(row + 2 * column);
+            projected[base + 2 * width + column] = -0.3f + 0.07f * static_cast<float>(2 * row + column);
+        }
+    }
+
+    std::vector<float> expected_state(static_cast<size_t>(cache_length) * width, 0.0f);
+    std::vector<float> expected_output(static_cast<size_t>(rows) * width, 0.0f);
+    for (uint32_t row = 0; row < rows; ++row) {
+        const uint32_t cursor = (base_position + row) % cache_length;
+        const size_t projected_base = static_cast<size_t>(row) * 3 * width;
+        for (uint32_t column = 0; column < width; ++column) {
+            expected_state[static_cast<size_t>(cursor) * width + column] =
+                projected[projected_base + column] *
+                projected[projected_base + 2 * width + column];
+        }
+        for (uint32_t column = 0; column < width; ++column) {
+            float sum = 0.0f;
+            for (uint32_t tap = 0; tap < cache_length; ++tap) {
+                const uint32_t slot = (cursor + 1 + tap) % cache_length;
+                sum += expected_state[static_cast<size_t>(slot) * width + column] *
+                       taps[static_cast<size_t>(tap) * width + column];
+            }
+            expected_output[static_cast<size_t>(row) * width + column] =
+                projected[projected_base + width + column] * sum;
+        }
+    }
+
+    id<MTLBuffer> projected_buffer = buffer(device, projected);
+    id<MTLBuffer> taps_buffer = buffer(device, taps);
+    id<MTLBuffer> state_buffer = buffer(
+        device, std::vector<float>(static_cast<size_t>(cache_length) * width, 0.0f));
+    id<MTLBuffer> output_buffer = buffer(
+        device, std::vector<float>(static_cast<size_t>(rows) * width, 0.0f));
+    id<MTLBuffer> buffers[] = {projected_buffer, taps_buffer, state_buffer, output_buffer};
+    const uint32_t initial_cursor = base_position % cache_length;
+
+    id<MTLCommandBuffer> command_buffer = [queue commandBuffer];
+    id<MTLComputeCommandEncoder> encoder = [command_buffer computeCommandEncoder];
+    id<MTLComputePipelineState> state = pipeline(
+        device, library, "celeg_shortconv_batch_ring");
+    [encoder setComputePipelineState:state];
+    for (NSUInteger index = 0; index < 4; ++index) {
+        [encoder setBuffer:buffers[index] offset:0 atIndex:index];
+    }
+    [encoder setBytes:&rows length:sizeof(rows) atIndex:4];
+    [encoder setBytes:&width length:sizeof(width) atIndex:5];
+    [encoder setBytes:&cache_length length:sizeof(cache_length) atIndex:6];
+    [encoder setBytes:&initial_cursor length:sizeof(initial_cursor) atIndex:7];
+    [encoder dispatchThreadgroups:MTLSizeMake(1, 1, 1)
+            threadsPerThreadgroup:MTLSizeMake(256, 1, 1)];
+    [encoder endEncoding];
+    [command_buffer commit];
+    [command_buffer waitUntilCompleted];
+    if (command_buffer.status != MTLCommandBufferStatusCompleted) {
+        throw std::runtime_error("Metal short-convolution batch dispatch failed");
+    }
+
+    const float* actual_output = static_cast<const float*>(output_buffer.contents);
+    const float* actual_state = static_cast<const float*>(state_buffer.contents);
+    for (size_t index = 0; index < expected_output.size(); ++index) {
+        check_close(actual_output[index], expected_output[index], "short-convolution batch output");
+    }
+    for (size_t index = 0; index < expected_state.size(); ++index) {
+        check_close(actual_state[index], expected_state[index], "short-convolution batch state");
+    }
+
+    const std::vector<float> decode_projected(projected.begin(), projected.begin() + 3 * width);
+    std::vector<float> decode_expected_state(static_cast<size_t>(cache_length) * width, 0.0f);
+    std::vector<float> decode_expected_output(width, 0.0f);
+    const uint32_t decode_cursor = base_position % cache_length;
+    for (uint32_t column = 0; column < width; ++column) {
+        decode_expected_state[static_cast<size_t>(decode_cursor) * width + column] =
+            decode_projected[column] * decode_projected[2 * width + column];
+        float sum = 0.0f;
+        for (uint32_t tap = 0; tap < cache_length; ++tap) {
+            const uint32_t slot = (decode_cursor + 1 + tap) % cache_length;
+            sum += decode_expected_state[static_cast<size_t>(slot) * width + column] *
+                   taps[static_cast<size_t>(tap) * width + column];
+        }
+        decode_expected_output[column] = decode_projected[width + column] * sum;
+    }
+
+    id<MTLBuffer> decode_projected_buffer = buffer(device, decode_projected);
+    id<MTLBuffer> decode_state_buffer = buffer(device, std::vector<float>(
+        static_cast<size_t>(cache_length) * width, 0.0f));
+    id<MTLBuffer> decode_output_buffer = buffer(device, std::vector<float>(width, 0.0f));
+    id<MTLBuffer> decode_buffers[] = {
+        decode_projected_buffer, taps_buffer, decode_state_buffer, decode_output_buffer};
+    id<MTLCommandBuffer> decode_command = [queue commandBuffer];
+    id<MTLComputeCommandEncoder> decode_encoder = [decode_command computeCommandEncoder];
+    id<MTLComputePipelineState> decode_pipeline = pipeline(
+        device, library, "celeg_shortconv_ring");
+    [decode_encoder setComputePipelineState:decode_pipeline];
+    for (NSUInteger index = 0; index < 4; ++index) {
+        [decode_encoder setBuffer:decode_buffers[index] offset:0 atIndex:index];
+    }
+    [decode_encoder setBytes:&width length:sizeof(width) atIndex:4];
+    [decode_encoder setBytes:&cache_length length:sizeof(cache_length) atIndex:5];
+    [decode_encoder setBytes:&decode_cursor length:sizeof(decode_cursor) atIndex:6];
+    [decode_encoder dispatchThreads:MTLSizeMake(width, 1, 1)
+           threadsPerThreadgroup:MTLSizeMake(width, 1, 1)];
+    [decode_encoder endEncoding];
+    [decode_command commit];
+    [decode_command waitUntilCompleted];
+    if (decode_command.status != MTLCommandBufferStatusCompleted) {
+        throw std::runtime_error("Metal short-convolution decode dispatch failed");
+    }
+    const float* decode_actual = static_cast<const float*>(decode_output_buffer.contents);
+    const float* decode_state = static_cast<const float*>(decode_state_buffer.contents);
+    for (uint32_t index = 0; index < width; ++index) {
+        check_close(decode_actual[index], decode_expected_output[index],
+                    "short-convolution decode output");
+    }
+    for (size_t index = 0; index < decode_expected_state.size(); ++index) {
+        check_close(decode_state[index], decode_expected_state[index],
+                    "short-convolution decode state");
+    }
+}
+
 void check_gated_delta(id<MTLDevice> device, id<MTLCommandQueue> queue,
                        id<MTLLibrary> library) {
     const std::vector<float> projected_values{1.0f, 2.0f, 3.0f};
@@ -185,6 +320,7 @@ int main() {
         }
         id<MTLCommandQueue> queue = [device newCommandQueue];
         if (!queue) throw std::runtime_error("Metal recurrent command queue failed");
+        check_shortconv_ring(device, queue, library);
         check_gated_delta(device, queue, library);
         check_mamba(device, queue, library);
         std::cout << "metal recurrent kernels passed\n";
