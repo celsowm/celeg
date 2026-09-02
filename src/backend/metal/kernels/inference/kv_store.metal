@@ -6,9 +6,9 @@ kernel void celeg_store_kv_batch_2d(
     constant uint& rows [[buffer(4)]],
     constant uint& base_position [[buffer(5)]],
     constant uint& width [[buffer(6)]],
-    uint lane [[thread_position_in_threadgroup]],
+    uint2 local [[thread_position_in_threadgroup]],
     uint2 group [[threadgroup_position_in_grid]]) {
-    const uint column = group.x * 256u + lane;
+    const uint column = group.x * 256u + local.x;
     const uint row = group.y;
     if (row >= rows || column >= width) return;
     const uint position = base_position + row;
