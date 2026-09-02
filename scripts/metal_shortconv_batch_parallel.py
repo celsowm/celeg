@@ -10,6 +10,7 @@ import subprocess
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 BUILD_DIR = ROOT / "build" / "metal-shortconv-batch-parallel"
 SOURCE = ROOT / "apps" / "benchmark" / "metal" / "shortconv_batch_parallel.mm"
+GENERATED_SOURCE = BUILD_DIR / "shortconv_batch_parallel_production.mm"
 BINARY = BUILD_DIR / "celeg-metal-shortconv-batch-parallel-benchmark"
 
 
@@ -19,10 +20,17 @@ def run(command: list[str]) -> None:
 
 def build() -> None:
     BUILD_DIR.mkdir(parents=True, exist_ok=True)
+    source = SOURCE.read_text(encoding="utf-8")
+    source = source.replace(
+        '            read_text("src/backend/metal/kernels/inference/convolution.metal") + "\\n" +\n'
+        '            read_text("apps/benchmark/metal/shortconv_batch_parallel.metal");',
+        '            read_text("src/backend/metal/kernels/inference/convolution.metal");',
+    )
+    GENERATED_SOURCE.write_text(source, encoding="utf-8")
     run([
         "xcrun", "--sdk", "macosx", "clang++",
         "-std=c++20", "-fobjc-arc",
-        str(SOURCE),
+        str(GENERATED_SOURCE),
         "-framework", "Foundation",
         "-framework", "Metal",
         "-o", str(BINARY),
@@ -31,7 +39,7 @@ def build() -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Benchmark bit-exact rows-parallel LFM2.5 Metal short convolution."
+        description="Benchmark production rows-parallel LFM2.5 Metal short convolution."
     )
     parser.add_argument(
         "--build-only", action="store_true",
