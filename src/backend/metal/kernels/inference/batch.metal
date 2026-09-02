@@ -162,6 +162,21 @@ kernel void celeg_copy_batch(device const float* input [[buffer(0)]],
     if (index < count) output[index] = input[index];
 }
 
+/**
+ * @brief Casts an activation buffer to half so the batched tensor matmul can
+ * read it at half the bandwidth of the float32 source.
+ *
+ * Run once per matmul call rather than once per weight-tile: the tensor
+ * matmul re-reads its activation tile once per output row-tile, so shrinking
+ * the source element size shrinks that redundant traffic directly.
+ */
+kernel void celeg_cast_activation_half(device const float* input [[buffer(0)]],
+                                       device half* output [[buffer(1)]],
+                                       constant uint& count [[buffer(2)]],
+                                       uint index [[thread_position_in_grid]]) {
+    if (index < count) output[index] = static_cast<half>(input[index]);
+}
+
 kernel void celeg_residual_batch(device const float* input [[buffer(0)]],
                                  device const float* residual [[buffer(1)]],
                                  device float* output [[buffer(2)]],

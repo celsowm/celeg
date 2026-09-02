@@ -315,21 +315,26 @@ void MetalModel::Impl::encode_matmul(id<MTLComputeCommandEncoder> encoder,
                                      id<MTLBuffer> output, uint32_t rows,
                                      NSUInteger input_offset, NSUInteger output_offset,
                                      uint32_t output_stride) {
-    set_buffer(encoder, weight.buffer, 0);
-    set_buffer(encoder, input, 1, input_offset);
-    set_buffer(encoder, output, 2, output_offset);
-    set_bytes(encoder, &rows, sizeof(rows), 3);
-    set_bytes(encoder, &weight.cols, sizeof(weight.cols), 4);
-    set_bytes(encoder, &weight.rows, sizeof(weight.rows), 5);
     const uint32_t stride = output_stride == 0 ? weight.rows : output_stride;
-    set_bytes(encoder, &stride, sizeof(stride), 6);
     const bool dense = weight.row_bytes == 0;
-    if (!dense) set_bytes(encoder, &weight.row_bytes, sizeof(weight.row_bytes), 7);
     const bool tensor = tensor_matmul_available(weight.storage, rows);
     if (tensor) {
         const auto kernel = linear_kernel(weight.storage,
                                            LinearOperationKind::MatMulTensor);
         if (!kernel) throw std::runtime_error("unsupported Metal tensor matmul binding");
+        const uint32_t cast_count = rows * weight.cols;
+        set_buffer(encoder, input, 0, input_offset);
+        set_buffer(encoder, batch_activation_half, 1);
+        set_bytes(encoder, &cast_count, sizeof(cast_count), 2);
+        dispatch(encoder, "celeg_cast_activation_half", cast_count);
+        set_buffer(encoder, weight.buffer, 0);
+        set_buffer(encoder, batch_activation_half, 1);
+        set_buffer(encoder, output, 2, output_offset);
+        set_bytes(encoder, &rows, sizeof(rows), 3);
+        set_bytes(encoder, &weight.cols, sizeof(weight.cols), 4);
+        set_bytes(encoder, &weight.rows, sizeof(weight.rows), 5);
+        set_bytes(encoder, &stride, sizeof(stride), 6);
+        if (!dense) set_bytes(encoder, &weight.row_bytes, sizeof(weight.row_bytes), 7);
         id<MTLComputePipelineState> state = tensor_pipeline(*kernel);
         [encoder setComputePipelineState:state];
         [encoder setThreadgroupMemoryLength:kTensorTileRows * kTensorTileK *
@@ -342,6 +347,14 @@ void MetalModel::Impl::encode_matmul(id<MTLComputeCommandEncoder> encoder,
         record_dispatch(*kernel);
         return;
     }
+    set_buffer(encoder, weight.buffer, 0);
+    set_buffer(encoder, input, 1, input_offset);
+    set_buffer(encoder, output, 2, output_offset);
+    set_bytes(encoder, &rows, sizeof(rows), 3);
+    set_bytes(encoder, &weight.cols, sizeof(weight.cols), 4);
+    set_bytes(encoder, &weight.rows, sizeof(weight.rows), 5);
+    set_bytes(encoder, &stride, sizeof(stride), 6);
+    if (!dense) set_bytes(encoder, &weight.row_bytes, sizeof(weight.row_bytes), 7);
     const auto kernel = linear_kernel(weight.storage, LinearOperationKind::MatMul);
     if (!kernel) throw std::runtime_error("unsupported Metal matmul binding");
     const NSUInteger groups = (weight.rows + 7u) / 8u;

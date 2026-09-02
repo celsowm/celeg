@@ -51,6 +51,24 @@ uint16_t weight_bits(uint32_t row, uint32_t col) {
     return values[(row + col) % 3u];
 }
 
+/// @brief Round-to-nearest-even float32 to float16 bit conversion, valid for
+/// the well-behaved (non-subnormal, non-infinite) magnitudes this test uses.
+uint16_t half_bits(float value) {
+    uint32_t bits;
+    std::memcpy(&bits, &value, sizeof(bits));
+    const uint32_t sign = (bits >> 16u) & 0x8000u;
+    const int32_t exponent = static_cast<int32_t>((bits >> 23u) & 0xffu) - 127 + 15;
+    const uint32_t mantissa = bits & 0x7fffffu;
+    if (exponent <= 0) return static_cast<uint16_t>(sign);
+    if (exponent >= 0x1f) return static_cast<uint16_t>(sign | 0x7c00u);
+    const uint32_t half_mantissa = mantissa >> 13u;
+    const uint32_t remainder = mantissa & 0x1fffu;
+    uint16_t result = static_cast<uint16_t>(
+        sign | (static_cast<uint32_t>(exponent) << 10u) | half_mantissa);
+    if (remainder > 0x1000u || (remainder == 0x1000u && (half_mantissa & 1u))) ++result;
+    return result;
+}
+
 }
 
 int main() {
@@ -87,12 +105,19 @@ int main() {
                 input[row * cols + col] = std::sin(static_cast<float>((row + 1) * (col + 3)));
             }
         }
+        std::vector<uint16_t> input_half(input.size());
+        for (size_t index = 0; index < input.size(); ++index) {
+            input_half[index] = half_bits(input[index]);
+        }
         id<MTLBuffer> weights_buffer = [device newBufferWithBytes:weights.data()
                                                                length:weights.size() * sizeof(uint16_t)
                                                               options:MTLResourceStorageModeShared];
         id<MTLBuffer> input_buffer = [device newBufferWithBytes:input.data()
                                                              length:input.size() * sizeof(float)
                                                             options:MTLResourceStorageModeShared];
+        id<MTLBuffer> input_half_buffer = [device newBufferWithBytes:input_half.data()
+                                                                  length:input_half.size() * sizeof(uint16_t)
+                                                                 options:MTLResourceStorageModeShared];
         id<MTLBuffer> output_buffer = [device newBufferWithBytes:output.data()
                                                               length:output.size() * sizeof(float)
                                                              options:MTLResourceStorageModeShared];
@@ -101,7 +126,7 @@ int main() {
         id<MTLComputeCommandEncoder> encoder = [command_buffer computeCommandEncoder];
         [encoder setComputePipelineState:pipeline];
         [encoder setBuffer:weights_buffer offset:0 atIndex:0];
-        [encoder setBuffer:input_buffer offset:0 atIndex:1];
+        [encoder setBuffer:input_half_buffer offset:0 atIndex:1];
         [encoder setBuffer:output_buffer offset:0 atIndex:2];
         [encoder setBytes:&rows length:sizeof(rows) atIndex:3];
         [encoder setBytes:&cols length:sizeof(cols) atIndex:4];
@@ -122,7 +147,8 @@ int main() {
             for (uint32_t out = 0; out < output_rows; ++out) {
                 float expected = 0.0f;
                 for (uint32_t col = 0; col < cols; ++col) {
-                    expected += half_value(weight_bits(out, col)) * input[row * cols + col];
+                    expected += half_value(weight_bits(out, col)) *
+                        half_value(input_half[row * cols + col]);
                 }
                 maximum = std::max(maximum,
                     std::abs(expected - output[row * output_stride + out]));
