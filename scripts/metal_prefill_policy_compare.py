@@ -17,6 +17,7 @@ DEFAULT_BUILD_DIR = ROOT / "out" / "darwin-metal-release"
 RESULT_DIR = ROOT / "benchmarks" / "results"
 STRICT_RESULT = RESULT_DIR / "metal_lfm25_350m_q4_k_m_pp512_strict.json"
 RELAXED_RESULT = RESULT_DIR / "metal_lfm25_350m_q4_k_m_pp512_relaxed.json"
+EXPECTED_ATTENTION_LAYERS = 6
 
 
 def run(command: list[str], *, env: dict[str, str] | None = None) -> None:
@@ -80,6 +81,26 @@ def print_profile(label: str, entries: list[tuple[str, int]]) -> None:
         print(f"  {name}={count}")
 
 
+def verify_attention_policy(
+    strict_entries: list[tuple[str, int]],
+    relaxed_entries: list[tuple[str, int]],
+) -> None:
+    strict = dict(strict_entries)
+    relaxed = dict(relaxed_entries)
+    if strict.get("celeg_attention_tiled_simdgroup", 0) != 0:
+        raise RuntimeError("strict Metal prefill unexpectedly used tiled relaxed attention")
+    if strict.get("celeg_attention_batch", 0) != EXPECTED_ATTENTION_LAYERS:
+        raise RuntimeError(
+            "strict Metal prefill did not use the expected six causal attention dispatches"
+        )
+    if relaxed.get("celeg_attention_tiled_simdgroup", 0) != EXPECTED_ATTENTION_LAYERS:
+        raise RuntimeError(
+            "relaxed Metal prefill did not route all six LFM2.5 attention layers through tiled attention"
+        )
+    if relaxed.get("celeg_attention_batch", 0) != 0:
+        raise RuntimeError("relaxed Metal pp512 silently fell back to one-exp attention")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Build once and compare strict versus opt-in relaxed Metal pp512 performance."
@@ -120,14 +141,12 @@ def main() -> int:
     print(f"relaxed result: {RELAXED_RESULT}")
 
     checkpoint = pathlib.Path(str(strict["checkpoint"]))
-    print_profile(
-        "strict",
-        prefill_dispatch_profile(build_dir, checkpoint, relaxed=False),
-    )
-    print_profile(
-        "relaxed",
-        prefill_dispatch_profile(build_dir, checkpoint, relaxed=True),
-    )
+    strict_profile = prefill_dispatch_profile(build_dir, checkpoint, relaxed=False)
+    relaxed_profile = prefill_dispatch_profile(build_dir, checkpoint, relaxed=True)
+    print_profile("strict", strict_profile)
+    print_profile("relaxed", relaxed_profile)
+    verify_attention_policy(strict_profile, relaxed_profile)
+    print("\nattention policy gate: PASS")
     return 0
 
 
