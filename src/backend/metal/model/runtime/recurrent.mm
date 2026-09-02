@@ -95,7 +95,7 @@ void MetalModel::Impl::encode_short_convolution_batch(
     const uint32_t hidden_width = static_cast<uint32_t>(model.graph.hidden);
     const uint32_t cache_length = static_cast<uint32_t>(layer.cache_length);
     const uint32_t initial_cursor = base_position % cache_length;
-    constexpr uint32_t kParallelMinimumRows = 128;
+    constexpr uint32_t kParallelMinimumRows = 16;
 
     if (rows < kParallelMinimumRows) {
         set_buffer(encoder, batch_projected, 0);
