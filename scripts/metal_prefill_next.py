@@ -13,6 +13,7 @@ EXPERIMENTS = (
     ("strict llama-style Q4_K K32", ROOT / "scripts" / "metal_q4k_k32_llama_strict.py"),
     ("Q4_K stage128 / strict K64x2", ROOT / "scripts" / "metal_q4k_stage128.py"),
     ("Q4_K static full tiles", ROOT / "scripts" / "metal_q4k_static_full.py"),
+    ("Q4_K static + stage128", ROOT / "scripts" / "metal_q4k_static_stage128.py"),
     ("hardened vectorized Q4_K K64", ROOT / "scripts" / "metal_q4k_k64_vector.py"),
 )
 
