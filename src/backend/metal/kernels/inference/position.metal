@@ -92,7 +92,6 @@ kernel void celeg_qk_norm_rope_batch_split(
         float sum = 0.0f;
         for (uint d = 0; d < head_dim; ++d) sum += query[base + d] * query[base + d];
         const float inverse = rsqrt(sum / static_cast<float>(head_dim) + query_epsilon);
-        for (uint d = 0; d < head_dim; ++d) query[base + d] *= inverse * query_weight[d];
         for (uint pair = 0; pair < pairs; ++pair) {
             const float frequency = pow(theta, -2.0f * static_cast<float>(pair) /
                                               static_cast<float>(head_dim));
@@ -101,8 +100,8 @@ kernel void celeg_qk_norm_rope_batch_split(
             const float s = sin(angle);
             const size_t first = base + pair;
             const size_t second = base + pairs + pair;
-            const float x = query[first];
-            const float y = query[second];
+            const float x = query[first] * (inverse * query_weight[pair]);
+            const float y = query[second] * (inverse * query_weight[pairs + pair]);
             query[first] = (x * c - y * s) * query_scale;
             query[second] = (y * c + x * s) * query_scale;
         }
@@ -113,7 +112,6 @@ kernel void celeg_qk_norm_rope_batch_split(
         float sum = 0.0f;
         for (uint d = 0; d < head_dim; ++d) sum += key[base + d] * key[base + d];
         const float inverse = rsqrt(sum / static_cast<float>(head_dim) + key_epsilon);
-        for (uint d = 0; d < head_dim; ++d) key[base + d] *= inverse * key_weight[d];
         for (uint pair = 0; pair < pairs; ++pair) {
             const float frequency = pow(theta, -2.0f * static_cast<float>(pair) /
                                               static_cast<float>(head_dim));
@@ -122,8 +120,8 @@ kernel void celeg_qk_norm_rope_batch_split(
             const float s = sin(angle);
             const size_t first = base + pair;
             const size_t second = base + pairs + pair;
-            const float x = key[first];
-            const float y = key[second];
+            const float x = key[first] * (inverse * key_weight[pair]);
+            const float y = key[second] * (inverse * key_weight[pairs + pair]);
             key[first] = x * c - y * s;
             key[second] = y * c + x * s;
         }
