@@ -9,13 +9,18 @@ import sys
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 
-def run(script: str) -> None:
+def run(script: str, *args: str) -> None:
     print(f"\n=== {script} ===", flush=True)
-    subprocess.run([sys.executable, str(ROOT / "scripts" / script)], cwd=ROOT, check=True)
+    subprocess.run(
+        [sys.executable, str(ROOT / "scripts" / script), *args],
+        cwd=ROOT,
+        check=True,
+    )
 
 
 def main() -> int:
     run("metal_rope_table.py")
+    run("metal_prefill_tail.py", "--no-build")
     return 0
 
 
