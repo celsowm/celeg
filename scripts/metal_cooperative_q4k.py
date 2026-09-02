@@ -10,6 +10,7 @@ import subprocess
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 BUILD_DIR = ROOT / "build" / "metal-cooperative-q4k"
 HOST_SOURCE = ROOT / "apps" / "benchmark" / "metal" / "cooperative_q4k.mm"
+GENERATED_SOURCE = BUILD_DIR / "cooperative_q4k_lfm25.mm"
 BINARY = BUILD_DIR / "celeg-metal-cooperative-q4k-benchmark"
 
 
@@ -19,10 +20,14 @@ def run(command: list[str], *, cwd: pathlib.Path = ROOT) -> None:
 
 def build() -> None:
     BUILD_DIR.mkdir(parents=True, exist_ok=True)
+    GENERATED_SOURCE.write_text(
+        HOST_SOURCE.read_text(encoding="utf-8").replace("4608", "6656"),
+        encoding="utf-8",
+    )
     run([
         "xcrun", "--sdk", "macosx", "clang++",
         "-std=c++20", "-fobjc-arc",
-        str(HOST_SOURCE),
+        str(GENERATED_SOURCE),
         "-framework", "Foundation",
         "-framework", "Metal",
         "-o", str(BINARY),
