@@ -1,0 +1,11 @@
+{
+  "name": "metal_lfm25_350m_q4_k_m_pp512",
+  "backend": "metal",
+  "repo": "LiquidAI/LFM2.5-350M-GGUF",
+  "gguf_filename": "LFM2.5-350M-Q4_K_M.gguf",
+  "context": 640,
+  "prompt_tokens": 512,
+  "decode_tokens": 128,
+  "warmup": 1,
+  "repetitions": 3
+}
