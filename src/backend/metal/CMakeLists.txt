@@ -27,6 +27,7 @@ set(CELEG_METAL_SHADER_SOURCES
     src/backend/metal/kernels/inference/state.metal
     src/backend/metal/kernels/inference/projection.metal
     src/backend/metal/kernels/inference/batch.metal
+    src/backend/metal/kernels/inference/attention_one_exp.metal
     src/backend/metal/kernels/inference/kv_store.metal
     src/backend/metal/kernels/inference/feed_forward.metal
     src/backend/metal/kernels/inference/normalization.metal
@@ -127,6 +128,13 @@ file(READ "${_CELEG_METAL_ATTENTION_GATE_SOURCE_FILE}"
     CELEG_METAL_ATTENTION_GATE_SOURCE)
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
     "${_CELEG_METAL_ATTENTION_GATE_SOURCE_FILE}")
+
+set(_CELEG_METAL_ATTENTION_ONE_EXP_SOURCE_FILE
+    "${CMAKE_CURRENT_LIST_DIR}/kernels/inference/attention_one_exp.metal")
+file(READ "${_CELEG_METAL_ATTENTION_ONE_EXP_SOURCE_FILE}"
+    CELEG_METAL_ATTENTION_ONE_EXP_SOURCE)
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+    "${_CELEG_METAL_ATTENTION_ONE_EXP_SOURCE_FILE}")
 
 set(_CELEG_METAL_TENSOR_Q4K_STATIC_STAGE128_SOURCE_FILE
     "${CMAKE_CURRENT_LIST_DIR}/kernels/tensor_q4k_static_stage128.metal")
