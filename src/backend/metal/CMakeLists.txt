@@ -28,6 +28,7 @@ set(CELEG_METAL_SHADER_SOURCES
     src/backend/metal/kernels/inference/projection.metal
     src/backend/metal/kernels/inference/batch.metal
     src/backend/metal/kernels/inference/feed_forward.metal
+    src/backend/metal/kernels/inference/normalization.metal
     src/backend/metal/kernels/inference/relative_bias.metal
     src/backend/metal/kernels/inference/position.metal
     src/backend/metal/kernels/inference/no_position.metal
@@ -45,6 +46,13 @@ file(READ "${_CELEG_METAL_FEED_FORWARD_SOURCE_FILE}"
     CELEG_METAL_FEED_FORWARD_SOURCE)
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
     "${_CELEG_METAL_FEED_FORWARD_SOURCE_FILE}")
+
+set(_CELEG_METAL_NORMALIZATION_SOURCE_FILE
+    "${CMAKE_CURRENT_LIST_DIR}/kernels/inference/normalization.metal")
+file(READ "${_CELEG_METAL_NORMALIZATION_SOURCE_FILE}"
+    CELEG_METAL_NORMALIZATION_SOURCE)
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+    "${_CELEG_METAL_NORMALIZATION_SOURCE_FILE}")
 
 set(_CELEG_METAL_RELATIVE_BIAS_SOURCE_FILE
     "${CMAKE_CURRENT_LIST_DIR}/kernels/inference/relative_bias.metal")
