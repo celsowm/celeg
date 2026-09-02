@@ -20,6 +20,7 @@ def main() -> int:
     run("metal_q4k_k32_llama_relaxed.py")
     run("metal_shortconv_batch_parallel.py")
     run("metal_attention_one_exp.py")
+    run("metal_attention_materialized_simdgroup.py")
     return 0
 
 
