@@ -1,8 +1,18 @@
 #include "detail.hpp"
 
 #include <algorithm>
+#include <cstdlib>
 
 namespace celeg {
+
+namespace {
+
+bool relaxed_prefill_enabled() {
+    const char* value = std::getenv("CELEG_METAL_TENSOR_RELAXED_PRECISION");
+    return value != nullptr && value[0] == '1' && value[1] == '\0';
+}
+
+}
 
 void MetalModel::Impl::encode_dense_feed_forward(
     id<MTLComputeCommandEncoder> encoder, Layer& layer, bool gate_up_ready) {
@@ -34,13 +44,16 @@ void MetalModel::Impl::encode_dense_feed_forward_batch(
     set_buffer(encoder, batch_activated, 1);
     set_bytes(encoder, &rows, sizeof(rows), 2);
     set_bytes(encoder, &intermediate, sizeof(intermediate), 3);
-    id<MTLComputePipelineState> swiglu = pipeline("celeg_swiglu_batch_2d");
+    const std::string_view swiglu_kernel = relaxed_prefill_enabled()
+        ? "celeg_swiglu_batch_2d_relaxed"
+        : "celeg_swiglu_batch_2d";
+    id<MTLComputePipelineState> swiglu = pipeline(swiglu_kernel);
     [encoder setComputePipelineState:swiglu];
     const NSUInteger threads_x = std::min<NSUInteger>(
         intermediate, swiglu.maxTotalThreadsPerThreadgroup);
     [encoder dispatchThreads:MTLSizeMake(intermediate, rows, 1)
        threadsPerThreadgroup:MTLSizeMake(threads_x, 1, 1)];
-    record_dispatch("celeg_swiglu_batch_2d");
+    record_dispatch(swiglu_kernel);
 
     encode_matmul(encoder, layer.ffn_down, batch_activated, batch_operation, rows);
 }
