@@ -82,6 +82,12 @@ def prefill_dispatch_profile(
             if match:
                 histogram[match.group(1)] = histogram.get(match.group(1), 0) + int(match.group(2))
 
+    if histogram and not gpu_ms:
+        raise RuntimeError(
+            "Metal dispatch counts were captured but no valid GPU timestamps were resolved:\n"
+            + result.stderr
+        )
+
     counts = sorted(histogram.items(), key=lambda item: (-item[1], item[0]))
     timings = sorted(gpu_ms.items(), key=lambda item: (-item[1], item[0]))
     return counts, timings
@@ -106,7 +112,9 @@ def print_profile(
     print(f"\n{label} prefill GPU dispatch profile")
     print(f"  {'kernel':48} {'count':>7} {'gpu ms':>10}")
     for name in names:
-        print(f"  {name:48} {count_by_name.get(name, 0):7d} {gpu_by_name.get(name, 0.0):10.3f}")
+        timing = gpu_by_name.get(name)
+        timing_text = f"{timing:10.3f}" if timing is not None else f"{'n/a':>10}"
+        print(f"  {name:48} {count_by_name.get(name, 0):7d} {timing_text}")
     if timings:
         print(f"  {'TOTAL SAMPLED':48} {'':7} {sum(value for _, value in timings):10.3f}")
 
