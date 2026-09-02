@@ -9,7 +9,10 @@
 #include "inference/vector.metal"
 #include "inference/state.metal"
 #include "inference/projection.metal"
+#define celeg_attention_batch celeg_attention_batch_baseline
 #include "inference/batch.metal"
+#undef celeg_attention_batch
+#include "inference/attention_one_exp.metal"
 #include "inference/kv_store.metal"
 #include "inference/feed_forward.metal"
 #include "inference/normalization.metal"
