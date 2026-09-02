@@ -15,6 +15,7 @@ EXPERIMENTS = (
     ("modern Q4_K K32", ROOT / "scripts" / "metal_q4k_k32.py"),
     ("vectorized Q4_K K32", ROOT / "scripts" / "metal_q4k_k32_vector.py"),
     ("vectorized production Q4_K K64", ROOT / "scripts" / "metal_q4k_k64_vector.py"),
+    ("predecoded Q4_K F16 cache", ROOT / "scripts" / "metal_q4k_predecoded.py"),
 )
 
 
