@@ -36,7 +36,7 @@ jobs:
         run: |
           cat src/backend/metal/kernels/inference/common.metal \
               src/backend/metal/kernels/inference/attention_one_exp.metal \
-              apps/benchmark/metal/attention_tiled_simdgroup.metal \
+              src/backend/metal/kernels/inference/attention_tiled_simdgroup.metal \
               > tiled-attention.metal
           xcrun --sdk macosx metal -c tiled-attention.metal -o tiled-attention.air
       - name: Compile 64x256 tensor tile harness
