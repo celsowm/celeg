@@ -25,7 +25,7 @@ jobs:
           xcrun --sdk macosx metal -c src/backend/metal/kernels/probe.metal -o probe.air
           xcrun --sdk macosx metal -c src/backend/metal/kernels/inference.metal -o inference.air
           xcrun --sdk macosx metallib probe.air inference.air -o celeg.metallib
-      - name: Compile 64x256 tensor tile experiment
+      - name: Compile 64x256 tensor tile harness
         run: python scripts/metal_tile_64x256.py --build-only
       - name: Build Metal backend and test targets
         run: python scripts/dev.py build --backend metal --celeg-tests off --build-type Release --jobs 2
