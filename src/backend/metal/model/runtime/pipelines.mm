@@ -22,13 +22,23 @@ constexpr NSUInteger kTensorTileBytes =
     kTensorTileRows * kTensorTileK * sizeof(uint16_t);
 constexpr NSUInteger kQ4KStrictStageBytes =
     kTensorTileRows * kQ4KStrictStageK * sizeof(uint16_t);
+constexpr NSUInteger kGpuCounterSampleCapacity = 4096;
 constexpr std::string_view kQ4KStrictKernel =
     "celeg_matmul_tensor_q4k_static_stage128";
 constexpr std::string_view kQ4KRelaxedKernel =
     "celeg_matmul_tensor_q4k_relaxed";
+constexpr std::string_view kQ6KRelaxedKernel =
+    "celeg_matmul_tensor_q6k_relaxed";
+
+thread_local id<MTLComputeCommandEncoder> gGpuProfileEncoder = nil;
 
 bool relaxed_tensor_precision_enabled() {
     const char* value = std::getenv("CELEG_METAL_TENSOR_RELAXED_PRECISION");
+    return value != nullptr && value[0] == '1' && value[1] == '\0';
+}
+
+bool gpu_dispatch_profile_enabled() {
+    const char* value = std::getenv("CELEG_METAL_GPU_PROFILE");
     return value != nullptr && value[0] == '1' && value[1] == '\0';
 }
 
@@ -112,6 +122,45 @@ void MetalModel::Impl::begin_commands(
     command_started = std::chrono::steady_clock::now();
     command_dispatches = 0;
     dispatch_histogram.clear();
+    gpu_counter_samples = nil;
+    gpu_counter_dispatches.clear();
+    gpu_counter_next_sample = 0;
+    gGpuProfileEncoder = nil;
+
+    if (gpu_dispatch_profile_enabled()) {
+        if (@available(macOS 11.0, *)) {
+            if ([device supportsCounterSampling:MTLCounterSamplingPointAtDispatchBoundary]) {
+                id<MTLCounterSet> timestamp_set = nil;
+                for (id<MTLCounterSet> counter_set in device.counterSets) {
+                    if ([counter_set.name isEqualToString:MTLCommonCounterSetTimestamp]) {
+                        timestamp_set = counter_set;
+                        break;
+                    }
+                }
+                if (timestamp_set) {
+                    MTLCounterSampleBufferDescriptor* descriptor =
+                        [[MTLCounterSampleBufferDescriptor alloc] init];
+                    descriptor.counterSet = timestamp_set;
+                    descriptor.storageMode = MTLStorageModeShared;
+                    descriptor.sampleCount = kGpuCounterSampleCapacity;
+                    NSError* counter_error = nil;
+                    gpu_counter_samples = [device
+                        newCounterSampleBufferWithDescriptor:descriptor
+                                                     error:&counter_error];
+                    if (gpu_counter_samples) {
+                        gGpuProfileEncoder = encoder;
+                        [encoder sampleCountersInBuffer:gpu_counter_samples
+                                          atSampleIndex:0
+                                            withBarrier:NO];
+                        gpu_counter_next_sample = 1;
+                    } else if (counter_error) {
+                        std::cerr << "metal gpu dispatch profile unavailable: "
+                                  << ns_string(counter_error.localizedDescription) << '\n';
+                    }
+                }
+            }
+        }
+    }
 }
 
 void MetalModel::Impl::finish_commands(
@@ -140,6 +189,38 @@ void MetalModel::Impl::finish_commands(
     }
     ++execution_metrics.command_buffers;
     execution_metrics.dispatches += command_dispatches;
+
+    if (gpu_counter_samples && gpu_counter_next_sample > 1) {
+        NSData* resolved = [gpu_counter_samples resolveCounterRange:
+            NSMakeRange(0, gpu_counter_next_sample)];
+        const NSUInteger expected =
+            gpu_counter_next_sample * sizeof(MTLCounterResultTimestamp);
+        if (resolved.length >= expected) {
+            const auto* samples = static_cast<const MTLCounterResultTimestamp*>(resolved.bytes);
+            std::unordered_map<std::string, double> gpu_ms;
+            for (size_t index = 0; index < gpu_counter_dispatches.size(); ++index) {
+                const uint64_t start = samples[index].timestamp;
+                const uint64_t end = samples[index + 1].timestamp;
+                if (start == MTLCounterErrorValue || end == MTLCounterErrorValue ||
+                    end < start) {
+                    continue;
+                }
+                gpu_ms[gpu_counter_dispatches[index]] +=
+                    static_cast<double>(end - start) / 1.0e6;
+            }
+            std::vector<std::pair<std::string, double>> entries(
+                gpu_ms.begin(), gpu_ms.end());
+            std::sort(entries.begin(), entries.end(),
+                      [](const auto& left, const auto& right) {
+                          return left.second > right.second;
+                      });
+            std::cerr << "metal gpu dispatch profile" << '\n';
+            for (const auto& [name, milliseconds] : entries) {
+                std::cerr << "  " << name << "=" << milliseconds << "ms\n";
+            }
+        }
+    }
+
     if (std::getenv("CELEG_METAL_DISPATCH_PROFILE") != nullptr) {
         std::vector<std::pair<std::string, uint64_t>> entries(
             dispatch_histogram.begin(), dispatch_histogram.end());
@@ -152,6 +233,10 @@ void MetalModel::Impl::finish_commands(
             std::cerr << "  " << name << "=" << count << '\n';
         }
     }
+    gpu_counter_samples = nil;
+    gpu_counter_dispatches.clear();
+    gpu_counter_next_sample = 0;
+    gGpuProfileEncoder = nil;
     encoder = nil;
     command_buffer = nil;
 }
@@ -232,6 +317,14 @@ void MetalModel::Impl::record_dispatch(std::string_view name) {
     ++command_dispatches;
     if (std::getenv("CELEG_METAL_DISPATCH_PROFILE") != nullptr) {
         ++dispatch_histogram[std::string(name)];
+    }
+    if (gpu_counter_samples && gGpuProfileEncoder &&
+        gpu_counter_next_sample < gpu_counter_samples.sampleCount) {
+        gpu_counter_dispatches.emplace_back(name);
+        [gGpuProfileEncoder sampleCountersInBuffer:gpu_counter_samples
+                                     atSampleIndex:gpu_counter_next_sample
+                                       withBarrier:YES];
+        ++gpu_counter_next_sample;
     }
 }
 
@@ -350,25 +443,28 @@ void MetalModel::Impl::encode_matmul(id<MTLComputeCommandEncoder> encoder,
         std::string_view selected_kernel = *generic_kernel;
         NSUInteger shared_bytes = kTensorTileBytes;
         bool exact_groups = false;
-        bool custom_q4k = false;
+        bool custom_quantized = false;
+        const bool relaxed = relaxed_tensor_precision_enabled();
 
-        if (weight.storage == LinearStorage::Q4K) {
-            if (relaxed_tensor_precision_enabled()) {
-                selected_kernel = kQ4KRelaxedKernel;
-                custom_q4k = true;
-            } else if ((rows % kTensorTileTokens) == 0u &&
-                       (weight.cols % kQ4KStrictStageK) == 0u &&
-                       (weight.rows % kTensorTileRows) == 0u &&
-                       device.maxThreadgroupMemoryLength >= kQ4KStrictStageBytes) {
-                selected_kernel = kQ4KStrictKernel;
-                shared_bytes = kQ4KStrictStageBytes;
-                exact_groups = true;
-                custom_q4k = true;
-            }
+        if (relaxed && weight.storage == LinearStorage::Q4K) {
+            selected_kernel = kQ4KRelaxedKernel;
+            custom_quantized = true;
+        } else if (relaxed && weight.storage == LinearStorage::Q6K) {
+            selected_kernel = kQ6KRelaxedKernel;
+            custom_quantized = true;
+        } else if (weight.storage == LinearStorage::Q4K &&
+                   (rows % kTensorTileTokens) == 0u &&
+                   (weight.cols % kQ4KStrictStageK) == 0u &&
+                   (weight.rows % kTensorTileRows) == 0u &&
+                   device.maxThreadgroupMemoryLength >= kQ4KStrictStageBytes) {
+            selected_kernel = kQ4KStrictKernel;
+            shared_bytes = kQ4KStrictStageBytes;
+            exact_groups = true;
+            custom_quantized = true;
         }
 
         id<MTLComputePipelineState> state = tensor_pipeline(selected_kernel);
-        if (custom_q4k &&
+        if (custom_quantized &&
             (state.maxTotalThreadsPerThreadgroup < kTensorTileThreads ||
              state.staticThreadgroupMemoryLength + shared_bytes >
                  device.maxThreadgroupMemoryLength)) {
