@@ -10,6 +10,7 @@ if(TARGET celeg_metal_backend)
         metal_kv_store_test
         metal_linear_binding_test
         metal_normalization_test
+        metal_qk_store_test
         metal_quantization_test
         metal_recurrent_test
         metal_tensor_test)
