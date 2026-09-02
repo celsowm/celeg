@@ -216,6 +216,9 @@ struct MetalModel::Impl {
     std::chrono::steady_clock::time_point command_started;
     uint64_t command_dispatches = 0;
     std::unordered_map<std::string, uint64_t> dispatch_histogram;
+    id<MTLCounterSampleBuffer> gpu_counter_samples = nil;
+    std::vector<std::string> gpu_counter_dispatches;
+    NSUInteger gpu_counter_next_sample = 0;
 
     id<MTLBuffer> buffer(const std::vector<float>& values);
     id<MTLBuffer> immutable_buffer(const void* data, size_t bytes) const;
