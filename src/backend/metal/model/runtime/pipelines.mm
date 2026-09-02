@@ -115,10 +115,6 @@ void MetalModel::Impl::begin_commands(
     if (!command_buffer) {
         throw std::runtime_error("Metal command buffer creation failed");
     }
-    encoder = [command_buffer computeCommandEncoder];
-    if (!encoder) {
-        throw std::runtime_error("Metal compute encoder creation failed");
-    }
     command_started = std::chrono::steady_clock::now();
     command_dispatches = 0;
     dispatch_histogram.clear();
@@ -147,19 +143,37 @@ void MetalModel::Impl::begin_commands(
                     gpu_counter_samples = [device
                         newCounterSampleBufferWithDescriptor:descriptor
                                                      error:&counter_error];
-                    if (gpu_counter_samples) {
-                        gGpuProfileEncoder = encoder;
-                        [encoder sampleCountersInBuffer:gpu_counter_samples
-                                          atSampleIndex:0
-                                            withBarrier:NO];
-                        gpu_counter_next_sample = 1;
-                    } else if (counter_error) {
+                    if (!gpu_counter_samples && counter_error) {
                         std::cerr << "metal gpu dispatch profile unavailable: "
                                   << ns_string(counter_error.localizedDescription) << '\n';
                     }
                 }
             }
         }
+    }
+
+    if (gpu_counter_samples) {
+        MTLComputePassDescriptor* pass_descriptor =
+            [MTLComputePassDescriptor computePassDescriptor];
+        MTLComputePassSampleBufferAttachmentDescriptor* attachment =
+            pass_descriptor.sampleBufferAttachments[0];
+        attachment.sampleBuffer = gpu_counter_samples;
+        attachment.startOfEncoderSampleIndex = MTLCounterDontSample;
+        attachment.endOfEncoderSampleIndex = MTLCounterDontSample;
+        encoder = [command_buffer computeCommandEncoderWithDescriptor:pass_descriptor];
+    } else {
+        encoder = [command_buffer computeCommandEncoder];
+    }
+    if (!encoder) {
+        throw std::runtime_error("Metal compute encoder creation failed");
+    }
+
+    if (gpu_counter_samples) {
+        gGpuProfileEncoder = encoder;
+        [encoder sampleCountersInBuffer:gpu_counter_samples
+                          atSampleIndex:0
+                            withBarrier:NO];
+        gpu_counter_next_sample = 1;
     }
 }
 
@@ -198,11 +212,13 @@ void MetalModel::Impl::finish_commands(
         if (resolved.length >= expected) {
             const auto* samples = static_cast<const MTLCounterResultTimestamp*>(resolved.bytes);
             std::unordered_map<std::string, double> gpu_ms;
+            size_t invalid_intervals = 0;
             for (size_t index = 0; index < gpu_counter_dispatches.size(); ++index) {
                 const uint64_t start = samples[index].timestamp;
                 const uint64_t end = samples[index + 1].timestamp;
                 if (start == MTLCounterErrorValue || end == MTLCounterErrorValue ||
                     end < start) {
+                    ++invalid_intervals;
                     continue;
                 }
                 gpu_ms[gpu_counter_dispatches[index]] +=
@@ -218,6 +234,13 @@ void MetalModel::Impl::finish_commands(
             for (const auto& [name, milliseconds] : entries) {
                 std::cerr << "  " << name << "=" << milliseconds << "ms\n";
             }
+            if (invalid_intervals != 0) {
+                std::cerr << "metal gpu dispatch profile invalid_intervals="
+                          << invalid_intervals << '\n';
+            }
+        } else {
+            std::cerr << "metal gpu dispatch profile resolve size=" << resolved.length
+                      << " expected=" << expected << '\n';
         }
     }
 
