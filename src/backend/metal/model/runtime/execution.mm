@@ -24,10 +24,7 @@ void MetalModel::Impl::encode_token(id<MTLCommandBuffer>& command_buffer,
         if (model.graph.embedding_transform.post_norm) {
             encode_rmsnorm(encoder, hidden, final_norm, operation, hidden_width,
                            model.graph.embedding_transform.post_norm->epsilon);
-            set_buffer(encoder, operation, 0);
-            set_buffer(encoder, hidden, 1);
-            set_bytes(encoder, &hidden_width, sizeof(hidden_width), 2);
-            dispatch(encoder, "celeg_copy", hidden_width);
+            std::swap(hidden, operation);
         }
 
         bool normed_ready = false;
