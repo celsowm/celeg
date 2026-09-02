@@ -18,6 +18,7 @@ RESULT_DIR = ROOT / "benchmarks" / "results"
 STRICT_RESULT = RESULT_DIR / "metal_lfm25_350m_q4_k_m_pp512_strict.json"
 RELAXED_RESULT = RESULT_DIR / "metal_lfm25_350m_q4_k_m_pp512_relaxed.json"
 EXPECTED_ATTENTION_LAYERS = 6
+EXPECTED_FFN_LAYERS = 16
 
 
 def run(command: list[str], *, env: dict[str, str] | None = None) -> None:
@@ -81,7 +82,7 @@ def print_profile(label: str, entries: list[tuple[str, int]]) -> None:
         print(f"  {name}={count}")
 
 
-def verify_attention_policy(
+def verify_relaxed_policy(
     strict_entries: list[tuple[str, int]],
     relaxed_entries: list[tuple[str, int]],
 ) -> None:
@@ -99,6 +100,14 @@ def verify_attention_policy(
         )
     if relaxed.get("celeg_attention_batch", 0) != 0:
         raise RuntimeError("relaxed Metal pp512 silently fell back to one-exp attention")
+    if strict.get("celeg_swiglu_batch_2d", 0) != EXPECTED_FFN_LAYERS:
+        raise RuntimeError("strict Metal prefill did not use the expected sixteen SwiGLU dispatches")
+    if strict.get("celeg_swiglu_batch_2d_relaxed", 0) != 0:
+        raise RuntimeError("strict Metal prefill unexpectedly used relaxed SwiGLU")
+    if relaxed.get("celeg_swiglu_batch_2d_relaxed", 0) != EXPECTED_FFN_LAYERS:
+        raise RuntimeError("relaxed Metal prefill did not route all sixteen FFN layers through fast SwiGLU")
+    if relaxed.get("celeg_swiglu_batch_2d", 0) != 0:
+        raise RuntimeError("relaxed Metal pp512 silently fell back to strict SwiGLU")
 
 
 def main() -> int:
@@ -145,8 +154,8 @@ def main() -> int:
     relaxed_profile = prefill_dispatch_profile(build_dir, checkpoint, relaxed=True)
     print_profile("strict", strict_profile)
     print_profile("relaxed", relaxed_profile)
-    verify_attention_policy(strict_profile, relaxed_profile)
-    print("\nattention policy gate: PASS")
+    verify_relaxed_policy(strict_profile, relaxed_profile)
+    print("\nrelaxed policy gate: PASS")
     return 0
 
 
