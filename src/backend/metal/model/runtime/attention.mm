@@ -494,17 +494,8 @@ void MetalModel::Impl::encode_attention_batch(
                 set_buffer(encoder, batch_value, 13);
                 set_buffer(encoder, layer.key_cache, 14);
                 set_buffer(encoder, layer.value_cache, 15);
-                id<MTLComputePipelineState> state = pipeline(
-                    "celeg_qk_norm_rope_batch_split_cooperative_store_kv");
-                constexpr NSUInteger threads = 32;
-                if (state.maxTotalThreadsPerThreadgroup < threads) {
-                    throw std::runtime_error(
-                        "Metal pipeline cannot run cooperative SplitHalf QK kernel");
-                }
-                [encoder setComputePipelineState:state];
-                [encoder dispatchThreadgroups:MTLSizeMake(rows, 1, 1)
-                        threadsPerThreadgroup:MTLSizeMake(threads, 1, 1)];
-                record_dispatch("celeg_qk_norm_rope_batch_split_cooperative_store_kv");
+                dispatch(encoder, "celeg_qk_norm_rope_batch_split_store_kv",
+                         static_cast<NSUInteger>(rows) * head_count);
             } else {
                 dispatch(encoder, "celeg_qk_norm_rope_batch",
                          static_cast<NSUInteger>(rows) * head_count);
