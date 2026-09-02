@@ -296,13 +296,17 @@ void MetalModel::Impl::encode_prefill_batch(
         encode_rmsnorm_batch(encoder, batch_hidden, final_norm, batch_normed,
                              rows, hidden_width, program.final_norm.epsilon);
     }
-    set_buffer(encoder, batch_hidden, 0, static_cast<NSUInteger>(rows - 1) *
-        hidden_width * sizeof(float));
+    const NSUInteger last_row_offset = static_cast<NSUInteger>(rows - 1) *
+        hidden_width * sizeof(float);
+    set_buffer(encoder, batch_hidden, 0, last_row_offset);
     set_buffer(encoder, hidden, 1);
     set_bytes(encoder, &hidden_width, sizeof(hidden_width), 2);
     dispatch(encoder, "celeg_copy", hidden_width);
-    encode_matmul(encoder, embedding, batch_normed, logits, 1,
-                  static_cast<NSUInteger>(rows - 1) * hidden_width * sizeof(float));
+    set_buffer(encoder, batch_normed, 0, last_row_offset);
+    set_buffer(encoder, normed, 1);
+    set_bytes(encoder, &hidden_width, sizeof(hidden_width), 2);
+    dispatch(encoder, "celeg_copy", hidden_width);
+    encode_matvec(encoder, embedding, normed, logits);
     position += static_cast<int>(rows);
     if (rope_positions.empty()) {
         for (int32_t& value : next_rope_position) value += static_cast<int32_t>(rows);
