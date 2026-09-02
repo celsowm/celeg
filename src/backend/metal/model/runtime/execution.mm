@@ -176,6 +176,29 @@ void MetalModel::Impl::encode_prefill_batch(
     const uint32_t hidden_width = static_cast<uint32_t>(model.graph.hidden);
     const uint32_t count = rows * hidden_width;
     const uint32_t base_position = static_cast<uint32_t>(position);
+    const auto encode_residual_norm = [&](id<MTLBuffer> input,
+                                          id<MTLBuffer> residual,
+                                          id<MTLBuffer> weight,
+                                          id<MTLBuffer> output,
+                                          id<MTLBuffer> normed_output,
+                                          float multiplier,
+                                          float epsilon) {
+        set_buffer(encoder, input, 0);
+        set_buffer(encoder, residual, 1);
+        set_buffer(encoder, weight, 2);
+        set_buffer(encoder, output, 3);
+        set_buffer(encoder, normed_output, 4);
+        set_bytes(encoder, &rows, sizeof(rows), 5);
+        set_bytes(encoder, &hidden_width, sizeof(hidden_width), 6);
+        set_bytes(encoder, &multiplier, sizeof(multiplier), 7);
+        set_bytes(encoder, &epsilon, sizeof(epsilon), 8);
+        id<MTLComputePipelineState> state = pipeline("celeg_residual_rmsnorm_batch");
+        [encoder setComputePipelineState:state];
+        [encoder dispatchThreadgroups:MTLSizeMake(rows, 1, 1)
+               threadsPerThreadgroup:MTLSizeMake(256, 1, 1)];
+        record_dispatch("celeg_residual_rmsnorm_batch");
+    };
+
     encode_embedding_batch(encoder, rows, tokens);
     if (model.graph.embedding_transform.multiplier != 1.0f) {
         const float multiplier = model.graph.embedding_transform.multiplier;
@@ -191,15 +214,18 @@ void MetalModel::Impl::encode_prefill_batch(
         std::swap(batch_hidden, batch_normed);
     }
 
+    bool normed_ready = false;
     for (size_t layer_index = 0; layer_index < layers.size(); ++layer_index) {
         Layer& layer = layers[layer_index];
         const CompiledLayerProgram& program_layer = program.layers[layer_index];
-        encode_rmsnorm_batch(encoder, batch_hidden, layer.operator_norm, batch_normed,
-                             rows, hidden_width, model.graph.final_norm.epsilon);
+        if (!normed_ready) {
+            encode_rmsnorm_batch(encoder, batch_hidden, layer.operator_norm, batch_normed,
+                                 rows, hidden_width, model.graph.final_norm.epsilon);
+        }
+        normed_ready = false;
+
         // Preserve the current hidden state as the residual without copying it.
-        // Every supported batched mixer writes a complete replacement into
-        // batch_hidden, so swapping the two scratch handles makes the old
-        // hidden buffer the residual and gives the mixer a disjoint output.
+        // The mixer writes a complete replacement into the other scratch buffer.
         std::swap(batch_hidden, batch_residual);
         switch (layer.mixer_kind) {
             case Layer::MixerKind::ShortConvolution:
@@ -216,20 +242,47 @@ void MetalModel::Impl::encode_prefill_batch(
             case Layer::MixerKind::Mamba2:
                 throw std::logic_error("recurrent Metal mixer reached batched prefill");
         }
-        const float mixer_multiplier = 1.0f;
-        encode_residual_batch(encoder, batch_hidden, batch_residual, batch_hidden,
-                              count, mixer_multiplier);
+
+        constexpr float mixer_multiplier = 1.0f;
+        const bool last_layer = layer_index + 1 == layers.size();
         if (std::holds_alternative<std::monostate>(program_layer.feed_forward)) {
+            if (last_layer) {
+                encode_residual_norm(batch_hidden, batch_residual, final_norm,
+                                     batch_hidden, batch_normed, mixer_multiplier,
+                                     program.final_norm.epsilon);
+            } else {
+                Layer& next_layer = layers[layer_index + 1];
+                encode_residual_norm(batch_hidden, batch_residual,
+                                     next_layer.operator_norm, batch_hidden,
+                                     batch_normed, mixer_multiplier,
+                                     model.graph.final_norm.epsilon);
+            }
+            normed_ready = true;
             continue;
         }
-        encode_rmsnorm_batch(encoder, batch_hidden, layer.ffn_norm, batch_normed,
-                             rows, hidden_width, program.final_norm.epsilon);
+
+        encode_residual_norm(batch_hidden, batch_residual, layer.ffn_norm,
+                             batch_hidden, batch_normed, mixer_multiplier,
+                             program.final_norm.epsilon);
         encode_dense_feed_forward_batch(encoder, layer, rows);
-        encode_residual_batch(encoder, batch_operation, batch_hidden, batch_hidden,
-                              count, mixer_multiplier);
+        if (last_layer) {
+            encode_residual_norm(batch_operation, batch_hidden, final_norm,
+                                 batch_hidden, batch_normed, mixer_multiplier,
+                                 program.final_norm.epsilon);
+        } else {
+            Layer& next_layer = layers[layer_index + 1];
+            encode_residual_norm(batch_operation, batch_hidden,
+                                 next_layer.operator_norm, batch_hidden,
+                                 batch_normed, mixer_multiplier,
+                                 model.graph.final_norm.epsilon);
+        }
+        normed_ready = true;
     }
-    encode_rmsnorm_batch(encoder, batch_hidden, final_norm, batch_normed,
-                         rows, hidden_width, program.final_norm.epsilon);
+
+    if (!normed_ready) {
+        encode_rmsnorm_batch(encoder, batch_hidden, final_norm, batch_normed,
+                             rows, hidden_width, program.final_norm.epsilon);
+    }
     set_buffer(encoder, batch_hidden, 0, static_cast<NSUInteger>(rows - 1) *
         hidden_width * sizeof(float));
     set_buffer(encoder, hidden, 1);
