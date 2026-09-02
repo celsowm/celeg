@@ -1,5 +1,7 @@
 #include "detail.hpp"
 
+#include <algorithm>
+
 namespace celeg {
 
 void MetalModel::Impl::encode_gated_delta(id<MTLComputeCommandEncoder> encoder, Layer& layer) {
