@@ -102,7 +102,10 @@ kernel void NAME( \
         DECODER{}, weights_tile, thread_index, grid); \
 }
 
+CELEG_RELAXED_QUANTIZED_MATMUL(celeg_matmul_tensor_q4_0_relaxed, CelegTensorQ4_0)
 CELEG_RELAXED_QUANTIZED_MATMUL(celeg_matmul_tensor_q4k_relaxed, CelegTensorQ4K)
+CELEG_RELAXED_QUANTIZED_MATMUL(celeg_matmul_tensor_q5k_relaxed, CelegTensorQ5K)
 CELEG_RELAXED_QUANTIZED_MATMUL(celeg_matmul_tensor_q6k_relaxed, CelegTensorQ6K)
+CELEG_RELAXED_QUANTIZED_MATMUL(celeg_matmul_tensor_q8_0_relaxed, CelegTensorQ8_0)
 
 #undef CELEG_RELAXED_QUANTIZED_MATMUL
