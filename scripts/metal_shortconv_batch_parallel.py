@@ -39,7 +39,7 @@ def build(cursor: int) -> None:
     )
     source = source.replace(
         "constexpr uint32_t kRows[] = {128, 256, 512};",
-        "constexpr uint32_t kRows[] = {1, 2, 3, 128, 256, 512};",
+        "constexpr uint32_t kRows[] = {1, 2, 3, 8, 16, 32, 64, 128, 256, 512};",
     )
     source = source.replace(
         'std::cout << "width=1024 cache_length=3 output_and_state_bit_exact=required\\n\\n";',
