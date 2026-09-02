@@ -6,7 +6,6 @@ import pathlib
 import subprocess
 import sys
 
-
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 
@@ -16,8 +15,7 @@ def run(script: str) -> None:
 
 
 def main() -> int:
-    run("metal_shortconv_batch_parallel.py")
-    run("metal_attention_tiled_simdgroup.py")
+    run("metal_rope_table.py")
     return 0
 
 
