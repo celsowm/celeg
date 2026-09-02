@@ -10,9 +10,11 @@ import sys
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 EXPERIMENTS = (
-    ("relaxed precision", ROOT / "scripts" / "metal_relaxed_precision.py"),
-    ("cooperative Q4_K input", ROOT / "scripts" / "metal_cooperative_q4k.py"),
+    # Diagnostic only: reports numerical drift but still times the descriptor so
+    # we can quantify how much of llama.cpp's advantage comes from relaxed MPP.
+    ("relaxed precision diagnostic", ROOT / "scripts" / "metal_relaxed_precision.py"),
     ("modern Q4_K K32", ROOT / "scripts" / "metal_q4k_k32.py"),
+    ("strict llama-style Q4_K K32", ROOT / "scripts" / "metal_q4k_k32_llama_strict.py"),
     ("vectorized Q4_K K32", ROOT / "scripts" / "metal_q4k_k32_vector.py"),
     ("vectorized production Q4_K K64", ROOT / "scripts" / "metal_q4k_k64_vector.py"),
     ("predecoded Q4_K F16 cache", ROOT / "scripts" / "metal_q4k_predecoded.py"),
@@ -21,7 +23,7 @@ EXPERIMENTS = (
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Run all isolated Metal prefill A/B candidates without stopping after a rejected gate."
+        description="Run viable Metal prefill A/B candidates and diagnostics."
     )
     parser.add_argument(
         "--build-only", action="store_true",
@@ -42,7 +44,7 @@ def main() -> int:
     if failures:
         print("\nRejected/failed experiments: " + ", ".join(failures), file=sys.stderr)
         return 1
-    print("\nAll Metal prefill A/B candidates passed.")
+    print("\nAll viable Metal prefill A/B candidates completed.")
     return 0
 
 
