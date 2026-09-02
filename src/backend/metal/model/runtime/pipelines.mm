@@ -25,6 +25,10 @@ constexpr NSUInteger kQ4KStrictStageBytes =
 constexpr NSUInteger kGpuCounterSampleCapacity = 4096;
 constexpr std::string_view kQ4KStrictKernel =
     "celeg_matmul_tensor_q4k_static_stage128";
+constexpr std::string_view kF16RelaxedKernel =
+    "celeg_matmul_tensor_f16_relaxed";
+constexpr std::string_view kBF16RelaxedKernel =
+    "celeg_matmul_tensor_bf16_relaxed";
 constexpr std::string_view kQ40RelaxedKernel =
     "celeg_matmul_tensor_q4_0_relaxed";
 constexpr std::string_view kQ4KRelaxedKernel =
@@ -448,24 +452,30 @@ void MetalModel::Impl::encode_matmul(id<MTLComputeCommandEncoder> encoder,
         std::string_view selected_kernel = *generic_kernel;
         NSUInteger shared_bytes = kTensorTileBytes;
         bool exact_groups = false;
-        bool custom_quantized = false;
+        bool custom_tensor = false;
         const bool relaxed = relaxed_tensor_precision_enabled();
 
-        if (relaxed && weight.storage == LinearStorage::Q4_0) {
+        if (relaxed && weight.storage == LinearStorage::Float16) {
+            selected_kernel = kF16RelaxedKernel;
+            custom_tensor = true;
+        } else if (relaxed && weight.storage == LinearStorage::BFloat16) {
+            selected_kernel = kBF16RelaxedKernel;
+            custom_tensor = true;
+        } else if (relaxed && weight.storage == LinearStorage::Q4_0) {
             selected_kernel = kQ40RelaxedKernel;
-            custom_quantized = true;
+            custom_tensor = true;
         } else if (relaxed && weight.storage == LinearStorage::Q4K) {
             selected_kernel = kQ4KRelaxedKernel;
-            custom_quantized = true;
+            custom_tensor = true;
         } else if (relaxed && weight.storage == LinearStorage::Q5K) {
             selected_kernel = kQ5KRelaxedKernel;
-            custom_quantized = true;
+            custom_tensor = true;
         } else if (relaxed && weight.storage == LinearStorage::Q6K) {
             selected_kernel = kQ6KRelaxedKernel;
-            custom_quantized = true;
+            custom_tensor = true;
         } else if (relaxed && weight.storage == LinearStorage::Q8_0) {
             selected_kernel = kQ80RelaxedKernel;
-            custom_quantized = true;
+            custom_tensor = true;
         } else if (weight.storage == LinearStorage::Q4K &&
                    (rows % kTensorTileTokens) == 0u &&
                    (weight.cols % kQ4KStrictStageK) == 0u &&
@@ -474,11 +484,11 @@ void MetalModel::Impl::encode_matmul(id<MTLComputeCommandEncoder> encoder,
             selected_kernel = kQ4KStrictKernel;
             shared_bytes = kQ4KStrictStageBytes;
             exact_groups = true;
-            custom_quantized = true;
+            custom_tensor = true;
         }
 
         id<MTLComputePipelineState> state = tensor_pipeline(selected_kernel);
-        if (custom_quantized &&
+        if (custom_tensor &&
             (state.maxTotalThreadsPerThreadgroup < kTensorTileThreads ||
              state.staticThreadgroupMemoryLength + shared_bytes >
                  device.maxThreadgroupMemoryLength)) {
