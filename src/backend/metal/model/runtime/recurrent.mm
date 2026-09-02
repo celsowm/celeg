@@ -95,33 +95,52 @@ void MetalModel::Impl::encode_short_convolution_batch(
     const uint32_t hidden_width = static_cast<uint32_t>(model.graph.hidden);
     const uint32_t cache_length = static_cast<uint32_t>(layer.cache_length);
     const uint32_t initial_cursor = base_position % cache_length;
-    const uint32_t element_count = rows * hidden_width;
-    const uint32_t state_count = std::min(rows, cache_length) * hidden_width;
+    constexpr uint32_t kParallelMinimumRows = 128;
 
-    set_buffer(encoder, batch_projected, 0);
-    set_buffer(encoder, batch_activated, 1);
-    set_bytes(encoder, &rows, sizeof(rows), 2);
-    set_bytes(encoder, &hidden_width, sizeof(hidden_width), 3);
-    dispatch(encoder, "celeg_shortconv_batch_gate_parallel", element_count);
+    if (rows < kParallelMinimumRows) {
+        set_buffer(encoder, batch_projected, 0);
+        set_buffer(encoder, layer.convolution_taps, 1);
+        set_buffer(encoder, layer.key_cache, 2);
+        set_buffer(encoder, batch_operation, 3);
+        set_bytes(encoder, &rows, sizeof(rows), 4);
+        set_bytes(encoder, &hidden_width, sizeof(hidden_width), 5);
+        set_bytes(encoder, &cache_length, sizeof(cache_length), 6);
+        set_bytes(encoder, &initial_cursor, sizeof(initial_cursor), 7);
+        id<MTLComputePipelineState> state = pipeline("celeg_shortconv_batch_ring");
+        constexpr NSUInteger threads = 256;
+        [encoder setComputePipelineState:state];
+        [encoder dispatchThreadgroups:MTLSizeMake((hidden_width + threads - 1u) / threads, 1, 1)
+               threadsPerThreadgroup:MTLSizeMake(threads, 1, 1)];
+        record_dispatch("celeg_shortconv_batch_ring");
+    } else {
+        const uint32_t element_count = rows * hidden_width;
+        const uint32_t state_count = std::min(rows, cache_length) * hidden_width;
 
-    set_buffer(encoder, batch_projected, 0);
-    set_buffer(encoder, layer.convolution_taps, 1);
-    set_buffer(encoder, layer.key_cache, 2);
-    set_buffer(encoder, batch_activated, 3);
-    set_buffer(encoder, batch_operation, 4);
-    set_bytes(encoder, &rows, sizeof(rows), 5);
-    set_bytes(encoder, &hidden_width, sizeof(hidden_width), 6);
-    set_bytes(encoder, &cache_length, sizeof(cache_length), 7);
-    set_bytes(encoder, &initial_cursor, sizeof(initial_cursor), 8);
-    dispatch(encoder, "celeg_shortconv_batch_convolve_parallel", element_count);
+        set_buffer(encoder, batch_projected, 0);
+        set_buffer(encoder, batch_activated, 1);
+        set_bytes(encoder, &rows, sizeof(rows), 2);
+        set_bytes(encoder, &hidden_width, sizeof(hidden_width), 3);
+        dispatch(encoder, "celeg_shortconv_batch_gate_parallel", element_count);
 
-    set_buffer(encoder, batch_activated, 0);
-    set_buffer(encoder, layer.key_cache, 1);
-    set_bytes(encoder, &rows, sizeof(rows), 2);
-    set_bytes(encoder, &hidden_width, sizeof(hidden_width), 3);
-    set_bytes(encoder, &cache_length, sizeof(cache_length), 4);
-    set_bytes(encoder, &initial_cursor, sizeof(initial_cursor), 5);
-    dispatch(encoder, "celeg_shortconv_batch_publish_state_parallel", state_count);
+        set_buffer(encoder, batch_projected, 0);
+        set_buffer(encoder, layer.convolution_taps, 1);
+        set_buffer(encoder, layer.key_cache, 2);
+        set_buffer(encoder, batch_activated, 3);
+        set_buffer(encoder, batch_operation, 4);
+        set_bytes(encoder, &rows, sizeof(rows), 5);
+        set_bytes(encoder, &hidden_width, sizeof(hidden_width), 6);
+        set_bytes(encoder, &cache_length, sizeof(cache_length), 7);
+        set_bytes(encoder, &initial_cursor, sizeof(initial_cursor), 8);
+        dispatch(encoder, "celeg_shortconv_batch_convolve_parallel", element_count);
+
+        set_buffer(encoder, batch_activated, 0);
+        set_buffer(encoder, layer.key_cache, 1);
+        set_bytes(encoder, &rows, sizeof(rows), 2);
+        set_bytes(encoder, &hidden_width, sizeof(hidden_width), 3);
+        set_bytes(encoder, &cache_length, sizeof(cache_length), 4);
+        set_bytes(encoder, &initial_cursor, sizeof(initial_cursor), 5);
+        dispatch(encoder, "celeg_shortconv_batch_publish_state_parallel", state_count);
+    }
 
     encode_matmul(encoder, layer.mixer_out, batch_operation, batch_hidden, rows);
 }
