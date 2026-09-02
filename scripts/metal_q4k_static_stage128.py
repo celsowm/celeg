@@ -31,7 +31,7 @@ def build() -> None:
     )
     source = source.replace(
         "apps/benchmark/metal/tensor_q4k_k32.metal",
-        "apps/benchmark/metal/tensor_q4k_static_stage128.metal",
+        "src/backend/metal/kernels/tensor_q4k_static_stage128.metal",
     )
     source = source.replace(
         'celeg_matmul_tensor_q4k_k32"',
@@ -66,7 +66,7 @@ def build() -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Build and run the strict static+stage128 Q4_K Metal A/B benchmark."
+        description="Build and run the production strict static+stage128 Q4_K Metal A/B benchmark."
     )
     parser.add_argument(
         "--build-only", action="store_true",
