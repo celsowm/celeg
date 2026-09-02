@@ -39,6 +39,8 @@ jobs:
               src/backend/metal/kernels/inference/attention_tiled_simdgroup.metal \
               > tiled-attention.metal
           xcrun --sdk macosx metal -c tiled-attention.metal -o tiled-attention.air
+      - name: Compile prefill tail candidate shader
+        run: xcrun --sdk macosx metal -c apps/benchmark/metal/prefill_tail_fast.metal -o prefill-tail.air
       - name: Compile 64x256 tensor tile harness
         run: python scripts/metal_tile_64x256.py --build-only
       - name: Compile relaxed-precision tensor harness
@@ -72,11 +74,13 @@ jobs:
       - name: Compile tiled simdgroup attention harness
         run: python scripts/metal_attention_tiled_simdgroup.py --build-only
       - name: Check Metal policy benchmark runner
-        run: python -m py_compile scripts/metal_prefill_policy_compare.py scripts/metal_prefill_next_relaxed.py scripts/metal_rope_table.py scripts/metal_counter_capabilities.py scripts/metal_attention_one_exp.py scripts/metal_attention_materialized_simdgroup.py scripts/metal_attention_tiled_simdgroup.py scripts/metal_shortconv_batch_parallel.py scripts/metal_q4k_k32_llama_relaxed.py
+        run: python -m py_compile scripts/metal_prefill_policy_compare.py scripts/metal_prefill_next_relaxed.py scripts/metal_rope_table.py scripts/metal_prefill_tail.py scripts/metal_counter_capabilities.py scripts/metal_attention_one_exp.py scripts/metal_attention_materialized_simdgroup.py scripts/metal_attention_tiled_simdgroup.py scripts/metal_shortconv_batch_parallel.py scripts/metal_q4k_k32_llama_relaxed.py
       - name: Build Metal backend and test targets
         run: python scripts/dev.py build --backend metal --celeg-tests off --build-type Release --jobs 2
       - name: Compile fused RoPE table harness
         run: python scripts/metal_rope_table.py --no-build --build-only
+      - name: Compile prefill tail harness
+        run: python scripts/metal_prefill_tail.py --no-build --build-only
       - name: Upload diagnostics
         if: always()
         uses: actions/upload-artifact@v4
