@@ -11,6 +11,7 @@
 #include "inference/projection.metal"
 #include "inference/batch.metal"
 #include "inference/feed_forward.metal"
+#include "inference/normalization.metal"
 #include "inference/relative_bias.metal"
 #include "inference/position.metal"
 #include "inference/no_position.metal"
