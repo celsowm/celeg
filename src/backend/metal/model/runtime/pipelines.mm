@@ -25,10 +25,16 @@ constexpr NSUInteger kQ4KStrictStageBytes =
 constexpr NSUInteger kGpuCounterSampleCapacity = 4096;
 constexpr std::string_view kQ4KStrictKernel =
     "celeg_matmul_tensor_q4k_static_stage128";
+constexpr std::string_view kQ40RelaxedKernel =
+    "celeg_matmul_tensor_q4_0_relaxed";
 constexpr std::string_view kQ4KRelaxedKernel =
     "celeg_matmul_tensor_q4k_relaxed";
+constexpr std::string_view kQ5KRelaxedKernel =
+    "celeg_matmul_tensor_q5k_relaxed";
 constexpr std::string_view kQ6KRelaxedKernel =
     "celeg_matmul_tensor_q6k_relaxed";
+constexpr std::string_view kQ80RelaxedKernel =
+    "celeg_matmul_tensor_q8_0_relaxed";
 
 thread_local id<MTLComputeCommandEncoder> gGpuProfileEncoder = nil;
 
@@ -72,13 +78,6 @@ std::optional<std::string_view> MetalModel::Impl::linear_kernel(
     return std::string_view{name};
 }
 
-/**
- * @brief Kernel and launch geometry for the decode matrix-vector product.
- *
- * Rewritten kernels accumulate @c kCelegMatvecRows rows per simdgroup across
- * four simdgroups and need no threadgroup scratch; the remaining formats keep
- * their original one-row-per-simdgroup shape until they are converted.
- */
 MetalMatvecKernel MetalModel::Impl::matvec_kernel(LinearStorage storage) const {
     switch (storage) {
         case LinearStorage::Float32: return {"celeg_matvec", 8, 256, 0};
@@ -93,12 +92,6 @@ MetalMatvecKernel MetalModel::Impl::matvec_kernel(LinearStorage storage) const {
     return {};
 }
 
-/**
- * @brief Kernel and launch geometry for the fused SwiGLU down projection.
- *
- * Formats without an entry fall back to a separate elementwise SwiGLU dispatch
- * followed by an ordinary matrix-vector product.
- */
 MetalMatvecKernel MetalModel::Impl::swiglu_matvec_kernel(LinearStorage storage) const {
     switch (storage) {
         case LinearStorage::Q4K: return {"celeg_swiglu_matvec_q4k", 16, 128, 0};
@@ -310,13 +303,12 @@ id<MTLComputePipelineState> MetalModel::Impl::tensor_pipeline(std::string_view n
     return pipeline_cache.tensor_pipeline(name);
 }
 
-
 void MetalModel::Impl::dispatch(id<MTLComputeCommandEncoder> encoder, std::string_view name,
-                  NSUInteger count) {
-        if (count == 0) return;
-        id<MTLComputePipelineState> state = pipeline(name);
-        [encoder setComputePipelineState:state];
-        const NSUInteger threads = std::min(count, state.maxTotalThreadsPerThreadgroup);
+                                NSUInteger count) {
+    if (count == 0) return;
+    id<MTLComputePipelineState> state = pipeline(name);
+    [encoder setComputePipelineState:state];
+    const NSUInteger threads = std::min(count, state.maxTotalThreadsPerThreadgroup);
     [encoder dispatchThreads:MTLSizeMake(count, 1, 1)
        threadsPerThreadgroup:MTLSizeMake(threads, 1, 1)];
     record_dispatch(name);
@@ -324,17 +316,17 @@ void MetalModel::Impl::dispatch(id<MTLComputeCommandEncoder> encoder, std::strin
 
 void MetalModel::Impl::dispatch_cooperative(id<MTLComputeCommandEncoder> encoder,
                                             std::string_view name, NSUInteger groups) {
-        if (groups == 0) return;
-        id<MTLComputePipelineState> state = pipeline(name);
-        constexpr NSUInteger threads = 256;
-        if (state.maxTotalThreadsPerThreadgroup < threads) {
-            throw std::runtime_error("Metal pipeline cannot run cooperative kernel");
-        }
-        [encoder setComputePipelineState:state];
-        [encoder dispatchThreadgroups:MTLSizeMake(groups, 1, 1)
-           threadsPerThreadgroup:MTLSizeMake(threads, 1, 1)];
-        record_dispatch(name);
+    if (groups == 0) return;
+    id<MTLComputePipelineState> state = pipeline(name);
+    constexpr NSUInteger threads = 256;
+    if (state.maxTotalThreadsPerThreadgroup < threads) {
+        throw std::runtime_error("Metal pipeline cannot run cooperative kernel");
     }
+    [encoder setComputePipelineState:state];
+    [encoder dispatchThreadgroups:MTLSizeMake(groups, 1, 1)
+       threadsPerThreadgroup:MTLSizeMake(threads, 1, 1)];
+    record_dispatch(name);
+}
 
 void MetalModel::Impl::record_dispatch(std::string_view name) {
     ++command_dispatches;
@@ -352,22 +344,20 @@ void MetalModel::Impl::record_dispatch(std::string_view name) {
 }
 
 void MetalModel::Impl::set_buffer(id<MTLComputeCommandEncoder> encoder, id<MTLBuffer> value,
-                    NSUInteger index, NSUInteger offset) {
-        [encoder setBuffer:value offset:offset atIndex:index];
-    }
-
+                                  NSUInteger index, NSUInteger offset) {
+    [encoder setBuffer:value offset:offset atIndex:index];
+}
 
 void MetalModel::Impl::set_bytes(id<MTLComputeCommandEncoder> encoder, const void* value,
-                   NSUInteger length, NSUInteger index) {
-        [encoder setBytes:value length:length atIndex:index];
-    }
-
+                                 NSUInteger length, NSUInteger index) {
+    [encoder setBytes:value length:length atIndex:index];
+}
 
 void MetalModel::Impl::encode_matvec(id<MTLComputeCommandEncoder> encoder,
-                                       const Linear& weight,
-                                       id<MTLBuffer> input,
-                                       id<MTLBuffer> output,
-                                       NSUInteger output_offset) {
+                                     const Linear& weight,
+                                     id<MTLBuffer> input,
+                                     id<MTLBuffer> output,
+                                     NSUInteger output_offset) {
     set_buffer(encoder, weight.buffer, 0);
     set_buffer(encoder, input, 1);
     set_buffer(encoder, output, 2, output_offset);
@@ -416,14 +406,6 @@ bool MetalModel::Impl::encode_swiglu_matvec(
     return true;
 }
 
-/**
- * @brief Whether a batched matmul of @p rows tokens takes the tensor path.
- *
- * The fused gate/up pair kernel is a plain one-simdgroup-per-output-row loop,
- * so falling into it costs far more than issuing two tensor matmuls. Only
- * Q5_K and Q6_K have a fused tensor kernel; every other storage is better
- * served by declining the pair and letting the caller emit two matmuls.
- */
 bool MetalModel::Impl::tensor_matmul_available(LinearStorage storage,
                                                uint32_t rows) const {
     if (rows < 16) return false;
@@ -469,11 +451,20 @@ void MetalModel::Impl::encode_matmul(id<MTLComputeCommandEncoder> encoder,
         bool custom_quantized = false;
         const bool relaxed = relaxed_tensor_precision_enabled();
 
-        if (relaxed && weight.storage == LinearStorage::Q4K) {
+        if (relaxed && weight.storage == LinearStorage::Q4_0) {
+            selected_kernel = kQ40RelaxedKernel;
+            custom_quantized = true;
+        } else if (relaxed && weight.storage == LinearStorage::Q4K) {
             selected_kernel = kQ4KRelaxedKernel;
+            custom_quantized = true;
+        } else if (relaxed && weight.storage == LinearStorage::Q5K) {
+            selected_kernel = kQ5KRelaxedKernel;
             custom_quantized = true;
         } else if (relaxed && weight.storage == LinearStorage::Q6K) {
             selected_kernel = kQ6KRelaxedKernel;
+            custom_quantized = true;
+        } else if (relaxed && weight.storage == LinearStorage::Q8_0) {
+            selected_kernel = kQ80RelaxedKernel;
             custom_quantized = true;
         } else if (weight.storage == LinearStorage::Q4K &&
                    (rows % kTensorTileTokens) == 0u &&
@@ -521,7 +512,7 @@ void MetalModel::Impl::encode_matmul(id<MTLComputeCommandEncoder> encoder,
 }
 
 void MetalModel::Impl::encode_embedding(id<MTLComputeCommandEncoder> encoder,
-                                      uint32_t width, uint32_t token) {
+                                        uint32_t width, uint32_t token) {
     set_buffer(encoder, embedding.buffer, 0);
     set_buffer(encoder, hidden, 1);
     set_bytes(encoder, &width, sizeof(width), 2);
@@ -550,17 +541,16 @@ void MetalModel::Impl::encode_embedding_batch(
     dispatch(encoder, *kernel, static_cast<NSUInteger>(rows) * width);
 }
 
-
 void MetalModel::Impl::encode_rmsnorm(id<MTLComputeCommandEncoder> encoder, id<MTLBuffer> input,
-                        id<MTLBuffer> weight, id<MTLBuffer> output, uint32_t width,
-                        float epsilon) {
-        set_buffer(encoder, input, 0);
-        set_buffer(encoder, weight, 1);
-        set_buffer(encoder, output, 2);
-        set_bytes(encoder, &width, sizeof(width), 3);
-        set_bytes(encoder, &epsilon, sizeof(epsilon), 4);
-        dispatch_cooperative(encoder, "celeg_rmsnorm", 1);
-    }
+                                      id<MTLBuffer> weight, id<MTLBuffer> output, uint32_t width,
+                                      float epsilon) {
+    set_buffer(encoder, input, 0);
+    set_buffer(encoder, weight, 1);
+    set_buffer(encoder, output, 2);
+    set_bytes(encoder, &width, sizeof(width), 3);
+    set_bytes(encoder, &epsilon, sizeof(epsilon), 4);
+    dispatch_cooperative(encoder, "celeg_rmsnorm", 1);
+}
 
 void MetalModel::Impl::encode_rmsnorm_save(id<MTLComputeCommandEncoder> encoder,
                                            id<MTLBuffer> input, id<MTLBuffer> residual,
@@ -646,16 +636,14 @@ void MetalModel::Impl::encode_swiglu_batch(id<MTLComputeCommandEncoder> encoder,
     dispatch(encoder, "celeg_swiglu_batch", static_cast<NSUInteger>(rows) * width);
 }
 
-
 void MetalModel::Impl::encode_weighted_add(id<MTLComputeCommandEncoder> encoder,
-                             id<MTLBuffer> input, id<MTLBuffer> output,
-                             uint32_t count, float weight) {
-        set_buffer(encoder, input, 0);
-        set_buffer(encoder, output, 1);
-        set_bytes(encoder, &count, sizeof(count), 2);
-        set_bytes(encoder, &weight, sizeof(weight), 3);
-        dispatch(encoder, "celeg_weighted_add", count);
-    }
-
+                                           id<MTLBuffer> input, id<MTLBuffer> output,
+                                           uint32_t count, float weight) {
+    set_buffer(encoder, input, 0);
+    set_buffer(encoder, output, 1);
+    set_bytes(encoder, &count, sizeof(count), 2);
+    set_bytes(encoder, &weight, sizeof(weight), 3);
+    dispatch(encoder, "celeg_weighted_add", count);
+}
 
 }
