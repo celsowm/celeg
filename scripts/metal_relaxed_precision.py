@@ -10,6 +10,7 @@ import subprocess
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 BUILD_DIR = ROOT / "build" / "metal-relaxed-precision"
 HOST_SOURCE = ROOT / "apps" / "benchmark" / "metal" / "relaxed_precision.mm"
+GENERATED_SOURCE = BUILD_DIR / "relaxed_precision_lfm25.mm"
 BINARY = BUILD_DIR / "celeg-metal-relaxed-precision-benchmark"
 
 
@@ -19,10 +20,17 @@ def run(command: list[str], *, cwd: pathlib.Path = ROOT) -> None:
 
 def build() -> None:
     BUILD_DIR.mkdir(parents=True, exist_ok=True)
+    # The original Metal microbenchmark predates LFM2.5-350M's 6656-wide FFN
+    # and still names the older 4608 control shape. Materialize the real LFM2.5
+    # dimensions so A/B timings match the GGUF used by the end-to-end benchmark.
+    GENERATED_SOURCE.write_text(
+        HOST_SOURCE.read_text(encoding="utf-8").replace("4608", "6656"),
+        encoding="utf-8",
+    )
     run([
         "xcrun", "--sdk", "macosx", "clang++",
         "-std=c++20", "-fobjc-arc",
-        str(HOST_SOURCE),
+        str(GENERATED_SOURCE),
         "-framework", "Foundation",
         "-framework", "Metal",
         "-o", str(BINARY),
