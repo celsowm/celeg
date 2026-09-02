@@ -23,12 +23,72 @@ void MetalModel::Impl::encode_dense_feed_forward(
 
 void MetalModel::Impl::encode_dense_feed_forward_batch(
     id<MTLComputeCommandEncoder> encoder, Layer& layer, uint32_t rows) {
+    constexpr NSUInteger kStaticStageRows = 64;
+    constexpr NSUInteger kStaticStageTokens = 128;
+    constexpr NSUInteger kStaticStageK = 128;
+    constexpr NSUInteger kStaticStageThreads = 128;
+    constexpr NSUInteger kStaticStageBytes =
+        kStaticStageRows * kStaticStageK * sizeof(uint16_t);
+    constexpr const char* kStaticStageKernel =
+        "celeg_matmul_tensor_q4k_static_stage128";
+
+    const auto encode_aligned_q4k = [&](const Linear& weight,
+                                        id<MTLBuffer> input,
+                                        id<MTLBuffer> output,
+                                        NSUInteger input_offset,
+                                        NSUInteger output_offset,
+                                        uint32_t output_stride) -> bool {
+        if (weight.storage != LinearStorage::Q4K ||
+            !tensor_matmul_available(weight.storage, rows) ||
+            (rows % kStaticStageTokens) != 0u ||
+            (weight.cols % kStaticStageK) != 0u ||
+            (weight.rows % kStaticStageRows) != 0u ||
+            device.maxThreadgroupMemoryLength < kStaticStageBytes) {
+            return false;
+        }
+
+        id<MTLComputePipelineState> state = tensor_pipeline(kStaticStageKernel);
+        if (state.maxTotalThreadsPerThreadgroup < kStaticStageThreads ||
+            state.staticThreadgroupMemoryLength + kStaticStageBytes >
+                device.maxThreadgroupMemoryLength) {
+            return false;
+        }
+
+        set_buffer(encoder, weight.buffer, 0);
+        set_buffer(encoder, input, 1, input_offset);
+        set_buffer(encoder, output, 2, output_offset);
+        set_bytes(encoder, &rows, sizeof(rows), 3);
+        set_bytes(encoder, &weight.cols, sizeof(weight.cols), 4);
+        set_bytes(encoder, &weight.rows, sizeof(weight.rows), 5);
+        const uint32_t stride = output_stride == 0 ? weight.rows : output_stride;
+        set_bytes(encoder, &stride, sizeof(stride), 6);
+        set_bytes(encoder, &weight.row_bytes, sizeof(weight.row_bytes), 7);
+
+        [encoder setComputePipelineState:state];
+        [encoder setThreadgroupMemoryLength:kStaticStageBytes atIndex:0];
+        [encoder dispatchThreadgroups:MTLSizeMake(
+            weight.rows / kStaticStageRows,
+            rows / kStaticStageTokens,
+            1)
+         threadsPerThreadgroup:MTLSizeMake(kStaticStageThreads, 1, 1)];
+        record_dispatch(kStaticStageKernel);
+        return true;
+    };
+
     const uint32_t intermediate = static_cast<uint32_t>(layer.intermediate);
-    encode_matmul(encoder, layer.ffn_gate, batch_normed, batch_gate_up, rows,
-                  0, 0, intermediate * 2);
-    encode_matmul(encoder, layer.ffn_up, batch_normed, batch_gate_up, rows,
-                  0, static_cast<NSUInteger>(intermediate) * sizeof(float),
-                  intermediate * 2);
+    if (!encode_aligned_q4k(layer.ffn_gate, batch_normed, batch_gate_up,
+                            0, 0, intermediate * 2)) {
+        encode_matmul(encoder, layer.ffn_gate, batch_normed, batch_gate_up, rows,
+                      0, 0, intermediate * 2);
+    }
+    if (!encode_aligned_q4k(
+            layer.ffn_up, batch_normed, batch_gate_up, 0,
+            static_cast<NSUInteger>(intermediate) * sizeof(float),
+            intermediate * 2)) {
+        encode_matmul(encoder, layer.ffn_up, batch_normed, batch_gate_up, rows,
+                      0, static_cast<NSUInteger>(intermediate) * sizeof(float),
+                      intermediate * 2);
+    }
 
     set_buffer(encoder, batch_gate_up, 0);
     set_buffer(encoder, batch_activated, 1);
@@ -42,7 +102,10 @@ void MetalModel::Impl::encode_dense_feed_forward_batch(
        threadsPerThreadgroup:MTLSizeMake(threads_x, 1, 1)];
     record_dispatch("celeg_swiglu_batch_2d");
 
-    encode_matmul(encoder, layer.ffn_down, batch_activated, batch_operation, rows);
+    if (!encode_aligned_q4k(layer.ffn_down, batch_activated, batch_operation,
+                            0, 0, 0)) {
+        encode_matmul(encoder, layer.ffn_down, batch_activated, batch_operation, rows);
+    }
 }
 
 }
