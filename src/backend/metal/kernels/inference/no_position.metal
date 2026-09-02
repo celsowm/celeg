@@ -30,8 +30,8 @@ kernel void celeg_qk_norm_store_kv(
         for (uint d = 0; d < head_dim; ++d) sum += key[base + d] * key[base + d];
         const float inverse = rsqrt(sum / static_cast<float>(head_dim) + key_epsilon);
         for (uint d = 0; d < head_dim; ++d) key[base + d] *= inverse * key_weight[d];
-        const size_t cache_base = (static_cast<size_t>(position / page_tokens) * page_tokens +
-            position % page_tokens) * static_cast<size_t>(key_heads) * head_dim + base;
+        const size_t cache_base = static_cast<size_t>(position) *
+            static_cast<size_t>(key_heads) * head_dim + base;
         for (uint d = 0; d < head_dim; ++d) {
             key_cache[cache_base + d] = key[base + d];
             value_cache[cache_base + d] = value[base + d];
