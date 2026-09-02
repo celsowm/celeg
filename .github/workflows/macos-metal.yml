@@ -27,6 +27,8 @@ jobs:
           xcrun --sdk macosx metallib probe.air inference.air -o celeg.metallib
       - name: Compile 64x256 tensor tile harness
         run: python scripts/metal_tile_64x256.py --build-only
+      - name: Compile relaxed-precision tensor harness
+        run: python scripts/metal_relaxed_precision.py --build-only
       - name: Build Metal backend and test targets
         run: python scripts/dev.py build --backend metal --celeg-tests off --build-type Release --jobs 2
       - name: Upload diagnostics
