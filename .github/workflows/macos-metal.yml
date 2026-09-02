@@ -25,6 +25,13 @@ jobs:
           xcrun --sdk macosx metal -c src/backend/metal/kernels/probe.metal -o probe.air
           xcrun --sdk macosx metal -c src/backend/metal/kernels/inference.metal -o inference.air
           xcrun --sdk macosx metallib probe.air inference.air -o celeg.metallib
+      - name: Compile materialized simdgroup attention shader
+        run: |
+          cat src/backend/metal/kernels/inference/common.metal \
+              src/backend/metal/kernels/inference/attention_one_exp.metal \
+              apps/benchmark/metal/attention_materialized_simdgroup.metal \
+              > materialized-attention.metal
+          xcrun --sdk macosx metal -c materialized-attention.metal -o materialized-attention.air
       - name: Compile 64x256 tensor tile harness
         run: python scripts/metal_tile_64x256.py --build-only
       - name: Compile relaxed-precision tensor harness
