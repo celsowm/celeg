@@ -2,6 +2,7 @@
 
 #include <cstring>
 #include <stdexcept>
+#include <utility>
 
 namespace celeg {
 
@@ -190,21 +191,19 @@ void MetalModel::Impl::encode_prefill_batch(
         encode_rmsnorm_batch(encoder, batch_hidden, final_norm, batch_normed,
                              rows, hidden_width,
                              model.graph.embedding_transform.post_norm->epsilon);
-        set_buffer(encoder, batch_normed, 0);
-        set_buffer(encoder, batch_hidden, 1);
-        set_bytes(encoder, &count, sizeof(count), 2);
-        dispatch(encoder, "celeg_copy_batch", count);
+        std::swap(batch_hidden, batch_normed);
     }
 
     for (size_t layer_index = 0; layer_index < layers.size(); ++layer_index) {
         Layer& layer = layers[layer_index];
         const CompiledLayerProgram& program_layer = program.layers[layer_index];
-        set_buffer(encoder, batch_hidden, 0);
-        set_buffer(encoder, batch_residual, 1);
-        set_bytes(encoder, &count, sizeof(count), 2);
-        dispatch(encoder, "celeg_copy_batch", count);
         encode_rmsnorm_batch(encoder, batch_hidden, layer.operator_norm, batch_normed,
                              rows, hidden_width, model.graph.final_norm.epsilon);
+        // Preserve the current hidden state as the residual without copying it.
+        // Every supported batched mixer writes a complete replacement into
+        // batch_hidden, so swapping the two scratch handles makes the old
+        // hidden buffer the residual and gives the mixer a disjoint output.
+        std::swap(batch_hidden, batch_residual);
         switch (layer.mixer_kind) {
             case Layer::MixerKind::ShortConvolution:
                 encode_matmul(encoder, layer.mixer_in, batch_normed, batch_projected, rows);
