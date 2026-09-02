@@ -66,7 +66,7 @@ kernel void celeg_matmul_tensor_q4k_cooperative(
     auto result = operation.get_destination_cooperative_tensor<
         decltype(first_input), decltype(first_weights), float>();
 
-    #pragma unroll full
+    #pragma unroll
     for (uint16_t index = 0; index < result.get_capacity(); ++index) {
         if (result.is_valid_element(index)) result[index] = 0.0f;
     }
@@ -75,7 +75,7 @@ kernel void celeg_matmul_tensor_q4k_cooperative(
          offset += kCelegCoopTileK) {
         auto weight_fragment =
             operation.get_right_input_cooperative_tensor<float, half, float>();
-        #pragma unroll full
+        #pragma unroll
         for (uint16_t index = 0; index < weight_fragment.get_capacity(); ++index) {
             if (!weight_fragment.is_valid_element(index)) continue;
             const auto coordinate = weight_fragment.get_multidimensional_index(index);
