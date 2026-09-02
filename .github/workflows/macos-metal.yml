@@ -32,6 +32,13 @@ jobs:
               apps/benchmark/metal/attention_materialized_simdgroup.metal \
               > materialized-attention.metal
           xcrun --sdk macosx metal -c materialized-attention.metal -o materialized-attention.air
+      - name: Compile tiled simdgroup attention shader
+        run: |
+          cat src/backend/metal/kernels/inference/common.metal \
+              src/backend/metal/kernels/inference/attention_one_exp.metal \
+              apps/benchmark/metal/attention_tiled_simdgroup.metal \
+              > tiled-attention.metal
+          xcrun --sdk macosx metal -c tiled-attention.metal -o tiled-attention.air
       - name: Compile 64x256 tensor tile harness
         run: python scripts/metal_tile_64x256.py --build-only
       - name: Compile relaxed-precision tensor harness
@@ -62,8 +69,10 @@ jobs:
         run: python scripts/metal_attention_one_exp.py --build-only
       - name: Compile materialized simdgroup attention harness
         run: python scripts/metal_attention_materialized_simdgroup.py --build-only
+      - name: Compile tiled simdgroup attention harness
+        run: python scripts/metal_attention_tiled_simdgroup.py --build-only
       - name: Check Metal policy benchmark runner
-        run: python -m py_compile scripts/metal_prefill_policy_compare.py scripts/metal_prefill_next_relaxed.py scripts/metal_counter_capabilities.py scripts/metal_attention_one_exp.py scripts/metal_attention_materialized_simdgroup.py scripts/metal_shortconv_batch_parallel.py scripts/metal_q4k_k32_llama_relaxed.py
+        run: python -m py_compile scripts/metal_prefill_policy_compare.py scripts/metal_prefill_next_relaxed.py scripts/metal_counter_capabilities.py scripts/metal_attention_one_exp.py scripts/metal_attention_materialized_simdgroup.py scripts/metal_attention_tiled_simdgroup.py scripts/metal_shortconv_batch_parallel.py scripts/metal_q4k_k32_llama_relaxed.py
       - name: Build Metal backend and test targets
         run: python scripts/dev.py build --backend metal --celeg-tests off --build-type Release --jobs 2
       - name: Upload diagnostics
