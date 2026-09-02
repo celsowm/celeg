@@ -408,6 +408,8 @@ void MetalModel::Impl::encode_attention_batch(
     const bool fused_per_head = owns_kv && !multi &&
         per_head_norm(attention.semantics.query_norm) &&
         per_head_norm(attention.semantics.key_norm);
+    const bool qk_publishes_kv =
+        fused_per_head && !no_position && split_half_rope(attention);
 
     if (!fused_per_head) {
         const auto normalize = [&](id<MTLBuffer> data, id<MTLBuffer> weight,
@@ -488,17 +490,22 @@ void MetalModel::Impl::encode_attention_batch(
             set_bytes(encoder, &query_scale, sizeof(query_scale), 10);
             set_bytes(encoder, &layer.query_norm_epsilon, sizeof(layer.query_norm_epsilon), 11);
             set_bytes(encoder, &layer.key_norm_epsilon, sizeof(layer.key_norm_epsilon), 12);
-            dispatch(encoder,
-                     split_half_rope(attention)
-                         ? "celeg_qk_norm_rope_batch_split"
-                         : "celeg_qk_norm_rope_batch",
-                     static_cast<NSUInteger>(rows) * head_count);
+            if (split_half_rope(attention)) {
+                set_buffer(encoder, batch_value, 13);
+                set_buffer(encoder, layer.key_cache, 14);
+                set_buffer(encoder, layer.value_cache, 15);
+                dispatch(encoder, "celeg_qk_norm_rope_batch_split_store_kv",
+                         static_cast<NSUInteger>(rows) * head_count);
+            } else {
+                dispatch(encoder, "celeg_qk_norm_rope_batch",
+                         static_cast<NSUInteger>(rows) * head_count);
+            }
         }
     }
 
     const uint32_t kv_width = key_heads * head_dim;
     const uint32_t page_tokens = static_cast<uint32_t>(layer.page_tokens);
-    if (owns_kv) {
+    if (owns_kv && !qk_publishes_kv) {
         set_buffer(encoder, batch_key, 0);
         set_buffer(encoder, batch_value, 1);
         set_buffer(encoder, layer.key_cache, 2);
