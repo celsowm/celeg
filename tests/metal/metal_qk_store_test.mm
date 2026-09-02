@@ -92,6 +92,7 @@ int main() {
         constexpr float query_epsilon = 1.0e-5f;
         constexpr float key_epsilon = 2.0e-5f;
         constexpr NSUInteger store_threads = 256;
+        constexpr NSUInteger cooperative_threads = 32;
 
         const size_t query_elements = static_cast<size_t>(rows) * query_heads * head_dim;
         const size_t key_elements = static_cast<size_t>(rows) * key_heads * head_dim;
@@ -119,6 +120,8 @@ int main() {
         id<MTLBuffer> baseline_key = buffer(device, key_values);
         id<MTLBuffer> fused_query = buffer(device, query_values);
         id<MTLBuffer> fused_key = buffer(device, key_values);
+        id<MTLBuffer> cooperative_query = buffer(device, query_values);
+        id<MTLBuffer> cooperative_key = buffer(device, key_values);
         id<MTLBuffer> value = buffer(device, value_values);
         id<MTLBuffer> query_norm = buffer(device, query_weight);
         id<MTLBuffer> key_norm = buffer(device, key_weight);
@@ -126,6 +129,8 @@ int main() {
         id<MTLBuffer> baseline_value_cache = zero_buffer(device, cache_elements);
         id<MTLBuffer> fused_key_cache = zero_buffer(device, cache_elements);
         id<MTLBuffer> fused_value_cache = zero_buffer(device, cache_elements);
+        id<MTLBuffer> cooperative_key_cache = zero_buffer(device, cache_elements);
+        id<MTLBuffer> cooperative_value_cache = zero_buffer(device, cache_elements);
 
         id<MTLComputePipelineState> qk =
             pipeline(device, library, "celeg_qk_norm_rope_batch_split");
@@ -133,8 +138,13 @@ int main() {
             pipeline(device, library, "celeg_store_kv_batch_2d");
         id<MTLComputePipelineState> fused =
             pipeline(device, library, "celeg_qk_norm_rope_batch_split_store_kv");
+        id<MTLComputePipelineState> cooperative = pipeline(
+            device, library, "celeg_qk_norm_rope_batch_split_cooperative_store_kv");
         if (store.maxTotalThreadsPerThreadgroup < store_threads) {
             throw std::runtime_error("Metal QK store test needs 256 KV-store threads");
+        }
+        if (cooperative.maxTotalThreadsPerThreadgroup < cooperative_threads) {
+            throw std::runtime_error("Metal QK store test needs 32 cooperative threads");
         }
 
         const NSUInteger head_dispatch = static_cast<NSUInteger>(rows) * query_heads;
@@ -196,6 +206,26 @@ int main() {
         [encoder dispatchThreads:MTLSizeMake(head_dispatch, 1, 1)
            threadsPerThreadgroup:MTLSizeMake(fused_threads, 1, 1)];
 
+        [encoder setComputePipelineState:cooperative];
+        [encoder setBuffer:cooperative_query offset:0 atIndex:0];
+        [encoder setBuffer:query_norm offset:0 atIndex:1];
+        [encoder setBuffer:cooperative_key offset:0 atIndex:2];
+        [encoder setBuffer:key_norm offset:0 atIndex:3];
+        [encoder setBytes:&rows length:sizeof(rows) atIndex:4];
+        [encoder setBytes:&query_heads length:sizeof(query_heads) atIndex:5];
+        [encoder setBytes:&key_heads length:sizeof(key_heads) atIndex:6];
+        [encoder setBytes:&head_dim length:sizeof(head_dim) atIndex:7];
+        [encoder setBytes:&base_position length:sizeof(base_position) atIndex:8];
+        [encoder setBytes:&theta length:sizeof(theta) atIndex:9];
+        [encoder setBytes:&query_scale length:sizeof(query_scale) atIndex:10];
+        [encoder setBytes:&query_epsilon length:sizeof(query_epsilon) atIndex:11];
+        [encoder setBytes:&key_epsilon length:sizeof(key_epsilon) atIndex:12];
+        [encoder setBuffer:value offset:0 atIndex:13];
+        [encoder setBuffer:cooperative_key_cache offset:0 atIndex:14];
+        [encoder setBuffer:cooperative_value_cache offset:0 atIndex:15];
+        [encoder dispatchThreadgroups:MTLSizeMake(rows, 1, 1)
+                threadsPerThreadgroup:MTLSizeMake(cooperative_threads, 1, 1)];
+
         [encoder endEncoding];
         [command_buffer commit];
         [command_buffer waitUntilCompleted];
@@ -203,12 +233,19 @@ int main() {
             throw std::runtime_error("Metal QK store dispatch failed");
         }
 
-        check_identical(baseline_query, fused_query, query_elements, "query");
-        check_identical(baseline_key, fused_key, key_elements, "key");
-        check_identical(baseline_key_cache, fused_key_cache, cache_elements, "key cache");
-        check_identical(baseline_value_cache, fused_value_cache, cache_elements, "value cache");
+        check_identical(baseline_query, fused_query, query_elements, "fused query");
+        check_identical(baseline_key, fused_key, key_elements, "fused key");
+        check_identical(baseline_key_cache, fused_key_cache, cache_elements, "fused key cache");
+        check_identical(baseline_value_cache, fused_value_cache, cache_elements,
+                        "fused value cache");
+        check_identical(baseline_query, cooperative_query, query_elements,
+                        "cooperative query");
+        check_identical(baseline_key_cache, cooperative_key_cache, cache_elements,
+                        "cooperative key cache");
+        check_identical(baseline_value_cache, cooperative_value_cache, cache_elements,
+                        "cooperative value cache");
 
-        std::cout << "metal fused SplitHalf KV publication passed\n";
+        std::cout << "metal SplitHalf KV publication kernels passed\n";
         return 0;
     } catch (const std::exception& error) {
         std::cerr << "error: " << error.what() << '\n';
