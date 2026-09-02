@@ -1,10 +1,10 @@
-// Optional Q4_K TensorOps fast path using Metal MPP reduced precision.
+// Optional quantized TensorOps fast path using Metal MPP reduced precision.
 //
-// This kernel intentionally changes matmul2d_descriptor::relaxed_precision to
-// true. It is therefore not bit-exact with the default Celeg path and must only
-// be selected by the explicit CELEG_METAL_TENSOR_RELAXED_PRECISION=1 runtime
-// opt-in. Geometry and Q4_K dequantization otherwise match the dynamic strict
-// TensorOps kernel.
+// These kernels intentionally set matmul2d_descriptor::relaxed_precision to
+// true. They are therefore not bit-exact with the default Celeg path and must
+// only be selected by the explicit CELEG_METAL_TENSOR_RELAXED_PRECISION=1
+// runtime opt-in. Geometry and quantized dequantization otherwise match the
+// dynamic strict TensorOps kernels.
 
 constant int kCelegRelaxedTileRows = 64;
 constant int kCelegRelaxedTileTokens = 128;
@@ -84,19 +84,25 @@ void celeg_matmul_tensor_quantized_relaxed(
     result.store(output_tile);
 }
 
-kernel void celeg_matmul_tensor_q4k_relaxed(
-        device const uchar* weights [[buffer(0)]],
-        device float* input [[buffer(1)]],
-        device float* output [[buffer(2)]],
-        constant uint& rows [[buffer(3)]],
-        constant uint& cols [[buffer(4)]],
-        constant uint& output_rows [[buffer(5)]],
-        constant uint& output_stride [[buffer(6)]],
-        constant uint& row_bytes [[buffer(7)]],
-        threadgroup half* weights_tile [[threadgroup(0)]],
-        uint thread_index [[thread_index_in_threadgroup]],
-        uint2 grid [[threadgroup_position_in_grid]]) {
-    celeg_matmul_tensor_quantized_relaxed(
-        weights, input, output, rows, cols, output_rows, output_stride, row_bytes,
-        CelegTensorQ4K{}, weights_tile, thread_index, grid);
+#define CELEG_RELAXED_QUANTIZED_MATMUL(NAME, DECODER) \
+kernel void NAME( \
+        device const uchar* weights [[buffer(0)]], \
+        device float* input [[buffer(1)]], \
+        device float* output [[buffer(2)]], \
+        constant uint& rows [[buffer(3)]], \
+        constant uint& cols [[buffer(4)]], \
+        constant uint& output_rows [[buffer(5)]], \
+        constant uint& output_stride [[buffer(6)]], \
+        constant uint& row_bytes [[buffer(7)]], \
+        threadgroup half* weights_tile [[threadgroup(0)]], \
+        uint thread_index [[thread_index_in_threadgroup]], \
+        uint2 grid [[threadgroup_position_in_grid]]) { \
+    celeg_matmul_tensor_quantized_relaxed( \
+        weights, input, output, rows, cols, output_rows, output_stride, row_bytes, \
+        DECODER{}, weights_tile, thread_index, grid); \
 }
+
+CELEG_RELAXED_QUANTIZED_MATMUL(celeg_matmul_tensor_q4k_relaxed, CelegTensorQ4K)
+CELEG_RELAXED_QUANTIZED_MATMUL(celeg_matmul_tensor_q6k_relaxed, CelegTensorQ6K)
+
+#undef CELEG_RELAXED_QUANTIZED_MATMUL
