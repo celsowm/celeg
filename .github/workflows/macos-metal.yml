@@ -27,10 +27,14 @@ jobs:
           xcrun --sdk macosx metallib probe.air inference.air -o celeg.metallib
       - name: Build Metal backend
         run: python scripts/dev.py build --backend metal --celeg-tests off --build-type Release --jobs 2
+      - name: Benchmark Metal kernels
+        run: ./out/macos-metal-release/celeg-metal-kernel-benchmark > metal-kernel-benchmark.json
       - name: Upload diagnostics
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: doctor-macos-metal
-          path: doctor-macos-metal.json
+          path: |
+            doctor-macos-metal.json
+            metal-kernel-benchmark.json
           if-no-files-found: ignore
