@@ -10,6 +10,7 @@
 #include "inference/state.metal"
 #include "inference/projection.metal"
 #include "inference/batch.metal"
+#include "inference/kv_store.metal"
 #include "inference/feed_forward.metal"
 #include "inference/normalization.metal"
 #include "inference/convolution.metal"
