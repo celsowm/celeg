@@ -15,6 +15,12 @@ EXPERIMENTS = (
     ("relaxed precision diagnostic", ROOT / "scripts" / "metal_relaxed_precision.py"),
     ("modern Q4_K K32", ROOT / "scripts" / "metal_q4k_k32.py"),
     ("strict llama-style Q4_K K32", ROOT / "scripts" / "metal_q4k_k32_llama_strict.py"),
+    # Apple recommends BK=128 as an M5 starting point. This candidate stages
+    # 128 values but retains two strict K64 matmul runs in baseline order.
+    ("Q4_K stage128 / strict K64x2", ROOT / "scripts" / "metal_q4k_stage128.py"),
+    # Full LFM2.5 pp tiles are aligned, so this isolates Apple's static-extents
+    # optimization without changing decoder, geometry, precision or K ordering.
+    ("Q4_K static full tiles", ROOT / "scripts" / "metal_q4k_static_full.py"),
     ("vectorized Q4_K K32", ROOT / "scripts" / "metal_q4k_k32_vector.py"),
     ("vectorized production Q4_K K64", ROOT / "scripts" / "metal_q4k_k64_vector.py"),
     ("predecoded Q4_K F16 cache", ROOT / "scripts" / "metal_q4k_predecoded.py"),
