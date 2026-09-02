@@ -48,8 +48,8 @@ struct Shape {
 /// orientations, and the tied Q6_K language-model head.
 constexpr Shape kShapes[] = {
     {"proj_1024x1024", 1024, 1024},
-    {"ffn_up_4608x1024", 4608, 1024},
-    {"ffn_down_1024x4608", 1024, 4608},
+    {"ffn_up_6656x1024", 6656, 1024},
+    {"ffn_down_1024x6656", 1024, 6656},
     {"lm_head_65536x1024", 65536, 1024},
 };
 
@@ -79,6 +79,8 @@ constexpr NSUInteger kTensorTileRows = 64;
 constexpr NSUInteger kTensorTileTokens = 128;
 constexpr NSUInteger kTensorTileK = 64;
 constexpr NSUInteger kTensorTileThreads = 128;
+// Historical large-tile control. Current llama.cpp Metal does not use this
+// geometry; it uses a 64x128 outer tile with K32.
 constexpr NSUInteger kLlamaTensorTileRows = 128;
 constexpr NSUInteger kLlamaTensorTileTokens = 256;
 constexpr NSUInteger kLlamaTensorTileK = 64;
@@ -115,7 +117,7 @@ constexpr TensorBinding kLlamaTensorBindings[] = {
 
 constexpr uint32_t kPrefillTokens = 512;
 constexpr uint32_t kPrefillHidden = 1024;
-constexpr uint32_t kPrefillIntermediate = 4608;
+constexpr uint32_t kPrefillIntermediate = 6656;
 constexpr uint32_t kPrefillQueryHeads = 16;
 constexpr uint32_t kPrefillKeyHeads = 8;
 constexpr uint32_t kPrefillHeadDim = 64;
@@ -345,15 +347,16 @@ std::vector<Row> measure_matmul_geometry(
     return rows;
 }
 
-/// Times the production and llama-style batched tensor matmul geometries at
-/// pp512. Weight bytes are reported only as a stable reference; `ms` is the
-/// metric to compare because activation rereads dominate these experiments.
+/// Times the production batched tensor matmul geometry at pp512. Weight bytes
+/// are reported only as a stable reference; `ms` is the metric to compare.
 std::vector<Row> measure_matmul(Harness& harness) {
     return measure_matmul_geometry(
         harness, kTensorBindings, sizeof(kTensorBindings) / sizeof(kTensorBindings[0]),
         kTensorTileRows, kTensorTileTokens, kTensorTileK, kTensorTileThreads);
 }
 
+/// Historical 128x256 large-tile control retained to document the rejected
+/// geometry experiment. It is not the current llama.cpp Metal matmul shape.
 std::vector<Row> measure_matmul_llama_tile(Harness& harness) {
     return measure_matmul_geometry(
         harness, kLlamaTensorBindings,
@@ -437,7 +440,7 @@ std::vector<Row> measure_prefill_aux(Harness& harness) {
                threadsPerThreadgroup:MTLSizeMake(swiglu_threads, 1, 1)];
         });
     const size_t swiglu_traffic = static_cast<size_t>(swiglu_count) * sizeof(float) * 3;
-    rows.push_back({"celeg_swiglu_batch_2d", "pp512_intermediate4608", swiglu_traffic,
+    rows.push_back({"celeg_swiglu_batch_2d", "pp512_intermediate6656", swiglu_traffic,
                     swiglu_ms, static_cast<double>(swiglu_traffic) / (swiglu_ms * 1.0e6)});
 
     const uint32_t query_width = kPrefillQueryHeads * kPrefillHeadDim;
@@ -584,7 +587,7 @@ int main() {
         const double peak = roofline(harness);
         const std::vector<Row> matvec = measure_matvec(harness);
         const std::vector<Row> matmul = measure_matmul(harness);
-        const std::vector<Row> matmul_llama_tile = measure_matmul_llama_tile(harness);
+        const std::vector<Row> matmul_large_tile_control = measure_matmul_llama_tile(harness);
         const std::vector<Row> prefill_aux = measure_prefill_aux(harness);
         const std::vector<Row> attention = measure_attention(harness);
         std::cout << "{\n  \"device\": \"" << ns_string(harness.device.name) << "\",\n"
@@ -593,7 +596,7 @@ int main() {
         bool first = true;
         emit(matvec, peak, "matvec", first);
         emit(matmul, peak, "matmul", first);
-        emit(matmul_llama_tile, peak, "matmul_llama_tile", first);
+        emit(matmul_large_tile_control, peak, "matmul_128x256_control", first);
         emit(prefill_aux, peak, "prefill_aux", first);
         emit(attention, peak, "attention", first);
         std::cout << "\n  ]\n}\n";
