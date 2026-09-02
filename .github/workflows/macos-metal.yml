@@ -33,6 +33,8 @@ jobs:
         run: python scripts/metal_cooperative_q4k.py --build-only
       - name: Compile K32 Q4_K tensor harness
         run: python scripts/metal_q4k_k32.py --build-only
+      - name: Compile vectorized K32 Q4_K tensor harness
+        run: python scripts/metal_q4k_k32_vector.py --build-only
       - name: Build Metal backend and test targets
         run: python scripts/dev.py build --backend metal --celeg-tests off --build-type Release --jobs 2
       - name: Upload diagnostics
