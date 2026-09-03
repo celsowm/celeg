@@ -2,8 +2,8 @@
 //
 // This file is concatenated after tensor.metal, so it intentionally reuses
 // the shared tile constants and MPP imports defined there. Selection remains
-// opt-in through CELEG_METAL_TENSOR_RELAXED_PRECISION=1 on the host. The same
-// implementation owns both the N128 throughput tile and N32 short-prefill tile.
+// opt-in through CELEG_METAL_TENSOR_RELAXED_PRECISION=1 on the host. N32
+// variants are compiled as candidates but are not selected until measured.
 
 template <typename T, int TileTokens>
 void celeg_matmul_tensor_dense_relaxed_impl(
@@ -86,33 +86,9 @@ kernel void NAME( \
         weights_tile, thread_index, grid); \
 }
 
-#define CELEG_RELAXED_DENSE_ADAPTIVE_MATMUL(NAME, TYPE) \
-kernel void NAME( \
-        device const TYPE* weights [[buffer(0)]], \
-        device float* input [[buffer(1)]], \
-        device float* output [[buffer(2)]], \
-        constant uint& rows [[buffer(3)]], \
-        constant uint& cols [[buffer(4)]], \
-        constant uint& output_rows [[buffer(5)]], \
-        constant uint& output_stride [[buffer(6)]], \
-        threadgroup TYPE* weights_tile [[threadgroup(0)]], \
-        uint thread_index [[thread_index_in_threadgroup]], \
-        uint2 grid [[threadgroup_position_in_grid]]) { \
-    if (rows <= 32u) { \
-        celeg_matmul_tensor_dense_relaxed_impl<TYPE, 32>( \
-            weights, input, output, rows, cols, output_rows, output_stride, \
-            weights_tile, thread_index, grid); \
-    } else { \
-        celeg_matmul_tensor_dense_relaxed_impl<TYPE, 128>( \
-            weights, input, output, rows, cols, output_rows, output_stride, \
-            weights_tile, thread_index, grid); \
-    } \
-}
-
-CELEG_RELAXED_DENSE_ADAPTIVE_MATMUL(celeg_matmul_tensor_f16_relaxed, half)
-CELEG_RELAXED_DENSE_ADAPTIVE_MATMUL(celeg_matmul_tensor_bf16_relaxed, bfloat)
+CELEG_RELAXED_DENSE_FIXED_MATMUL(celeg_matmul_tensor_f16_relaxed, half, 128)
+CELEG_RELAXED_DENSE_FIXED_MATMUL(celeg_matmul_tensor_bf16_relaxed, bfloat, 128)
 CELEG_RELAXED_DENSE_FIXED_MATMUL(celeg_matmul_tensor_f16_relaxed_n32, half, 32)
 CELEG_RELAXED_DENSE_FIXED_MATMUL(celeg_matmul_tensor_bf16_relaxed_n32, bfloat, 32)
 
-#undef CELEG_RELAXED_DENSE_ADAPTIVE_MATMUL
 #undef CELEG_RELAXED_DENSE_FIXED_MATMUL
