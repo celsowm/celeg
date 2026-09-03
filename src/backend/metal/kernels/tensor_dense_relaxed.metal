@@ -2,24 +2,20 @@
 //
 // This file is concatenated after tensor.metal, so it intentionally reuses
 // the shared tile constants and MPP imports defined there. Selection remains
-// opt-in through CELEG_METAL_TENSOR_RELAXED_PRECISION=1 on the host.
+// opt-in through CELEG_METAL_TENSOR_RELAXED_PRECISION=1 on the host. The same
+// implementation owns both the N128 throughput tile and N32 short-prefill tile.
 
-template <typename T>
-kernel void celeg_matmul_tensor_dense_relaxed(
-        device const T* weights [[buffer(0)]],
-        device float* input [[buffer(1)]],
-        device float* output [[buffer(2)]],
-        constant uint& rows [[buffer(3)]],
-        constant uint& cols [[buffer(4)]],
-        constant uint& output_rows [[buffer(5)]],
-        constant uint& output_stride [[buffer(6)]],
-        threadgroup T* weights_tile [[threadgroup(0)]],
-        uint thread_index [[thread_index_in_threadgroup]],
-        uint2 grid [[threadgroup_position_in_grid]]) {
+template <typename T, int TileTokens>
+void celeg_matmul_tensor_dense_relaxed_impl(
+        device const T* weights,
+        device float* input,
+        device float* output,
+        uint rows, uint cols, uint output_rows, uint output_stride,
+        threadgroup T* weights_tile, uint thread_index, uint2 grid) {
     const int row_offset = static_cast<int>(grid.x) * kCelegTileRows;
-    const int token_offset = static_cast<int>(grid.y) * kCelegTileTokens;
+    const int token_offset = static_cast<int>(grid.y) * TileTokens;
     const int row_extent = min(kCelegTileRows, static_cast<int>(output_rows) - row_offset);
-    const int token_extent = min(kCelegTileTokens, static_cast<int>(rows) - token_offset);
+    const int token_extent = min(TileTokens, static_cast<int>(rows) - token_offset);
     if (row_extent <= 0 || token_extent <= 0) return;
 
     auto output_tensor = tensor(
@@ -32,7 +28,7 @@ kernel void celeg_matmul_tensor_dense_relaxed(
         array<int32_t, 2>({1, kCelegTileK}));
 
     matmul2d<
-        matmul2d_descriptor(kCelegTileTokens, kCelegTileRows, dynamic_extent,
+        matmul2d_descriptor(TileTokens, kCelegTileRows, dynamic_extent,
                             false, true, true,
                             matmul2d_descriptor::mode::multiply_accumulate),
         execution_simdgroups<4>> operation;
@@ -73,14 +69,26 @@ kernel void celeg_matmul_tensor_dense_relaxed(
     result.store(output_tile);
 }
 
-template [[host_name("celeg_matmul_tensor_f16_relaxed")]]
-kernel void celeg_matmul_tensor_dense_relaxed<half>(
-        device const half*, device float*, device float*,
-        constant uint&, constant uint&, constant uint&, constant uint&,
-        threadgroup half*, uint, uint2);
+#define CELEG_RELAXED_DENSE_MATMUL(NAME, TYPE, TILE_TOKENS) \
+kernel void NAME( \
+        device const TYPE* weights [[buffer(0)]], \
+        device float* input [[buffer(1)]], \
+        device float* output [[buffer(2)]], \
+        constant uint& rows [[buffer(3)]], \
+        constant uint& cols [[buffer(4)]], \
+        constant uint& output_rows [[buffer(5)]], \
+        constant uint& output_stride [[buffer(6)]], \
+        threadgroup TYPE* weights_tile [[threadgroup(0)]], \
+        uint thread_index [[thread_index_in_threadgroup]], \
+        uint2 grid [[threadgroup_position_in_grid]]) { \
+    celeg_matmul_tensor_dense_relaxed_impl<TYPE, TILE_TOKENS>( \
+        weights, input, output, rows, cols, output_rows, output_stride, \
+        weights_tile, thread_index, grid); \
+}
 
-template [[host_name("celeg_matmul_tensor_bf16_relaxed")]]
-kernel void celeg_matmul_tensor_dense_relaxed<bfloat>(
-        device const bfloat*, device float*, device float*,
-        constant uint&, constant uint&, constant uint&, constant uint&,
-        threadgroup bfloat*, uint, uint2);
+CELEG_RELAXED_DENSE_MATMUL(celeg_matmul_tensor_f16_relaxed, half, 128)
+CELEG_RELAXED_DENSE_MATMUL(celeg_matmul_tensor_bf16_relaxed, bfloat, 128)
+CELEG_RELAXED_DENSE_MATMUL(celeg_matmul_tensor_f16_relaxed_n32, half, 32)
+CELEG_RELAXED_DENSE_MATMUL(celeg_matmul_tensor_bf16_relaxed_n32, bfloat, 32)
+
+#undef CELEG_RELAXED_DENSE_MATMUL
