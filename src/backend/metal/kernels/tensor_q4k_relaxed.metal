@@ -4,7 +4,7 @@
 // true. They are therefore not bit-exact with the default Celeg path and must
 // only be selected by the explicit CELEG_METAL_TENSOR_RELAXED_PRECISION=1
 // runtime opt-in. The decoder and K/output-row geometry are shared across the
-// N128 throughput tile and N32 short-prefill tile.
+// N128 throughput tile and N32 short-prefill candidates.
 
 constant int kCelegRelaxedTileRows = 64;
 constant int kCelegRelaxedTileTokens = 128;
@@ -127,11 +127,11 @@ kernel void NAME( \
     } \
 }
 
-CELEG_RELAXED_QUANTIZED_ADAPTIVE_MATMUL(celeg_matmul_tensor_q4_0_relaxed, CelegTensorQ4_0)
+CELEG_RELAXED_QUANTIZED_FIXED_MATMUL(celeg_matmul_tensor_q4_0_relaxed, CelegTensorQ4_0, 128)
 CELEG_RELAXED_QUANTIZED_ADAPTIVE_MATMUL(celeg_matmul_tensor_q4k_relaxed, CelegTensorQ4K)
-CELEG_RELAXED_QUANTIZED_ADAPTIVE_MATMUL(celeg_matmul_tensor_q5k_relaxed, CelegTensorQ5K)
-CELEG_RELAXED_QUANTIZED_ADAPTIVE_MATMUL(celeg_matmul_tensor_q6k_relaxed, CelegTensorQ6K)
-CELEG_RELAXED_QUANTIZED_ADAPTIVE_MATMUL(celeg_matmul_tensor_q8_0_relaxed, CelegTensorQ8_0)
+CELEG_RELAXED_QUANTIZED_FIXED_MATMUL(celeg_matmul_tensor_q5k_relaxed, CelegTensorQ5K, 128)
+CELEG_RELAXED_QUANTIZED_FIXED_MATMUL(celeg_matmul_tensor_q6k_relaxed, CelegTensorQ6K, 128)
+CELEG_RELAXED_QUANTIZED_FIXED_MATMUL(celeg_matmul_tensor_q8_0_relaxed, CelegTensorQ8_0, 128)
 CELEG_RELAXED_QUANTIZED_FIXED_MATMUL(celeg_matmul_tensor_q4_0_relaxed_n32, CelegTensorQ4_0, 32)
 CELEG_RELAXED_QUANTIZED_FIXED_MATMUL(celeg_matmul_tensor_q4k_relaxed_n32, CelegTensorQ4K, 32)
 CELEG_RELAXED_QUANTIZED_FIXED_MATMUL(celeg_matmul_tensor_q5k_relaxed_n32, CelegTensorQ5K, 32)
