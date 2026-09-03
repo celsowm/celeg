@@ -3,24 +3,25 @@
 // These kernels intentionally set matmul2d_descriptor::relaxed_precision to
 // true. They are therefore not bit-exact with the default Celeg path and must
 // only be selected by the explicit CELEG_METAL_TENSOR_RELAXED_PRECISION=1
-// runtime opt-in. Geometry and quantized dequantization otherwise match the
-// dynamic strict TensorOps kernels.
+// runtime opt-in. The decoder and K/output-row geometry are shared across the
+// N128 throughput tile and N32 short-prefill tile.
 
 constant int kCelegRelaxedTileRows = 64;
 constant int kCelegRelaxedTileTokens = 128;
+constant int kCelegRelaxedSmallTileTokens = 32;
 constant int kCelegRelaxedTileK = 64;
 constant int kCelegRelaxedTileThreads = 128;
 
-template <typename Decoder>
+template <typename Decoder, int TileTokens>
 void celeg_matmul_tensor_quantized_relaxed(
         device const uchar* weights, device float* input, device float* output,
         uint rows, uint cols, uint output_rows, uint output_stride, uint row_bytes,
         Decoder decoder, threadgroup half* weights_tile, uint thread_index, uint2 grid) {
     const int row_offset = static_cast<int>(grid.x) * kCelegRelaxedTileRows;
-    const int token_offset = static_cast<int>(grid.y) * kCelegRelaxedTileTokens;
+    const int token_offset = static_cast<int>(grid.y) * TileTokens;
     const int row_extent = min(kCelegRelaxedTileRows,
                                static_cast<int>(output_rows) - row_offset);
-    const int token_extent = min(kCelegRelaxedTileTokens,
+    const int token_extent = min(TileTokens,
                                  static_cast<int>(rows) - token_offset);
     if (row_extent <= 0 || token_extent <= 0) return;
 
@@ -38,7 +39,7 @@ void celeg_matmul_tensor_quantized_relaxed(
         array<int32_t, 2>({1, kCelegRelaxedTileK}));
 
     matmul2d<
-        matmul2d_descriptor(kCelegRelaxedTileTokens, kCelegRelaxedTileRows,
+        matmul2d_descriptor(TileTokens, kCelegRelaxedTileRows,
                             dynamic_extent, false, true, true,
                             matmul2d_descriptor::mode::multiply_accumulate),
         execution_simdgroups<4>> operation;
@@ -84,7 +85,7 @@ void celeg_matmul_tensor_quantized_relaxed(
     result.store(output_tile);
 }
 
-#define CELEG_RELAXED_QUANTIZED_MATMUL(NAME, DECODER) \
+#define CELEG_RELAXED_QUANTIZED_MATMUL(NAME, DECODER, TILE_TOKENS) \
 kernel void NAME( \
         device const uchar* weights [[buffer(0)]], \
         device float* input [[buffer(1)]], \
@@ -97,15 +98,20 @@ kernel void NAME( \
         threadgroup half* weights_tile [[threadgroup(0)]], \
         uint thread_index [[thread_index_in_threadgroup]], \
         uint2 grid [[threadgroup_position_in_grid]]) { \
-    celeg_matmul_tensor_quantized_relaxed( \
+    celeg_matmul_tensor_quantized_relaxed<DECODER, TILE_TOKENS>( \
         weights, input, output, rows, cols, output_rows, output_stride, row_bytes, \
         DECODER{}, weights_tile, thread_index, grid); \
 }
 
-CELEG_RELAXED_QUANTIZED_MATMUL(celeg_matmul_tensor_q4_0_relaxed, CelegTensorQ4_0)
-CELEG_RELAXED_QUANTIZED_MATMUL(celeg_matmul_tensor_q4k_relaxed, CelegTensorQ4K)
-CELEG_RELAXED_QUANTIZED_MATMUL(celeg_matmul_tensor_q5k_relaxed, CelegTensorQ5K)
-CELEG_RELAXED_QUANTIZED_MATMUL(celeg_matmul_tensor_q6k_relaxed, CelegTensorQ6K)
-CELEG_RELAXED_QUANTIZED_MATMUL(celeg_matmul_tensor_q8_0_relaxed, CelegTensorQ8_0)
+CELEG_RELAXED_QUANTIZED_MATMUL(celeg_matmul_tensor_q4_0_relaxed, CelegTensorQ4_0, 128)
+CELEG_RELAXED_QUANTIZED_MATMUL(celeg_matmul_tensor_q4k_relaxed, CelegTensorQ4K, 128)
+CELEG_RELAXED_QUANTIZED_MATMUL(celeg_matmul_tensor_q5k_relaxed, CelegTensorQ5K, 128)
+CELEG_RELAXED_QUANTIZED_MATMUL(celeg_matmul_tensor_q6k_relaxed, CelegTensorQ6K, 128)
+CELEG_RELAXED_QUANTIZED_MATMUL(celeg_matmul_tensor_q8_0_relaxed, CelegTensorQ8_0, 128)
+CELEG_RELAXED_QUANTIZED_MATMUL(celeg_matmul_tensor_q4_0_relaxed_n32, CelegTensorQ4_0, 32)
+CELEG_RELAXED_QUANTIZED_MATMUL(celeg_matmul_tensor_q4k_relaxed_n32, CelegTensorQ4K, 32)
+CELEG_RELAXED_QUANTIZED_MATMUL(celeg_matmul_tensor_q5k_relaxed_n32, CelegTensorQ5K, 32)
+CELEG_RELAXED_QUANTIZED_MATMUL(celeg_matmul_tensor_q6k_relaxed_n32, CelegTensorQ6K, 32)
+CELEG_RELAXED_QUANTIZED_MATMUL(celeg_matmul_tensor_q8_0_relaxed_n32, CelegTensorQ8_0, 32)
 
 #undef CELEG_RELAXED_QUANTIZED_MATMUL
