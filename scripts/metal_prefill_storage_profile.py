@@ -40,6 +40,15 @@ def resolve_models(model_dir: pathlib.Path, requested: list[str] | None) -> list
     return [by_name[name] for name in names]
 
 
+def parse_benchmark_json(stdout: str) -> dict[str, object]:
+    # celeg-metal-bench historically used std::quoted for JSON strings. That
+    # escapes quotes/backslashes but can leave raw control characters emitted
+    # by a backend description. Keep the parser strict about the surrounding
+    # document while accepting those legacy string contents until the producer
+    # is migrated to a full JSON string encoder.
+    return json.loads(stdout, strict=False)
+
+
 def profile(binary: pathlib.Path, model: pathlib.Path, rows: int, repetitions: int) -> tuple[dict[str, object], dict[str, int]]:
     context = max(128, rows + 128)
     env = os.environ.copy()
@@ -64,7 +73,7 @@ def profile(binary: pathlib.Path, model: pathlib.Path, rows: int, repetitions: i
     )
     if result.returncode != 0:
         raise RuntimeError(result.stdout + result.stderr)
-    report = json.loads(result.stdout)
+    report = parse_benchmark_json(result.stdout)
     histogram: dict[str, int] = {}
     for line in result.stderr.splitlines():
         match = PROFILE_LINE.fullmatch(line)
