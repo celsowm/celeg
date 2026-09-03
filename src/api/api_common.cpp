@@ -217,6 +217,10 @@ MetalModelOptions metal_options(const celeg_metal_model_options& input) {
         input.storage_mode != CELEG_METAL_STORAGE_PRIVATE) {
         throw std::invalid_argument("invalid Metal storage mode");
     }
+    if (input.numerical_policy != CELEG_METAL_NUMERICAL_STRICT &&
+        input.numerical_policy != CELEG_METAL_NUMERICAL_FAST) {
+        throw std::invalid_argument("invalid Metal numerical policy");
+    }
     if (input.kv_page_tokens <= 0) {
         throw std::invalid_argument("Metal KV page size must be positive");
     }
@@ -226,6 +230,9 @@ MetalModelOptions metal_options(const celeg_metal_model_options& input) {
         input.storage_mode == CELEG_METAL_STORAGE_PRIVATE
             ? MetalStorageMode::Private
             : MetalStorageMode::Shared,
+        input.numerical_policy == CELEG_METAL_NUMERICAL_FAST
+            ? MetalNumericalPolicy::Fast
+            : MetalNumericalPolicy::Strict,
         input.kv_page_tokens,
     };
 }

@@ -1,0 +1,7 @@
+#pragma once
+
+namespace celeg::build_detail {
+inline constexpr const char* kCommit = "@CELEG_BUILD_COMMIT@";
+inline constexpr bool kDirty = @CELEG_BUILD_DIRTY@;
+inline constexpr const char* kMetalSourceSha256 = "@CELEG_METAL_SOURCE_SHA256@";
+}

@@ -52,7 +52,6 @@ def parse_benchmark_json(stdout: str) -> dict[str, object]:
 def profile(binary: pathlib.Path, model: pathlib.Path, rows: int, repetitions: int) -> tuple[dict[str, object], dict[str, int]]:
     context = max(128, rows + 128)
     env = os.environ.copy()
-    env["CELEG_METAL_TENSOR_RELAXED_PRECISION"] = "1"
     env["CELEG_METAL_DISPATCH_PROFILE"] = "1"
     env.pop("CELEG_METAL_GPU_PROFILE", None)
     result = subprocess.run(
@@ -62,6 +61,7 @@ def profile(binary: pathlib.Path, model: pathlib.Path, rows: int, repetitions: i
             "--context", str(context),
             "--prompt-tokens", str(rows),
             "--decode-tokens", "0",
+            "--numerical-policy", "fast",
             "--warmup", "1",
             "--repetitions", str(repetitions),
         ],
@@ -99,7 +99,7 @@ def relevant(histogram: dict[str, int]) -> list[tuple[str, int]]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Profile relaxed Metal prefill dispatch selection across LFM2.5-350M GGUF storages."
+        description="Profile fast Metal prefill dispatch selection across LFM2.5-350M GGUF storages."
     )
     parser.add_argument("--model-dir", type=pathlib.Path, default=DEFAULT_MODEL_DIR)
     parser.add_argument("--binary", type=pathlib.Path, default=DEFAULT_BINARY)
@@ -121,7 +121,7 @@ def main() -> int:
         raise SystemExit("--rows values must be positive")
     models = resolve_models(args.model_dir, args.models)
 
-    print("Metal relaxed prefill storage profile")
+    print("Metal fast prefill storage profile")
     print(f"binary={binary}")
     print(f"rows={','.join(str(value) for value in row_counts)} repetitions={args.repetitions}\n")
 

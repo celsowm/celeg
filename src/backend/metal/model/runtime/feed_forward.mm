@@ -1,18 +1,7 @@
 #include "detail.hpp"
 
 #include <algorithm>
-#include <cstdlib>
-
 namespace celeg {
-
-namespace {
-
-bool relaxed_prefill_enabled() {
-    const char* value = std::getenv("CELEG_METAL_TENSOR_RELAXED_PRECISION");
-    return value != nullptr && value[0] == '1' && value[1] == '\0';
-}
-
-}
 
 void MetalModel::Impl::encode_dense_feed_forward(
     id<MTLComputeCommandEncoder> encoder, Layer& layer, bool gate_up_ready) {
@@ -44,7 +33,8 @@ void MetalModel::Impl::encode_dense_feed_forward_batch(
     set_buffer(encoder, batch_activated, 1);
     set_bytes(encoder, &rows, sizeof(rows), 2);
     set_bytes(encoder, &intermediate, sizeof(intermediate), 3);
-    const std::string_view swiglu_kernel = relaxed_prefill_enabled()
+    const std::string_view swiglu_kernel =
+        options.numerical_policy == MetalNumericalPolicy::Fast
         ? "celeg_swiglu_batch_2d_relaxed"
         : "celeg_swiglu_batch_2d";
     id<MTLComputePipelineState> swiglu = pipeline(swiglu_kernel);

@@ -179,3 +179,43 @@ python benchmarks/run_metal_bench.py \
 
 The current baseline is recorded in `docs/METAL_BENCHMARK_REPORT.md`. It is a
 correctness/performance reference, not a cross-machine performance threshold.
+
+## Official Apple M5 comparison
+
+The promotion benchmark compares the eight LFM2.5-350M GGUF files against the
+pinned Metal build of llama.cpp. It uses shared storage, workloads `32+8` and
+`512+8`, five warmups, 15 timed repetitions, and alternates engine order:
+
+```bash
+python benchmarks/compare_metal.py
+```
+
+The default output is
+`benchmarks/results/metal_llama_cpp_compare_official.json`. Do not overwrite
+`benchmarks/results/metal_llama_cpp_compare.json`: that historical run used a
+stale executable and scalar GEMM fallback and is not promotion-eligible.
+
+Fast preflight is mandatory. For each model/workload cell the runner verifies
+the requested/effective policy, captures the dispatch histogram, rejects
+scalar GEMM, rejects Strict TensorOps fallback, and requires an active Fast
+TensorOps dispatch before any timed sample. A preflight error is written into
+the cell and makes the command fail.
+
+The report identifies the executable rather than assuming it matches the
+checkout. Celeg provenance includes its embedded commit and dirty bit, binary
+SHA-256, Metal-source SHA-256, and compiler. The report also includes the exact
+llama.cpp commit and binary SHA-256, both model and executable paths, GGUF
+SHA-256, macOS version/build, SDK, backend/device description, commands, and
+sample order.
+
+The complete 16-cell gate requires per-cell prefill/decode median parity,
+combined median and first-quartile parity, and at least `1.10x` geometric-mean
+combined speedup. A complete matrix returns exit code `2` when this performance
+gate is not met. See [the optimization record](../docs/METAL_OPTIMIZATION.md)
+for architecture, numerical thresholds, experiment decisions, and primary
+sources.
+
+Because interleaving launches one process per timed engine sample, each timed
+process also performs one untimed in-process preheat. This keeps lazy pipeline
+creation and first-dispatch residency out of both engines' measurements; the
+five protocol warmups are still run and discarded before interleaving begins.

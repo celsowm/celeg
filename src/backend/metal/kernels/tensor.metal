@@ -279,22 +279,26 @@ void celeg_matmul_tensor_quantized(
     }
 
     constexpr int blocks_per_row = kCelegTileK / kCelegBlockValues;
-    const int tile_row = static_cast<int>(thread_index) / blocks_per_row;
-    const int tile_block = static_cast<int>(thread_index) % blocks_per_row;
-    const int source_row = row_offset + tile_row;
-    threadgroup half* destination =
-        weights_tile + tile_row * kCelegTileK + tile_block * kCelegBlockValues;
+    constexpr int work_items = kCelegTileRows * blocks_per_row;
 
     for (int offset = 0; offset < static_cast<int>(cols); offset += kCelegTileK) {
-        const int source_column = offset + tile_block * kCelegBlockValues;
-        if (source_row < static_cast<int>(output_rows) &&
-            source_column < static_cast<int>(cols)) {
-            decoder.store(destination,
-                          weights + static_cast<size_t>(source_row) * row_bytes,
-                          static_cast<uint>(source_column));
-        } else {
-            for (int index = 0; index < kCelegBlockValues; ++index) {
-                destination[index] = static_cast<half>(0);
+        for (int work = static_cast<int>(thread_index); work < work_items;
+             work += kCelegTileThreads) {
+            const int tile_row = work / blocks_per_row;
+            const int tile_block = work % blocks_per_row;
+            const int source_row = row_offset + tile_row;
+            const int source_column = offset + tile_block * kCelegBlockValues;
+            threadgroup half* destination = weights_tile +
+                tile_row * kCelegTileK + tile_block * kCelegBlockValues;
+            if (source_row < static_cast<int>(output_rows) &&
+                source_column < static_cast<int>(cols)) {
+                decoder.store(destination,
+                              weights + static_cast<size_t>(source_row) * row_bytes,
+                              static_cast<uint>(source_column));
+            } else {
+                for (int index = 0; index < kCelegBlockValues; ++index) {
+                    destination[index] = static_cast<half>(0);
+                }
             }
         }
         threadgroup_barrier(mem_flags::mem_threadgroup);

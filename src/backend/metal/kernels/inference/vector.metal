@@ -148,23 +148,23 @@ CelegQ80Lane celeg_q8_0_lane(uint lane) {
     return result;
 }
 
-template <typename Input>
+template <typename Input, uint MatvecRows>
 void celeg_matvec_q8_0_core(device const uchar* weights, Input input, device float* output,
                             uint rows, uint cols, uint row_bytes, uint lane, uint simd,
                             uint simd_count, uint group) {
-    const uint first_row = (group * simd_count + simd) * kCelegMatvecRows;
+    const uint first_row = (group * simd_count + simd) * MatvecRows;
     if (first_row >= rows) return;
     const CelegQ80Lane slice = celeg_q8_0_lane(lane);
     const uint total_blocks = cols / 32u;
 
-    float sums[kCelegMatvecRows] = {0.0f, 0.0f, 0.0f, 0.0f};
+    float sums[MatvecRows] = {};
     for (uint sweep = 0; sweep * 4u < total_blocks; ++sweep) {
         const uint block = sweep * 4u + slice.block_offset;
         if (block >= total_blocks) break;
         const uint base = block * 32u + slice.byte_base;
         float values[4];
         for (uint step = 0; step < 4u; ++step) values[step] = input.at(base + step);
-        for (uint index = 0; index < kCelegMatvecRows; ++index) {
+        for (uint index = 0; index < MatvecRows; ++index) {
             const uint row = first_row + index;
             if (row >= rows) break;
             const device uchar* data = weights + static_cast<size_t>(row) * row_bytes +
@@ -179,7 +179,7 @@ void celeg_matvec_q8_0_core(device const uchar* weights, Input input, device flo
             sums[index] += d * sum;
         }
     }
-    for (uint index = 0; index < kCelegMatvecRows; ++index) {
+    for (uint index = 0; index < MatvecRows; ++index) {
         const float reduced = simd_sum(sums[index]);
         if (lane == 0 && first_row + index < rows) output[first_row + index] = reduced;
     }
@@ -195,8 +195,40 @@ kernel void celeg_matvec_q8_0(device const uchar* weights [[buffer(0)]],
                               uint simd [[simdgroup_index_in_threadgroup]],
                               uint simd_count [[simdgroups_per_threadgroup]],
                               uint group [[threadgroup_position_in_grid]]) {
-    celeg_matvec_q8_0_core(weights, CelegDenseInput{input}, output, rows, cols, row_bytes,
-                           lane, simd, simd_count, group);
+    celeg_matvec_q8_0_core<CelegDenseInput, 4>(
+        weights, CelegDenseInput{input}, output, rows, cols, row_bytes,
+        lane, simd, simd_count, group);
+}
+
+kernel void celeg_matvec_q8_0_rows8(device const uchar* weights [[buffer(0)]],
+                                    device const float* input [[buffer(1)]],
+                                    device float* output [[buffer(2)]],
+                                    constant uint& rows [[buffer(3)]],
+                                    constant uint& cols [[buffer(4)]],
+                                    constant uint& row_bytes [[buffer(5)]],
+                                    uint lane [[thread_index_in_simdgroup]],
+                                    uint simd [[simdgroup_index_in_threadgroup]],
+                                    uint simd_count [[simdgroups_per_threadgroup]],
+                                    uint group [[threadgroup_position_in_grid]]) {
+    celeg_matvec_q8_0_core<CelegDenseInput, 8>(
+        weights, CelegDenseInput{input}, output, rows, cols, row_bytes,
+        lane, simd, simd_count, group);
+}
+
+kernel void celeg_swiglu_matvec_q8_0_rows8(
+        device const uchar* weights [[buffer(0)]],
+        device const float* gate_up [[buffer(1)]],
+        device float* output [[buffer(2)]],
+        constant uint& rows [[buffer(3)]],
+        constant uint& cols [[buffer(4)]],
+        constant uint& row_bytes [[buffer(5)]],
+        uint lane [[thread_index_in_simdgroup]],
+        uint simd [[simdgroup_index_in_threadgroup]],
+        uint simd_count [[simdgroups_per_threadgroup]],
+        uint group [[threadgroup_position_in_grid]]) {
+    celeg_matvec_q8_0_core<CelegSwigluInput, 8>(
+        weights, CelegSwigluInput{gate_up, cols}, output, rows, cols,
+        row_bytes, lane, simd, simd_count, group);
 }
 
 
@@ -239,17 +271,17 @@ CelegQ6kLane celeg_q6k_lane(uint lane) {
     return result;
 }
 
-template <typename Input>
+template <typename Input, uint MatvecRows>
 void celeg_matvec_q6k_core(device const uchar* weights, Input input, device float* output,
                            uint rows, uint cols, uint row_bytes, uint lane, uint simd,
                            uint simd_count, uint group) {
-    const uint first_row = (group * simd_count + simd) * kCelegMatvecRows;
+    const uint first_row = (group * simd_count + simd) * MatvecRows;
     if (first_row >= rows) return;
     const CelegQ6kLane slice = celeg_q6k_lane(lane);
     const uint low_scale = slice.low_column >> 4;
     const uint high_scale = slice.high_column >> 4;
 
-    float sums[kCelegMatvecRows] = {0.0f, 0.0f, 0.0f, 0.0f};
+    float sums[MatvecRows] = {};
     const uint blocks = cols / 256u;
     for (uint block = 0; block < blocks; ++block) {
         const uint base = block * 256u;
@@ -259,7 +291,7 @@ void celeg_matvec_q6k_core(device const uchar* weights, Input input, device floa
             low_input[step] = input.at(base + slice.low_column + step);
             high_input[step] = input.at(base + slice.high_column + step);
         }
-        for (uint index = 0; index < kCelegMatvecRows; ++index) {
+        for (uint index = 0; index < MatvecRows; ++index) {
             const uint row = first_row + index;
             if (row >= rows) break;
             const device uchar* data = weights + static_cast<size_t>(row) * row_bytes +
@@ -287,7 +319,7 @@ void celeg_matvec_q6k_core(device const uchar* weights, Input input, device floa
             sums[index] += low_factor * low_sum + high_factor * high_sum;
         }
     }
-    for (uint index = 0; index < kCelegMatvecRows; ++index) {
+    for (uint index = 0; index < MatvecRows; ++index) {
         const float reduced = simd_sum(sums[index]);
         if (lane == 0 && first_row + index < rows) output[first_row + index] = reduced;
     }
@@ -329,15 +361,15 @@ CelegQ4kLane celeg_q4k_lane(uint lane) {
  * sub-block, so it costs one multiply per sub-block instead of the two extra
  * fused multiply-adds per value the per-element form paid.
  */
-template <typename Input>
+template <typename Input, uint MatvecRows>
 void celeg_matvec_q4k_core(device const uchar* weights, Input input, device float* output,
                            uint rows, uint cols, uint row_bytes, uint lane, uint simd,
                            uint simd_count, uint group) {
-    const uint first_row = (group * simd_count + simd) * kCelegMatvecRows;
+    const uint first_row = (group * simd_count + simd) * MatvecRows;
     if (first_row >= rows) return;
     const CelegQ4kLane slice = celeg_q4k_lane(lane);
 
-    float sums[kCelegMatvecRows] = {0.0f, 0.0f, 0.0f, 0.0f};
+    float sums[MatvecRows] = {};
     const uint blocks = cols / 256u;
     for (uint block = 0; block < blocks; ++block) {
         const uint base = block * 256u;
@@ -351,7 +383,7 @@ void celeg_matvec_q4k_core(device const uchar* weights, Input input, device floa
             low_total += low_input[step];
             high_total += high_input[step];
         }
-        for (uint index = 0; index < kCelegMatvecRows; ++index) {
+        for (uint index = 0; index < MatvecRows; ++index) {
             const uint row = first_row + index;
             if (row >= rows) break;
             const device uchar* data = weights + static_cast<size_t>(row) * row_bytes +
@@ -380,7 +412,7 @@ void celeg_matvec_q4k_core(device const uchar* weights, Input input, device floa
                         static_cast<float>(high_minimum) * high_total);
         }
     }
-    for (uint index = 0; index < kCelegMatvecRows; ++index) {
+    for (uint index = 0; index < MatvecRows; ++index) {
         const float reduced = simd_sum(sums[index]);
         if (lane == 0 && first_row + index < rows) output[first_row + index] = reduced;
     }
@@ -417,15 +449,15 @@ CelegQ5kLane celeg_q5k_lane(uint lane) {
     return result;
 }
 
-template <typename Input>
+template <typename Input, uint MatvecRows>
 void celeg_matvec_q5k_core(device const uchar* weights, Input input, device float* output,
                            uint rows, uint cols, uint row_bytes, uint lane, uint simd,
                            uint simd_count, uint group) {
-    const uint first_row = (group * simd_count + simd) * kCelegMatvecRows;
+    const uint first_row = (group * simd_count + simd) * MatvecRows;
     if (first_row >= rows) return;
     const CelegQ5kLane slice = celeg_q5k_lane(lane);
 
-    float sums[kCelegMatvecRows] = {0.0f, 0.0f, 0.0f, 0.0f};
+    float sums[MatvecRows] = {};
     const uint blocks = cols / 256u;
     for (uint block = 0; block < blocks; ++block) {
         const uint base = block * 256u;
@@ -439,7 +471,7 @@ void celeg_matvec_q5k_core(device const uchar* weights, Input input, device floa
             low_total += low_input[step];
             high_total += high_input[step];
         }
-        for (uint index = 0; index < kCelegMatvecRows; ++index) {
+        for (uint index = 0; index < MatvecRows; ++index) {
             const uint row = first_row + index;
             if (row >= rows) break;
             const device uchar* data = weights + static_cast<size_t>(row) * row_bytes +
@@ -474,7 +506,7 @@ void celeg_matvec_q5k_core(device const uchar* weights, Input input, device floa
                         static_cast<float>(high_minimum) * high_total);
         }
     }
-    for (uint index = 0; index < kCelegMatvecRows; ++index) {
+    for (uint index = 0; index < MatvecRows; ++index) {
         const float reduced = simd_sum(sums[index]);
         if (lane == 0 && first_row + index < rows) output[first_row + index] = reduced;
     }
@@ -558,6 +590,22 @@ kernel void celeg_matvec_q4_0(device const uchar* weights [[buffer(0)]],
                            lane, simd, simd_count, group);
 }
 
+kernel void celeg_swiglu_matvec_q4_0(
+        device const uchar* weights [[buffer(0)]],
+        device const float* gate_up [[buffer(1)]],
+        device float* output [[buffer(2)]],
+        constant uint& rows [[buffer(3)]],
+        constant uint& cols [[buffer(4)]],
+        constant uint& row_bytes [[buffer(5)]],
+        uint lane [[thread_index_in_simdgroup]],
+        uint simd [[simdgroup_index_in_threadgroup]],
+        uint simd_count [[simdgroups_per_threadgroup]],
+        uint group [[threadgroup_position_in_grid]]) {
+    celeg_matvec_q4_0_core(
+        weights, CelegSwigluInput{gate_up, cols}, output, rows, cols, row_bytes,
+        lane, simd, simd_count, group);
+}
+
 kernel void celeg_matvec_q5k(device const uchar* weights [[buffer(0)]],
                              device const float* input [[buffer(1)]],
                              device float* output [[buffer(2)]],
@@ -568,8 +616,9 @@ kernel void celeg_matvec_q5k(device const uchar* weights [[buffer(0)]],
                              uint simd [[simdgroup_index_in_threadgroup]],
                              uint simd_count [[simdgroups_per_threadgroup]],
                              uint group [[threadgroup_position_in_grid]]) {
-    celeg_matvec_q5k_core(weights, CelegDenseInput{input}, output, rows, cols, row_bytes,
-                          lane, simd, simd_count, group);
+    celeg_matvec_q5k_core<CelegDenseInput, 4>(
+        weights, CelegDenseInput{input}, output, rows, cols, row_bytes,
+        lane, simd, simd_count, group);
 }
 
 kernel void celeg_swiglu_matvec_q5k(device const uchar* weights [[buffer(0)]],
@@ -582,8 +631,9 @@ kernel void celeg_swiglu_matvec_q5k(device const uchar* weights [[buffer(0)]],
                                     uint simd [[simdgroup_index_in_threadgroup]],
                                     uint simd_count [[simdgroups_per_threadgroup]],
                                     uint group [[threadgroup_position_in_grid]]) {
-    celeg_matvec_q5k_core(weights, CelegSwigluInput{gate_up, cols}, output, rows, cols,
-                          row_bytes, lane, simd, simd_count, group);
+    celeg_matvec_q5k_core<CelegSwigluInput, 4>(
+        weights, CelegSwigluInput{gate_up, cols}, output, rows, cols,
+        row_bytes, lane, simd, simd_count, group);
 }
 
 kernel void celeg_matvec_q4k(device const uchar* weights [[buffer(0)]],
@@ -596,8 +646,9 @@ kernel void celeg_matvec_q4k(device const uchar* weights [[buffer(0)]],
                              uint simd [[simdgroup_index_in_threadgroup]],
                              uint simd_count [[simdgroups_per_threadgroup]],
                              uint group [[threadgroup_position_in_grid]]) {
-    celeg_matvec_q4k_core(weights, CelegDenseInput{input}, output, rows, cols, row_bytes,
-                          lane, simd, simd_count, group);
+    celeg_matvec_q4k_core<CelegDenseInput, 4>(
+        weights, CelegDenseInput{input}, output, rows, cols, row_bytes,
+        lane, simd, simd_count, group);
 }
 
 kernel void celeg_swiglu_matvec_q4k(device const uchar* weights [[buffer(0)]],
@@ -610,8 +661,9 @@ kernel void celeg_swiglu_matvec_q4k(device const uchar* weights [[buffer(0)]],
                                     uint simd [[simdgroup_index_in_threadgroup]],
                                     uint simd_count [[simdgroups_per_threadgroup]],
                                     uint group [[threadgroup_position_in_grid]]) {
-    celeg_matvec_q4k_core(weights, CelegSwigluInput{gate_up, cols}, output, rows, cols,
-                          row_bytes, lane, simd, simd_count, group);
+    celeg_matvec_q4k_core<CelegSwigluInput, 4>(
+        weights, CelegSwigluInput{gate_up, cols}, output, rows, cols,
+        row_bytes, lane, simd, simd_count, group);
 }
 
 kernel void celeg_matvec_q6k(device const uchar* weights [[buffer(0)]],
@@ -624,8 +676,9 @@ kernel void celeg_matvec_q6k(device const uchar* weights [[buffer(0)]],
                              uint simd [[simdgroup_index_in_threadgroup]],
                              uint simd_count [[simdgroups_per_threadgroup]],
                              uint group [[threadgroup_position_in_grid]]) {
-    celeg_matvec_q6k_core(weights, CelegDenseInput{input}, output, rows, cols, row_bytes,
-                          lane, simd, simd_count, group);
+    celeg_matvec_q6k_core<CelegDenseInput, 4>(
+        weights, CelegDenseInput{input}, output, rows, cols, row_bytes,
+        lane, simd, simd_count, group);
 }
 
 kernel void celeg_swiglu_matvec_q6k(device const uchar* weights [[buffer(0)]],
@@ -638,8 +691,46 @@ kernel void celeg_swiglu_matvec_q6k(device const uchar* weights [[buffer(0)]],
                                     uint simd [[simdgroup_index_in_threadgroup]],
                                     uint simd_count [[simdgroups_per_threadgroup]],
                                     uint group [[threadgroup_position_in_grid]]) {
-    celeg_matvec_q6k_core(weights, CelegSwigluInput{gate_up, cols}, output, rows, cols,
-                          row_bytes, lane, simd, simd_count, group);
+    celeg_matvec_q6k_core<CelegSwigluInput, 4>(
+        weights, CelegSwigluInput{gate_up, cols}, output, rows, cols,
+        row_bytes, lane, simd, simd_count, group);
+}
+
+#define CELEG_MATVEC_ROWS8_KERNEL(NAME, CORE) \
+kernel void NAME(device const uchar* weights [[buffer(0)]], \
+                 device const float* input [[buffer(1)]], \
+                 device float* output [[buffer(2)]], \
+                 constant uint& rows [[buffer(3)]], \
+                 constant uint& cols [[buffer(4)]], \
+                 constant uint& row_bytes [[buffer(5)]], \
+                 uint lane [[thread_index_in_simdgroup]], \
+                 uint simd [[simdgroup_index_in_threadgroup]], \
+                 uint simd_count [[simdgroups_per_threadgroup]], \
+                 uint group [[threadgroup_position_in_grid]]) { \
+    CORE<CelegDenseInput, 8>(weights, CelegDenseInput{input}, output, rows, cols, \
+                             row_bytes, lane, simd, simd_count, group); \
+}
+
+CELEG_MATVEC_ROWS8_KERNEL(celeg_matvec_q4k_rows8, celeg_matvec_q4k_core)
+CELEG_MATVEC_ROWS8_KERNEL(celeg_matvec_q5k_rows8, celeg_matvec_q5k_core)
+CELEG_MATVEC_ROWS8_KERNEL(celeg_matvec_q6k_rows8, celeg_matvec_q6k_core)
+
+#undef CELEG_MATVEC_ROWS8_KERNEL
+
+kernel void celeg_swiglu_matvec_q6k_rows8(
+        device const uchar* weights [[buffer(0)]],
+        device const float* gate_up [[buffer(1)]],
+        device float* output [[buffer(2)]],
+        constant uint& rows [[buffer(3)]],
+        constant uint& cols [[buffer(4)]],
+        constant uint& row_bytes [[buffer(5)]],
+        uint lane [[thread_index_in_simdgroup]],
+        uint simd [[simdgroup_index_in_threadgroup]],
+        uint simd_count [[simdgroups_per_threadgroup]],
+        uint group [[threadgroup_position_in_grid]]) {
+    celeg_matvec_q6k_core<CelegSwigluInput, 8>(
+        weights, CelegSwigluInput{gate_up, cols}, output, rows, cols,
+        row_bytes, lane, simd, simd_count, group);
 }
 
 

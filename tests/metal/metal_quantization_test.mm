@@ -140,7 +140,8 @@ std::vector<float> run_matmul_quantized(id<MTLDevice> device,
                                         const std::vector<float>& input,
                                         const char* kernel_name) {
     NSError* error = nil;
-    NSString* source = [NSString stringWithUTF8String:celeg::metal_detail::kTensorShader];
+    NSString* source = [NSString stringWithUTF8String:
+        celeg::metal_detail::kTensorStrictShader];
     id<MTLLibrary> library = [device newLibraryWithSource:source options:nil error:&error];
     if (!library) throw std::runtime_error("Metal tensor shader compilation failed");
     id<MTLFunction> function = [library newFunctionWithName:
@@ -196,9 +197,13 @@ struct Geometry {
 };
 
 Geometry swiglu_geometry(const char* kernel_name) {
+    if (std::strcmp(kernel_name, "celeg_swiglu_matvec_q4_0") == 0) return {16, 128, 0};
     if (std::strcmp(kernel_name, "celeg_swiglu_matvec_q4k") == 0) return {16, 128, 0};
     if (std::strcmp(kernel_name, "celeg_swiglu_matvec_q5k") == 0) return {16, 128, 0};
     if (std::strcmp(kernel_name, "celeg_swiglu_matvec_q6k") == 0) return {16, 128, 0};
+    if (std::strcmp(kernel_name, "celeg_swiglu_matvec_q8_0_rows8") == 0) {
+        return {32, 128, 0};
+    }
     return {2, 128, 8};
 }
 
@@ -488,11 +493,15 @@ int main(int argc, char** argv) {
         q8_0_matmul_checked = check_matmul_quantized(
             file, celeg::GgmlType::Q8_0, "celeg_matmul_tensor_q8_0", device);
         swiglu_checked += check_swiglu_matvec(
+            file, celeg::GgmlType::Q4_0, "celeg_swiglu_matvec_q4_0", device) ? 1 : 0;
+        swiglu_checked += check_swiglu_matvec(
             file, celeg::GgmlType::Q4_K, "celeg_swiglu_matvec_q4k", device) ? 1 : 0;
         swiglu_checked += check_swiglu_matvec(
             file, celeg::GgmlType::Q5_K, "celeg_swiglu_matvec_q5k", device) ? 1 : 0;
         swiglu_checked += check_swiglu_matvec(
             file, celeg::GgmlType::Q6_K, "celeg_swiglu_matvec_q6k", device) ? 1 : 0;
+        swiglu_checked += check_swiglu_matvec(
+            file, celeg::GgmlType::Q8_0, "celeg_swiglu_matvec_q8_0_rows8", device) ? 1 : 0;
         if (checked == 0) throw std::runtime_error("cached GGUF has no native Metal test tensor");
         if (matvec_checked == 0) {
             throw std::runtime_error("cached GGUF has no native Metal matvec test tensor");
@@ -505,9 +514,10 @@ int main(int argc, char** argv) {
             throw std::runtime_error(
                 "cached GGUF has no native Metal quantized matmul test tensor");
         }
-        if ((q4k_checked || q5k_checked || q6k_checked) && swiglu_checked == 0) {
+        if ((q4_0_checked || q4k_checked || q5k_checked || q6k_checked || q8_0_checked) &&
+            swiglu_checked == 0) {
             throw std::runtime_error(
-                "cached GGUF has no native Metal Q4_K/Q5_K/Q6_K SwiGLU test tensor");
+                "cached GGUF has no native Metal quantized SwiGLU test tensor");
         }
         return 0;
     } catch (const std::exception& error) {

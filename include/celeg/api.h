@@ -103,6 +103,11 @@ typedef enum celeg_metal_storage_mode_value {
     CELEG_METAL_STORAGE_PRIVATE = 1
 } celeg_metal_storage_mode_value;
 
+typedef enum celeg_metal_numerical_policy_value {
+    CELEG_METAL_NUMERICAL_STRICT = 0,
+    CELEG_METAL_NUMERICAL_FAST = 1
+} celeg_metal_numerical_policy_value;
+
 typedef struct celeg_model celeg_model;
 typedef struct celeg_engine celeg_engine;
 typedef struct celeg_tokenizer celeg_tokenizer;
@@ -199,6 +204,7 @@ typedef struct celeg_metal_model_options {
     int32_t weight_mode;
     int32_t kv_cache_mode;
     int32_t storage_mode;
+    int32_t numerical_policy;
     int32_t kv_page_tokens;
 } celeg_metal_model_options;
 

@@ -1,4 +1,5 @@
 #include "celeg/backend/metal/model.hpp"
+#include "celeg_build_info.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -22,6 +23,7 @@ struct Arguments {
     int warmup = 1;
     int repetitions = 3;
     celeg::MetalStorageMode storage_mode = celeg::MetalStorageMode::Shared;
+    celeg::MetalNumericalPolicy numerical_policy = celeg::MetalNumericalPolicy::Strict;
 };
 
 std::string value(int& index, int argc, char** argv, const std::string& key) {
@@ -45,10 +47,21 @@ Arguments parse(int argc, char** argv) {
             else if (mode == "private") result.storage_mode = celeg::MetalStorageMode::Private;
             else throw std::invalid_argument("storage mode must be shared or private");
         }
+        else if (key == "--numerical-policy") {
+            const std::string policy = value(index, argc, argv, key);
+            if (policy == "strict") {
+                result.numerical_policy = celeg::MetalNumericalPolicy::Strict;
+            } else if (policy == "fast") {
+                result.numerical_policy = celeg::MetalNumericalPolicy::Fast;
+            } else {
+                throw std::invalid_argument("numerical policy must be strict or fast");
+            }
+        }
         else if (key == "--help") {
             std::cout << "celeg-metal-bench --model PATH [--context N] "
                          "[--prompt-tokens N] [--decode-tokens N] "
-                         "[--warmup N] [--repetitions N] [--storage-mode shared|private]\n";
+                         "[--warmup N] [--repetitions N] [--storage-mode shared|private] "
+                         "[--numerical-policy strict|fast]\n";
             std::exit(0);
         } else {
             throw std::invalid_argument("unknown argument: " + key);
@@ -172,6 +185,7 @@ int main(int argc, char** argv) {
         generation.repetition_penalty = 1.0f;
         celeg::MetalModelOptions model_options;
         model_options.storage_mode = args.storage_mode;
+        model_options.numerical_policy = args.numerical_policy;
         celeg::MetalModel model(args.model, args.context, model_options, generation);
         const int vocab = model.vocab_size();
         std::vector<int32_t> prompt(static_cast<size_t>(args.prompt_tokens));
@@ -198,6 +212,13 @@ int main(int argc, char** argv) {
         const celeg::MetalExecutionMetrics resident = model.execution_metrics();
         std::cout << "{\n"
                   << "  \"model\": " << json_string(std::filesystem::path(args.model).string()) << ",\n"
+                  << "  \"build_commit\": "
+                  << json_string(celeg::build_detail::kCommit) << ",\n"
+                  << "  \"build_dirty\": "
+                  << (celeg::build_detail::kDirty ? "true" : "false") << ",\n"
+                  << "  \"metal_source_sha256\": "
+                  << json_string(celeg::build_detail::kMetalSourceSha256) << ",\n"
+                  << "  \"compiler\": " << json_string(__VERSION__) << ",\n"
                   << "  \"backend\": " << json_string(model.backend_description()) << ",\n"
                   << "  \"context\": " << args.context << ",\n"
                   << "  \"prompt_tokens\": " << args.prompt_tokens << ",\n"
@@ -207,6 +228,9 @@ int main(int argc, char** argv) {
                   << "  \"storage_mode\": "
                   << json_string(args.storage_mode == celeg::MetalStorageMode::Private
                                      ? "private" : "shared") << ",\n"
+                  << "  \"numerical_policy\": "
+                  << json_string(args.numerical_policy == celeg::MetalNumericalPolicy::Fast
+                                     ? "fast" : "strict") << ",\n"
                   << "  \"prefill_ms\": " << std::setprecision(10) << prefill_ms << ",\n"
                   << "  \"prefill_samples_ms\": ";
         json_samples(std::cout, samples, &Sample::prefill_ms);

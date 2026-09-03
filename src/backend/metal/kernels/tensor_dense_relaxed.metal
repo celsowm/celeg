@@ -1,9 +1,9 @@
-// Optional dense TensorOps fast path using Metal MPP reduced precision.
-//
-// This file is concatenated after tensor.metal, so it intentionally reuses
-// the shared tile constants and MPP imports defined there. Selection remains
-// opt-in through CELEG_METAL_TENSOR_RELAXED_PRECISION=1 on the host. N32
-// variants are compiled as candidates but are not selected until measured.
+/**
+ * @brief Dense TensorOps fast path with specialized prompt tiles.
+ *
+ * This source reuses the shared tile constants and MPP imports from the
+ * strict TensorOps source. The host selects it through MetalNumericalPolicy::Fast.
+ */
 
 template <typename T, int TileTokens>
 void celeg_matmul_tensor_dense_relaxed_impl(
@@ -29,7 +29,7 @@ void celeg_matmul_tensor_dense_relaxed_impl(
 
     matmul2d<
         matmul2d_descriptor(TileTokens, kCelegTileRows, dynamic_extent,
-                            false, true, true,
+                            false, true, false,
                             matmul2d_descriptor::mode::multiply_accumulate),
         execution_simdgroups<4>> operation;
     auto input_shape = tensor(
@@ -86,9 +86,9 @@ kernel void NAME( \
         weights_tile, thread_index, grid); \
 }
 
-CELEG_RELAXED_DENSE_FIXED_MATMUL(celeg_matmul_tensor_f16_relaxed, half, 128)
-CELEG_RELAXED_DENSE_FIXED_MATMUL(celeg_matmul_tensor_bf16_relaxed, bfloat, 128)
-CELEG_RELAXED_DENSE_FIXED_MATMUL(celeg_matmul_tensor_f16_relaxed_n32, half, 32)
-CELEG_RELAXED_DENSE_FIXED_MATMUL(celeg_matmul_tensor_bf16_relaxed_n32, bfloat, 32)
+CELEG_RELAXED_DENSE_FIXED_MATMUL(celeg_matmul_tensor_f16_fast, half, 128)
+CELEG_RELAXED_DENSE_FIXED_MATMUL(celeg_matmul_tensor_bf16_fast, bfloat, 128)
+CELEG_RELAXED_DENSE_FIXED_MATMUL(celeg_matmul_tensor_f16_fast_n32, half, 32)
+CELEG_RELAXED_DENSE_FIXED_MATMUL(celeg_matmul_tensor_bf16_fast_n32, bfloat, 32)
 
 #undef CELEG_RELAXED_DENSE_FIXED_MATMUL

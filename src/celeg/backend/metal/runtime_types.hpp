@@ -19,6 +19,11 @@ enum class MetalStorageMode : std::int32_t {
     Private = 1,
 };
 
+enum class MetalNumericalPolicy : std::int32_t {
+    Strict = 0,
+    Fast = 1,
+};
+
 struct MetalCapabilities {
     std::string device_name;
     std::string registry_id;
@@ -38,6 +43,7 @@ struct MetalModelOptions {
     MetalWeightMode weight_mode = MetalWeightMode::Bf16;
     MetalKvCacheMode kv_cache_mode = MetalKvCacheMode::Bf16;
     MetalStorageMode storage_mode = MetalStorageMode::Shared;
+    MetalNumericalPolicy numerical_policy = MetalNumericalPolicy::Strict;
     int32_t kv_page_tokens = 16;
 };
 

@@ -41,6 +41,7 @@ def main() -> int:
     parser.add_argument("manifest", type=Path)
     parser.add_argument("--build-dir", type=Path)
     parser.add_argument("--output", type=Path)
+    parser.add_argument("--numerical-policy", choices=["strict", "fast"], default="strict")
     args = parser.parse_args()
     manifest = json.loads(args.manifest.read_text(encoding="utf-8"))
     build = (args.build_dir or ROOT / "out" / "darwin-metal-relwithdebinfo").resolve()
@@ -53,6 +54,7 @@ def main() -> int:
         "--decode-tokens", str(manifest["decode_tokens"]),
         "--warmup", str(manifest["warmup"]),
         "--repetitions", str(manifest["repetitions"]),
+        "--numerical-policy", args.numerical_policy,
     ]
     if not binary.is_file():
         raise RuntimeError(f"Metal benchmark binary not found: {binary}")

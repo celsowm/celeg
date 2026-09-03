@@ -1,7 +1,6 @@
 #include "detail.hpp"
 
 #include <algorithm>
-#include <cstdlib>
 #include <iostream>
 #include <stdexcept>
 #include <string>
@@ -26,9 +25,9 @@ constexpr NSUInteger kGpuCounterSampleCapacity = 4096;
 constexpr std::string_view kQ4KStrictKernel =
     "celeg_matmul_tensor_q4k_static_stage128";
 constexpr std::string_view kF16RelaxedKernel =
-    "celeg_matmul_tensor_f16_relaxed";
+    "celeg_matmul_tensor_f16_fast";
 constexpr std::string_view kBF16RelaxedKernel =
-    "celeg_matmul_tensor_bf16_relaxed";
+    "celeg_matmul_tensor_bf16_fast";
 constexpr std::string_view kQ40RelaxedKernel =
     "celeg_matmul_tensor_q4_0_relaxed";
 constexpr std::string_view kQ4KRelaxedKernel =
@@ -36,16 +35,24 @@ constexpr std::string_view kQ4KRelaxedKernel =
 constexpr std::string_view kQ5KRelaxedKernel =
     "celeg_matmul_tensor_q5k_relaxed";
 constexpr std::string_view kQ6KRelaxedKernel =
-    "celeg_matmul_tensor_q6k_relaxed";
+    "celeg_matmul_tensor_q6k_fast";
 constexpr std::string_view kQ80RelaxedKernel =
     "celeg_matmul_tensor_q8_0_relaxed";
-
+constexpr std::string_view kF16RelaxedN32Kernel =
+    "celeg_matmul_tensor_f16_fast_n32";
+constexpr std::string_view kBF16RelaxedN32Kernel =
+    "celeg_matmul_tensor_bf16_fast_n32";
+constexpr std::string_view kQ40RelaxedN32Kernel =
+    "celeg_matmul_tensor_q4_0_relaxed_n32";
+constexpr std::string_view kQ4KRelaxedN32Kernel =
+    "celeg_matmul_tensor_q4k_relaxed_n32";
+constexpr std::string_view kQ5KRelaxedN32Kernel =
+    "celeg_matmul_tensor_q5k_relaxed_n32";
+constexpr std::string_view kQ6KRelaxedN32Kernel =
+    "celeg_matmul_tensor_q6k_fast_n32";
+constexpr std::string_view kQ80RelaxedN32Kernel =
+    "celeg_matmul_tensor_q8_0_relaxed_n32";
 thread_local id<MTLComputeCommandEncoder> gGpuProfileEncoder = nil;
-
-bool relaxed_tensor_precision_enabled() {
-    const char* value = std::getenv("CELEG_METAL_TENSOR_RELAXED_PRECISION");
-    return value != nullptr && value[0] == '1' && value[1] == '\0';
-}
 
 bool gpu_dispatch_profile_enabled() {
     const char* value = std::getenv("CELEG_METAL_GPU_PROFILE");
@@ -82,25 +89,41 @@ std::optional<std::string_view> MetalModel::Impl::linear_kernel(
     return std::string_view{name};
 }
 
-MetalMatvecKernel MetalModel::Impl::matvec_kernel(LinearStorage storage) const {
+MetalMatvecKernel MetalModel::Impl::matvec_kernel(LinearStorage storage,
+                                                  uint32_t rows,
+                                                  uint32_t cols) const {
+    const bool ffn_expansion = rows >= 4096 && rows < 32768 && cols <= 2048;
+    const bool ffn_contraction = rows <= 2048 && cols >= 4096 && cols < 32768;
     switch (storage) {
         case LinearStorage::Float32: return {"celeg_matvec", 8, 256, 0};
         case LinearStorage::Float16: return {"celeg_matvec_f16", 2, 128, 8};
         case LinearStorage::BFloat16: return {"celeg_matvec_bf16", 2, 128, 8};
         case LinearStorage::Q4_0: return {"celeg_matvec_q4_0", 16, 128, 0};
-        case LinearStorage::Q4K: return {"celeg_matvec_q4k", 16, 128, 0};
-        case LinearStorage::Q5K: return {"celeg_matvec_q5k", 16, 128, 0};
+        case LinearStorage::Q4K: return ffn_expansion
+            ? MetalMatvecKernel{"celeg_matvec_q4k_rows8", 32, 128, 0}
+            : MetalMatvecKernel{"celeg_matvec_q4k", 16, 128, 0};
+        case LinearStorage::Q5K: return ffn_expansion
+            ? MetalMatvecKernel{"celeg_matvec_q5k_rows8", 32, 128, 0}
+            : MetalMatvecKernel{"celeg_matvec_q5k", 16, 128, 0};
         case LinearStorage::Q6K: return {"celeg_matvec_q6k", 16, 128, 0};
-        case LinearStorage::Q8_0: return {"celeg_matvec_q8_0", 16, 128, 0};
+        case LinearStorage::Q8_0: return ffn_expansion || ffn_contraction
+            ? MetalMatvecKernel{"celeg_matvec_q8_0_rows8", 32, 128, 0}
+            : MetalMatvecKernel{"celeg_matvec_q8_0", 16, 128, 0};
     }
     return {};
 }
 
-MetalMatvecKernel MetalModel::Impl::swiglu_matvec_kernel(LinearStorage storage) const {
+MetalMatvecKernel MetalModel::Impl::swiglu_matvec_kernel(LinearStorage storage,
+                                                         uint32_t rows,
+                                                         uint32_t cols) const {
     switch (storage) {
+        case LinearStorage::Q4_0: return {"celeg_swiglu_matvec_q4_0", 16, 128, 0};
         case LinearStorage::Q4K: return {"celeg_swiglu_matvec_q4k", 16, 128, 0};
         case LinearStorage::Q5K: return {"celeg_swiglu_matvec_q5k", 16, 128, 0};
         case LinearStorage::Q6K: return {"celeg_swiglu_matvec_q6k", 16, 128, 0};
+        case LinearStorage::Q8_0: return rows <= 2048 && cols >= 4096 && cols < 32768
+            ? MetalMatvecKernel{"celeg_swiglu_matvec_q8_0_rows8", 32, 128, 0}
+            : MetalMatvecKernel{};
         default: return {};
     }
 }
@@ -283,9 +306,29 @@ id<MTLComputePipelineState> MetalPipelineCache::tensor_pipeline(std::string_view
     const std::string key = "tensor:" + std::string(name);
     const auto found = pipelines.find(key);
     if (found != pipelines.end()) return found->second;
-    if (!tensor_library) throw std::runtime_error("Metal tensor library is unavailable");
+    id<MTLLibrary> selected_library = tensor_library;
+    if (name.find("_relaxed") != std::string_view::npos ||
+        name.find("_fast") != std::string_view::npos) {
+        if (name.find("_f16_") != std::string_view::npos ||
+            name.find("_bf16_") != std::string_view::npos) {
+            selected_library = tensor_fast_dense_library;
+        } else if (name.find("_q4_0_") != std::string_view::npos) {
+            selected_library = tensor_fast_q4_0_library;
+        } else if (name.find("_q4k_") != std::string_view::npos) {
+            selected_library = tensor_fast_q4k_library;
+        } else if (name.find("_q5k_") != std::string_view::npos) {
+            selected_library = tensor_fast_q5k_library;
+        } else if (name.find("_q6k_") != std::string_view::npos) {
+            selected_library = tensor_fast_q6k_library;
+        } else if (name.find("_q8_0_") != std::string_view::npos) {
+            selected_library = tensor_fast_q8_0_library;
+        } else {
+            selected_library = nil;
+        }
+    }
+    if (!selected_library) throw std::runtime_error("Metal tensor library is unavailable");
     NSString* function_name = [NSString stringWithUTF8String:std::string(name).c_str()];
-    id<MTLFunction> function = [tensor_library newFunctionWithName:function_name];
+    id<MTLFunction> function = [selected_library newFunctionWithName:function_name];
     if (!function) throw std::runtime_error("Metal tensor function is missing: " + std::string(name));
     NSError* error = nil;
     id<MTLComputePipelineState> result =
@@ -370,7 +413,8 @@ void MetalModel::Impl::encode_matvec(id<MTLComputeCommandEncoder> encoder,
     if (weight.row_bytes != 0) {
         set_bytes(encoder, &weight.row_bytes, sizeof(weight.row_bytes), 5);
     }
-    const MetalMatvecKernel selected = matvec_kernel(weight.storage);
+    const MetalMatvecKernel selected = matvec_kernel(
+        weight.storage, weight.rows, weight.cols);
     if (!selected.name) throw std::runtime_error("unsupported Metal matvec binding");
     id<MTLComputePipelineState> state = pipeline(selected.name);
     [encoder setComputePipelineState:state];
@@ -388,7 +432,8 @@ void MetalModel::Impl::encode_matvec(id<MTLComputeCommandEncoder> encoder,
 bool MetalModel::Impl::encode_swiglu_matvec(
     id<MTLComputeCommandEncoder> encoder, const Linear& weight,
     id<MTLBuffer> gate_up, id<MTLBuffer> output) {
-    const MetalMatvecKernel selected = swiglu_matvec_kernel(weight.storage);
+    const MetalMatvecKernel selected = swiglu_matvec_kernel(
+        weight.storage, weight.rows, weight.cols);
     if (!selected.name) return false;
     set_buffer(encoder, weight.buffer, 0);
     set_buffer(encoder, gate_up, 1);
@@ -426,6 +471,20 @@ bool MetalModel::Impl::tensor_matmul_available(LinearStorage storage,
     return false;
 }
 
+bool MetalModel::Impl::fast_tensor_matmul_available(LinearStorage storage) const {
+    switch (storage) {
+        case LinearStorage::Float16: return pipeline_cache.tensor_fast_f16;
+        case LinearStorage::BFloat16: return pipeline_cache.tensor_fast_bf16;
+        case LinearStorage::Q4_0: return pipeline_cache.tensor_fast_q4_0;
+        case LinearStorage::Q4K: return pipeline_cache.tensor_fast_q4k;
+        case LinearStorage::Q5K: return pipeline_cache.tensor_fast_q5k;
+        case LinearStorage::Q6K: return pipeline_cache.tensor_fast_q6k;
+        case LinearStorage::Q8_0: return pipeline_cache.tensor_fast_q8_0;
+        case LinearStorage::Float32: return false;
+    }
+    return false;
+}
+
 void MetalModel::Impl::encode_matmul(id<MTLComputeCommandEncoder> encoder,
                                      const Linear& weight, id<MTLBuffer> input,
                                      id<MTLBuffer> output, uint32_t rows,
@@ -451,30 +510,32 @@ void MetalModel::Impl::encode_matmul(id<MTLComputeCommandEncoder> encoder,
 
         std::string_view selected_kernel = *generic_kernel;
         NSUInteger shared_bytes = kTensorTileBytes;
+        NSUInteger tile_tokens = kTensorTileTokens;
         bool exact_groups = false;
         bool custom_tensor = false;
-        const bool relaxed = relaxed_tensor_precision_enabled();
+        const bool relaxed = options.numerical_policy == MetalNumericalPolicy::Fast &&
+            fast_tensor_matmul_available(weight.storage);
 
         if (relaxed && weight.storage == LinearStorage::Float16) {
-            selected_kernel = kF16RelaxedKernel;
+            selected_kernel = rows <= 32 ? kF16RelaxedN32Kernel : kF16RelaxedKernel;
             custom_tensor = true;
         } else if (relaxed && weight.storage == LinearStorage::BFloat16) {
-            selected_kernel = kBF16RelaxedKernel;
+            selected_kernel = rows <= 32 ? kBF16RelaxedN32Kernel : kBF16RelaxedKernel;
             custom_tensor = true;
         } else if (relaxed && weight.storage == LinearStorage::Q4_0) {
-            selected_kernel = kQ40RelaxedKernel;
+            selected_kernel = rows <= 32 ? kQ40RelaxedN32Kernel : kQ40RelaxedKernel;
             custom_tensor = true;
         } else if (relaxed && weight.storage == LinearStorage::Q4K) {
-            selected_kernel = kQ4KRelaxedKernel;
+            selected_kernel = rows <= 32 ? kQ4KRelaxedN32Kernel : kQ4KRelaxedKernel;
             custom_tensor = true;
         } else if (relaxed && weight.storage == LinearStorage::Q5K) {
-            selected_kernel = kQ5KRelaxedKernel;
+            selected_kernel = rows <= 32 ? kQ5KRelaxedN32Kernel : kQ5KRelaxedKernel;
             custom_tensor = true;
         } else if (relaxed && weight.storage == LinearStorage::Q6K) {
-            selected_kernel = kQ6KRelaxedKernel;
+            selected_kernel = rows <= 32 ? kQ6KRelaxedN32Kernel : kQ6KRelaxedKernel;
             custom_tensor = true;
         } else if (relaxed && weight.storage == LinearStorage::Q8_0) {
-            selected_kernel = kQ80RelaxedKernel;
+            selected_kernel = rows <= 32 ? kQ80RelaxedN32Kernel : kQ80RelaxedKernel;
             custom_tensor = true;
         } else if (weight.storage == LinearStorage::Q4K &&
                    (rows % kTensorTileTokens) == 0u &&
@@ -486,6 +547,7 @@ void MetalModel::Impl::encode_matmul(id<MTLComputeCommandEncoder> encoder,
             exact_groups = true;
             custom_tensor = true;
         }
+        if (relaxed && rows <= 32) tile_tokens = 32;
 
         id<MTLComputePipelineState> state = tensor_pipeline(selected_kernel);
         if (custom_tensor &&
@@ -505,7 +567,7 @@ void MetalModel::Impl::encode_matmul(id<MTLComputeCommandEncoder> encoder,
             : (weight.rows + kTensorTileRows - 1u) / kTensorTileRows;
         const NSUInteger token_groups = exact_groups
             ? rows / kTensorTileTokens
-            : (rows + kTensorTileTokens - 1u) / kTensorTileTokens;
+            : (rows + tile_tokens - 1u) / tile_tokens;
         [encoder dispatchThreadgroups:MTLSizeMake(row_groups, token_groups, 1)
              threadsPerThreadgroup:MTLSizeMake(kTensorTileThreads, 1, 1)];
         record_dispatch(selected_kernel);

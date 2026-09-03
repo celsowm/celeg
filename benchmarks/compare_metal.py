@@ -21,7 +21,7 @@ WORKLOADS = {
     "throughput": {
         "context": 640,
         "prompt_tokens": 512,
-        "decode_tokens": 128,
+        "decode_tokens": 8,
     },
 }
 
@@ -60,6 +60,11 @@ def git_provenance(directory):
     }
 
 
+def command_output(command):
+    process = subprocess.run(command, capture_output=True, text=True, check=False)
+    return process.stdout.strip() if process.returncode == 0 else "unknown"
+
+
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -80,7 +85,7 @@ def parse_args():
     parser.add_argument(
         "--output",
         type=Path,
-        default=Path("benchmarks/results/metal_llama_cpp_compare.json"),
+        default=Path("benchmarks/results/metal_llama_cpp_compare_official.json"),
     )
     parser.add_argument("--model", dest="models", action="append", metavar="FILENAME")
     parser.add_argument("--workload", choices=["interactive", "throughput", "all"], default="all")
@@ -92,12 +97,12 @@ def parse_args():
     parser.add_argument("--storage-mode", choices=["shared", "private"], default="shared")
     parser.add_argument(
         "--celeg-policy",
-        choices=["strict", "relaxed"],
-        default="relaxed",
+        choices=["strict", "fast"],
+        default="fast",
         help=(
-            "Celeg numerical policy. 'relaxed' enables the explicit Metal fast path "
-            "used for apples-to-apples performance comparison with llama.cpp TensorOps; "
-            "'strict' preserves Celeg's default numerical contract."
+            "Celeg numerical policy. 'fast' enables the explicit Metal performance "
+            "path used for comparison with llama.cpp; 'strict' preserves the default "
+            "numerical contract."
         ),
     )
     return parser.parse_args()
@@ -118,16 +123,14 @@ def resolve_models(model_dir, requested):
     return [model for model in models if model.name in selected]
 
 
-def celeg_env(policy):
+def celeg_env():
     env = os.environ.copy()
-    if policy == "relaxed":
-        env["CELEG_METAL_TENSOR_RELAXED_PRECISION"] = "1"
-    else:
-        env.pop("CELEG_METAL_TENSOR_RELAXED_PRECISION", None)
+    env.pop("CELEG_METAL_DISPATCH_PROFILE", None)
+    env.pop("CELEG_METAL_GPU_PROFILE", None)
     return env
 
 
-def run_json(command, *, env=None):
+def run_json(command, *, env=None, include_stderr=False):
     process = subprocess.run(
         [str(value) for value in command],
         capture_output=True,
@@ -140,7 +143,8 @@ def run_json(command, *, env=None):
         detail = "\n".join(detail[-12:])
         raise RuntimeError(f"exit {process.returncode}: {detail}")
     try:
-        return json.loads(process.stdout)
+        result = json.loads(process.stdout)
+        return (result, process.stderr) if include_stderr else result
     except json.JSONDecodeError as error:
         raise RuntimeError(f"invalid JSON: {error}") from error
 
@@ -153,6 +157,63 @@ def run_warmups(celeg_command, llama_command, warmup, celeg_process_env):
         env=celeg_process_env,
     )
     run_json([*llama_command, "-r", warmup, "--no-warmup"])
+
+
+def dispatch_histogram(stderr):
+    histogram = {}
+    for line in stderr.splitlines():
+        fields = line.strip().split("=", 1)
+        if len(fields) == 2 and fields[0].startswith("celeg_") and fields[1].isdigit():
+            histogram[fields[0]] = histogram.get(fields[0], 0) + int(fields[1])
+    return histogram
+
+
+def validate_fast_preflight(command, model):
+    env = celeg_env()
+    env["CELEG_METAL_DISPATCH_PROFILE"] = "1"
+    result, stderr = run_json(
+        [*command, "--decode-tokens", 0, "--warmup", 0, "--repetitions", 1],
+        env=env,
+        include_stderr=True,
+    )
+    backend = result.get("backend", "")
+    if result.get("numerical_policy") != "fast":
+        raise RuntimeError("Celeg preflight did not request the fast numerical policy")
+    if "policy_requested=fast" not in backend or "policy_effective=fast" not in backend:
+        raise RuntimeError(f"Celeg fast policy is unavailable for {model.name}: {backend}")
+    histogram = dispatch_histogram(stderr)
+    tensor_dispatches = sum(
+        count for name, count in histogram.items()
+        if name.startswith("celeg_matmul_tensor_")
+    )
+    fast_tensor_dispatches = sum(
+        count for name, count in histogram.items()
+        if name.startswith("celeg_matmul_tensor_") and (
+            "_relaxed" in name or "_fast" in name
+        )
+    )
+    scalar_dispatches = {
+        name: count for name, count in histogram.items()
+        if (name == "celeg_matmul" or name.startswith("celeg_matmul_"))
+        and not name.startswith("celeg_matmul_tensor_")
+    }
+    if scalar_dispatches:
+        raise RuntimeError(
+            f"Celeg fast preflight used scalar GEMM for {model.name}: {scalar_dispatches}"
+        )
+    if tensor_dispatches == 0:
+        raise RuntimeError(f"Celeg fast preflight used no TensorOps GEMM for {model.name}")
+    if fast_tensor_dispatches == 0:
+        raise RuntimeError(
+            f"Celeg fast preflight fell back to Strict TensorOps for {model.name}: {backend}"
+        )
+    return {
+        "backend": backend,
+        "build_commit": result.get("build_commit", "unknown"),
+        "build_dirty": result.get("build_dirty", "unknown"),
+        "metal_source_sha256": result.get("metal_source_sha256", "unknown"),
+        "dispatch_histogram": histogram,
+    }
 
 
 def distribution(milliseconds, token_count):
@@ -208,7 +269,7 @@ def collect_workload(model, args, workload):
     context = workload["context"]
     prompt_tokens = workload["prompt_tokens"]
     decode_tokens = workload["decode_tokens"]
-    celeg_process_env = celeg_env(args.celeg_policy)
+    celeg_process_env = celeg_env()
     celeg_command = [
         args.celeg,
         "--model", model,
@@ -216,6 +277,7 @@ def collect_workload(model, args, workload):
         "--prompt-tokens", prompt_tokens,
         "--decode-tokens", decode_tokens,
         "--storage-mode", args.storage_mode,
+        "--numerical-policy", args.celeg_policy,
     ]
     llama_command = [
         args.llama_bench,
@@ -230,6 +292,9 @@ def collect_workload(model, args, workload):
         "-ngl", 99,
         "-o", "json",
     ]
+    preflight = None
+    if args.celeg_policy == "fast":
+        preflight = validate_fast_preflight(celeg_command, model)
     run_warmups(celeg_command, llama_command, args.warmup, celeg_process_env)
     celeg_samples = []
     llama_samples = []
@@ -242,12 +307,12 @@ def collect_workload(model, args, workload):
             order.append(engine)
             if engine == "celeg":
                 result = run_json(
-                    [*command, "--warmup", 0, "--repetitions", 1],
+                    [*command, "--warmup", 1, "--repetitions", 1],
                     env=celeg_process_env,
                 )
                 celeg_samples.append(celeg_result(result))
             else:
-                result = run_json([*command, "-r", 1, "--no-warmup"])
+                result = run_json([*command, "-r", 1])
                 llama_samples.append(llama_rows(result, prompt_tokens, decode_tokens))
     celeg_combined = [sample["combined"]["samples_milliseconds"][0] for sample in celeg_samples]
     llama_combined = [sample["combined"]["samples_milliseconds"][0] for sample in llama_samples]
@@ -259,6 +324,7 @@ def collect_workload(model, args, workload):
     llama_distribution = distribution(llama_combined, prompt_tokens + decode_tokens)
     return {
         "configuration": {**workload, "celeg_policy": args.celeg_policy},
+        "preflight": preflight,
         "order": order,
         "celeg": {
             "policy": args.celeg_policy,
@@ -276,6 +342,10 @@ def collect_workload(model, args, workload):
         "promotion": {
             "median_speedup": (
                 celeg_distribution["median_tokens_per_second"] /
+                llama_distribution["median_tokens_per_second"]
+            ),
+            "combined_median_at_least_llama": (
+                celeg_distribution["median_tokens_per_second"] >=
                 llama_distribution["median_tokens_per_second"]
             ),
             "median_at_least_1_10x": (
@@ -323,8 +393,15 @@ def main():
     models = resolve_models(args.model_dir, args.models)
     results = []
     workloads = workload_args(args)
-    celeg_provenance = git_provenance(Path("."))
+    celeg_provenance = {
+        "executable": str(args.celeg.resolve()),
+        "sha256": file_sha256(args.celeg),
+    }
     llama_cpp_provenance = git_provenance(Path(".externals/llama.cpp"))
+    llama_cpp_provenance.update({
+        "executable": str(args.llama_bench.resolve()),
+        "sha256": file_sha256(args.llama_bench),
+    })
     print(f"Celeg numerical policy: {args.celeg_policy}")
     for workload in workloads:
         if workload["context"] <= 0 or workload["prompt_tokens"] <= 0 or workload["decode_tokens"] < 0:
@@ -339,11 +416,13 @@ def main():
                 "sha256": file_sha256(model),
                 "workload": workload["name"],
                 "celeg_policy": args.celeg_policy,
-                "celeg_commit": celeg_provenance["commit"],
                 "llama_cpp_commit": llama_cpp_provenance["commit"],
             }
             try:
                 entry.update(collect_workload(model, args, workload))
+                entry["celeg_commit"] = entry["preflight"]["build_commit"] \
+                    if entry["preflight"] else entry["celeg"]["samples"][0]["raw"].get(
+                        "build_commit", "unknown")
                 entry["status"] = "ok"
             except (RuntimeError, KeyError, IndexError) as error:
                 entry["status"] = "error"
@@ -362,14 +441,55 @@ def main():
             else:
                 print(f"{model.name} [{workload['name']}]: ERROR {entry['error']}", file=sys.stderr)
 
+    build_commits = sorted({
+        entry.get("celeg_commit", "unknown") for entry in results
+        if entry["status"] == "ok"
+    })
+    metal_source_hashes = sorted({
+        entry["preflight"]["metal_source_sha256"]
+        for entry in results if entry.get("preflight")
+    })
+    celeg_provenance["build_commits"] = build_commits
+    celeg_provenance["metal_source_sha256"] = metal_source_hashes
+    complete_matrix = len(results) == len(EXPECTED_MODELS) * len(WORKLOADS)
+    all_entries_valid = all(entry["status"] == "ok" for entry in results)
+    all_phase_medians = all(
+        entry.get("promotion", {}).get("prefill_median_at_least_llama", False) and
+        entry.get("promotion", {}).get("decode_median_at_least_llama", False)
+        for entry in results
+    )
+    all_combined_q1 = all(
+        entry.get("promotion", {}).get("q1_celeg_at_least_llama", False)
+        for entry in results
+    )
+    all_combined_medians = all(
+        entry.get("promotion", {}).get("combined_median_at_least_llama", False)
+        for entry in results
+    )
+    geometric_mean = (
+        statistics.geometric_mean(
+            entry["promotion"]["median_speedup"] for entry in results
+            if entry["status"] == "ok"
+        ) if any(entry["status"] == "ok" for entry in results) else 0.0
+    )
+    promotion_passed = (
+        complete_matrix and all_entries_valid and all_phase_medians and
+        all_combined_medians and all_combined_q1 and geometric_mean >= 1.10
+    )
     document = {
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "host": platform.platform(),
+        "environment": {
+            "macos_product_version": command_output(["sw_vers", "-productVersion"]),
+            "macos_build_version": command_output(["sw_vers", "-buildVersion"]),
+            "sdk_version": command_output(["xcrun", "--sdk", "macosx", "--show-sdk-version"]),
+        },
         "celeg": celeg_provenance,
         "llama_cpp": llama_cpp_provenance,
         "configuration": {
             "workloads": workloads,
             "warmup": args.warmup,
+            "per_timed_process_warmup": 1,
             "repetitions": args.repetitions,
             "storage_mode": args.storage_mode,
             "celeg_policy": args.celeg_policy,
@@ -381,11 +501,23 @@ def main():
             ),
         },
         "results": results,
+        "promotion": {
+            "complete_official_matrix": complete_matrix,
+            "all_entries_valid": all_entries_valid,
+            "all_phase_medians_at_least_llama": all_phase_medians,
+            "all_combined_medians_at_least_llama": all_combined_medians,
+            "all_combined_q1_at_least_llama": all_combined_q1,
+            "combined_geometric_mean_speedup": geometric_mean,
+            "passed": promotion_passed,
+        },
     }
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(document, indent=2) + "\n")
     print(f"saved {args.output}")
+    if not all_entries_valid:
+        return 1
+    return 2 if complete_matrix and not promotion_passed else 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

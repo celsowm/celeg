@@ -3,7 +3,6 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
-#include <cstdlib>
 #include <stdexcept>
 
 namespace celeg {
@@ -35,11 +34,6 @@ const OrthogonalizeCurrentValueSpec* attention_output_transform(
 
 bool no_position_encoding(const CompiledAttentionProgram& attention) {
     return std::holds_alternative<NoPositionEncodingSpec>(attention.semantics.position);
-}
-
-bool relaxed_attention_enabled() {
-    const char* value = std::getenv("CELEG_METAL_TENSOR_RELAXED_PRECISION");
-    return value != nullptr && value[0] == '1' && value[1] == '\0';
 }
 
 /// @brief Simdgroups per attention threadgroup; see @c celeg_attention_span.
@@ -552,7 +546,8 @@ void MetalModel::Impl::encode_attention_batch(
 
     bool tiled_encoded = false;
     const bool tiled_candidate =
-        relaxed_attention_enabled() && relative == nullptr && alibi == nullptr &&
+        options.numerical_policy == MetalNumericalPolicy::Fast &&
+        relative == nullptr && alibi == nullptr &&
         window_size == 0u && base_position == 0u && head_dim == 64u &&
         (rows % kTiledAttentionQueries) == 0u;
     if (tiled_candidate) {

@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <cstring>
 #include <iostream>
+#include <initializer_list>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -58,12 +59,66 @@ int main() {
         id<MTLDevice> device = MTLCreateSystemDefaultDevice();
         if (!device) throw std::runtime_error("no default Metal device is available");
         NSError* error = nil;
-        NSString* source = [NSString stringWithUTF8String:celeg::metal_detail::kTensorShader];
+        NSString* source = [NSString stringWithUTF8String:
+            celeg::metal_detail::kTensorStrictShader];
         id<MTLLibrary> library = [device newLibraryWithSource:source options:nil error:&error];
         if (!library) {
             throw std::runtime_error("tensor shader compilation failed: " +
                                      (error ? ns_string(error.localizedDescription) : "unknown error"));
         }
+        auto require_library_functions = [&](const char* shader,
+                                             std::initializer_list<NSString*> names) {
+            NSError* family_error = nil;
+            NSString* family_source = [NSString stringWithUTF8String:shader];
+            id<MTLLibrary> family_library = [device
+                newLibraryWithSource:family_source options:nil error:&family_error];
+            if (!family_library) {
+                throw std::runtime_error("tensor family compilation failed: " +
+                    (family_error ? ns_string(family_error.localizedDescription)
+                                  : "unknown error"));
+            }
+            for (NSString* name : names) {
+                id<MTLFunction> family_function =
+                    [family_library newFunctionWithName:name];
+                if (!family_function) {
+                    throw std::runtime_error("tensor family function is missing: " +
+                                             ns_string(name));
+                }
+                NSError* family_pipeline_error = nil;
+                if (![device newComputePipelineStateWithFunction:family_function
+                                                            error:&family_pipeline_error]) {
+                    throw std::runtime_error("tensor family pipeline creation failed: " +
+                        (family_pipeline_error
+                            ? ns_string(family_pipeline_error.localizedDescription)
+                            : ns_string(name)));
+                }
+            }
+        };
+        require_library_functions(celeg::metal_detail::kTensorFastDenseShader,
+            {@"celeg_matmul_tensor_f16_fast",
+             @"celeg_matmul_tensor_bf16_fast",
+             @"celeg_matmul_tensor_f16_fast_n32",
+             @"celeg_matmul_tensor_bf16_fast_n32"});
+        require_library_functions(celeg::metal_detail::kTensorFastQ40Shader,
+            {@"celeg_matmul_tensor_q4_0_relaxed",
+             @"celeg_matmul_tensor_q4_0_relaxed_n32",
+             @"celeg_matmul_tensor_q4_0_relaxed_n64_k128"});
+        require_library_functions(celeg::metal_detail::kTensorFastQ4KShader,
+            {@"celeg_matmul_tensor_q4k_relaxed",
+             @"celeg_matmul_tensor_q4k_relaxed_n32",
+             @"celeg_matmul_tensor_q4k_relaxed_n64_k128"});
+        require_library_functions(celeg::metal_detail::kTensorFastQ5KShader,
+            {@"celeg_matmul_tensor_q5k_relaxed",
+             @"celeg_matmul_tensor_q5k_relaxed_n32",
+             @"celeg_matmul_tensor_q5k_relaxed_n64_k128"});
+        require_library_functions(celeg::metal_detail::kTensorFastQ6KShader,
+            {@"celeg_matmul_tensor_q6k_fast",
+             @"celeg_matmul_tensor_q6k_fast_n32",
+             @"celeg_matmul_tensor_q6k_fast_n64_k128"});
+        require_library_functions(celeg::metal_detail::kTensorFastQ80Shader,
+            {@"celeg_matmul_tensor_q8_0_relaxed",
+             @"celeg_matmul_tensor_q8_0_relaxed_n32",
+             @"celeg_matmul_tensor_q8_0_relaxed_n64_k128"});
         id<MTLFunction> function = [library newFunctionWithName:@"celeg_matmul_tensor_f16"];
         if (!function) throw std::runtime_error("tensor function is missing");
         id<MTLComputePipelineState> pipeline = [device newComputePipelineStateWithFunction:function

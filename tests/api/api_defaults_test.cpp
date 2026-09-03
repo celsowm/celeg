@@ -28,6 +28,7 @@ int main() {
     if (metal.struct_size != sizeof(metal) || metal.model.kv_page_tokens != 16 ||
         metal.model.weight_mode != CELEG_METAL_WEIGHT_BF16 ||
         metal.model.storage_mode != CELEG_METAL_STORAGE_SHARED ||
+        metal.model.numerical_policy != CELEG_METAL_NUMERICAL_STRICT ||
         metal.engine.max_active_requests != 1) return 4;
 
     celeg_request_options request{};

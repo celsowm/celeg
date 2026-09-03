@@ -175,6 +175,17 @@ int MetalModel::vocab_size() const { return (*impl_).model.topology.dims.vocab_s
 const std::string& MetalModel::model_identity() const { return (*impl_).model.provenance.identity; }
 std::string MetalModel::backend_description() const {
     return std::string("metal-native device=") + (*impl_).device.name.UTF8String +
+        " policy_requested=" +
+        ((*impl_).options.numerical_policy == MetalNumericalPolicy::Fast ? "fast" : "strict") +
+        " policy_effective=" +
+        ((*impl_).options.numerical_policy == MetalNumericalPolicy::Fast &&
+         ((*impl_).pipeline_cache.tensor_fast_f16 ||
+          (*impl_).pipeline_cache.tensor_fast_bf16 ||
+          (*impl_).pipeline_cache.tensor_fast_q4_0 ||
+          (*impl_).pipeline_cache.tensor_fast_q4k ||
+          (*impl_).pipeline_cache.tensor_fast_q5k ||
+          (*impl_).pipeline_cache.tensor_fast_q6k ||
+          (*impl_).pipeline_cache.tensor_fast_q8_0) ? "fast" : "strict") +
         " tensor_f16=" + ((*impl_).pipeline_cache.tensor_matmul_f16 ? "yes" : "no") +
         " tensor_bf16=" + ((*impl_).pipeline_cache.tensor_matmul_bf16 ? "yes" : "no") +
         " tensor_q4_0=" + ((*impl_).pipeline_cache.tensor_matmul_q4_0 ? "yes" : "no") +
@@ -182,8 +193,33 @@ std::string MetalModel::backend_description() const {
         " tensor_q5k=" + ((*impl_).pipeline_cache.tensor_matmul_q5k ? "yes" : "no") +
         " tensor_q6k=" + ((*impl_).pipeline_cache.tensor_matmul_q6k ? "yes" : "no") +
         " tensor_q8_0=" + ((*impl_).pipeline_cache.tensor_matmul_q8_0 ? "yes" : "no") +
+        " fast_f16=" + ((*impl_).pipeline_cache.tensor_fast_f16 ? "yes" : "no") +
+        " fast_bf16=" + ((*impl_).pipeline_cache.tensor_fast_bf16 ? "yes" : "no") +
+        " fast_q4_0=" + ((*impl_).pipeline_cache.tensor_fast_q4_0 ? "yes" : "no") +
+        " fast_q4k=" + ((*impl_).pipeline_cache.tensor_fast_q4k ? "yes" : "no") +
+        " fast_q5k=" + ((*impl_).pipeline_cache.tensor_fast_q5k ? "yes" : "no") +
+        " fast_q6k=" + ((*impl_).pipeline_cache.tensor_fast_q6k ? "yes" : "no") +
+        " fast_q8_0=" + ((*impl_).pipeline_cache.tensor_fast_q8_0 ? "yes" : "no") +
         ((*impl_).pipeline_cache.tensor_compile_error.empty()
-            ? std::string{} : " tensor_error=" + (*impl_).pipeline_cache.tensor_compile_error);
+            ? std::string{} : " tensor_error=" + (*impl_).pipeline_cache.tensor_compile_error) +
+        ((*impl_).pipeline_cache.tensor_fast_dense_compile_error.empty()
+            ? std::string{} : " fast_dense_error=" +
+                (*impl_).pipeline_cache.tensor_fast_dense_compile_error) +
+        ((*impl_).pipeline_cache.tensor_fast_q4_0_compile_error.empty()
+            ? std::string{} : " fast_q4_0_error=" +
+                (*impl_).pipeline_cache.tensor_fast_q4_0_compile_error) +
+        ((*impl_).pipeline_cache.tensor_fast_q4k_compile_error.empty()
+            ? std::string{} : " fast_q4k_error=" +
+                (*impl_).pipeline_cache.tensor_fast_q4k_compile_error) +
+        ((*impl_).pipeline_cache.tensor_fast_q5k_compile_error.empty()
+            ? std::string{} : " fast_q5k_error=" +
+                (*impl_).pipeline_cache.tensor_fast_q5k_compile_error) +
+        ((*impl_).pipeline_cache.tensor_fast_q6k_compile_error.empty()
+            ? std::string{} : " fast_q6k_error=" +
+                (*impl_).pipeline_cache.tensor_fast_q6k_compile_error) +
+        ((*impl_).pipeline_cache.tensor_fast_q8_0_compile_error.empty()
+            ? std::string{} : " fast_q8_0_error=" +
+                (*impl_).pipeline_cache.tensor_fast_q8_0_compile_error);
 }
 RuntimeMetrics MetalModel::metrics() const { return (*impl_).metrics; }
 MetalExecutionMetrics MetalModel::execution_metrics() const { return (*impl_).execution_metrics; }

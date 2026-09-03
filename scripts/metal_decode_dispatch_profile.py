@@ -65,7 +65,6 @@ def gpu_profiles(stderr: str) -> list[list[tuple[str, float]]]:
 
 def profile(binary: pathlib.Path, model: pathlib.Path, prompt_tokens: int) -> tuple[dict[str, object], list[tuple[str, float]]]:
     env = os.environ.copy()
-    env["CELEG_METAL_TENSOR_RELAXED_PRECISION"] = "1"
     env["CELEG_METAL_GPU_PROFILE"] = "1"
     env.pop("CELEG_METAL_DISPATCH_PROFILE", None)
     process = subprocess.run(
@@ -75,6 +74,7 @@ def profile(binary: pathlib.Path, model: pathlib.Path, prompt_tokens: int) -> tu
             "--context", str(max(128, prompt_tokens + 32)),
             "--prompt-tokens", str(prompt_tokens),
             "--decode-tokens", "1",
+            "--numerical-policy", "fast",
             "--warmup", "0",
             "--repetitions", "1",
         ],

@@ -262,6 +262,26 @@ if(CELEG_ENABLE_METAL)
     endforeach()
     file(READ "${CMAKE_CURRENT_SOURCE_DIR}/src/backend/metal/kernels/tensor.metal"
         CELEG_METAL_TENSOR_SOURCE)
+    execute_process(
+        COMMAND git -C "${CMAKE_CURRENT_SOURCE_DIR}" rev-parse HEAD
+        OUTPUT_VARIABLE CELEG_BUILD_COMMIT
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET)
+    if(NOT CELEG_BUILD_COMMIT)
+        set(CELEG_BUILD_COMMIT "unknown")
+    endif()
+    execute_process(
+        COMMAND git -C "${CMAKE_CURRENT_SOURCE_DIR}" status --porcelain
+        OUTPUT_VARIABLE CELEG_BUILD_STATUS
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET)
+    if(CELEG_BUILD_STATUS)
+        set(CELEG_BUILD_DIRTY true)
+    else()
+        set(CELEG_BUILD_DIRTY false)
+    endif()
+    string(SHA256 CELEG_METAL_SOURCE_SHA256
+        "${CELEG_METAL_INFERENCE_SOURCE}${CELEG_METAL_TENSOR_SOURCE}${CELEG_METAL_TENSOR_Q4K_STATIC_STAGE128_SOURCE}${CELEG_METAL_TENSOR_Q4K_RELAXED_SOURCE}${CELEG_METAL_TENSOR_DENSE_RELAXED_SOURCE}")
     file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/generated")
     configure_file(
         "${CMAKE_CURRENT_SOURCE_DIR}/cmake/metal_probe_source.hpp.in"
@@ -274,6 +294,10 @@ if(CELEG_ENABLE_METAL)
     configure_file(
         "${CMAKE_CURRENT_SOURCE_DIR}/cmake/metal_tensor_source.hpp.in"
         "${CMAKE_CURRENT_BINARY_DIR}/generated/metal_tensor_source.hpp"
+        @ONLY)
+    configure_file(
+        "${CMAKE_CURRENT_SOURCE_DIR}/cmake/celeg_build_info.hpp.in"
+        "${CMAKE_CURRENT_BINARY_DIR}/generated/celeg_build_info.hpp"
         @ONLY)
 
     add_library(celeg_metal_backend ${CELEG_METAL_BACKEND_SOURCES})
@@ -307,6 +331,8 @@ if(CELEG_ENABLE_METAL)
     add_executable(celeg-metal-run apps/metal/main.cpp)
     target_link_libraries(celeg-metal-run PRIVATE celeg_serve_metal)
     add_executable(celeg-metal-bench ${CELEG_METAL_APP_SOURCES})
+    target_include_directories(celeg-metal-bench PRIVATE
+        "${CMAKE_CURRENT_BINARY_DIR}/generated")
     target_link_libraries(celeg-metal-bench PRIVATE celeg_serve_metal)
     add_executable(celeg-metal-kernel-benchmark apps/benchmark/metal/kernels.mm)
     target_include_directories(celeg-metal-kernel-benchmark PRIVATE

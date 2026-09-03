@@ -58,19 +58,24 @@ struct Binding {
     const char* label;
     celeg::GgmlType type;
     const char* matvec;
+    const char* rows8_matvec;
     uint32_t rows_per_threadgroup;
     uint32_t threads;
     uint32_t threadgroup_floats;
 };
 
 constexpr Binding kBindings[] = {
-    {"bf16", celeg::GgmlType::BF16, "celeg_matvec_bf16", 2, 128, 8},
-    {"f16", celeg::GgmlType::F16, "celeg_matvec_f16", 2, 128, 8},
-    {"q8_0", celeg::GgmlType::Q8_0, "celeg_matvec_q8_0", 16, 128, 0},
-    {"q6_k", celeg::GgmlType::Q6_K, "celeg_matvec_q6k", 16, 128, 0},
-    {"q5_k", celeg::GgmlType::Q5_K, "celeg_matvec_q5k", 16, 128, 0},
-    {"q4_k", celeg::GgmlType::Q4_K, "celeg_matvec_q4k", 16, 128, 0},
-    {"q4_0", celeg::GgmlType::Q4_0, "celeg_matvec_q4_0", 16, 128, 0},
+    {"bf16", celeg::GgmlType::BF16, "celeg_matvec_bf16", nullptr, 2, 128, 8},
+    {"f16", celeg::GgmlType::F16, "celeg_matvec_f16", nullptr, 2, 128, 8},
+    {"q8_0", celeg::GgmlType::Q8_0, "celeg_matvec_q8_0",
+     "celeg_matvec_q8_0_rows8", 16, 128, 0},
+    {"q6_k", celeg::GgmlType::Q6_K, "celeg_matvec_q6k",
+     "celeg_matvec_q6k_rows8", 16, 128, 0},
+    {"q5_k", celeg::GgmlType::Q5_K, "celeg_matvec_q5k",
+     "celeg_matvec_q5k_rows8", 16, 128, 0},
+    {"q4_k", celeg::GgmlType::Q4_K, "celeg_matvec_q4k",
+     "celeg_matvec_q4k_rows8", 16, 128, 0},
+    {"q4_0", celeg::GgmlType::Q4_0, "celeg_matvec_q4_0", nullptr, 16, 128, 0},
 };
 
 constexpr uint32_t kAttentionDepths[] = {96, 960, 1984, 4096};
@@ -79,12 +84,31 @@ constexpr NSUInteger kTensorTileRows = 64;
 constexpr NSUInteger kTensorTileTokens = 128;
 constexpr NSUInteger kTensorTileK = 64;
 constexpr NSUInteger kTensorTileThreads = 128;
-// Historical large-tile control. Current llama.cpp Metal does not use this
-// geometry; it uses a 64x128 outer tile with K32.
+/// @brief Large MPP tile matching the pinned llama.cpp outer geometry.
 constexpr NSUInteger kLlamaTensorTileRows = 128;
 constexpr NSUInteger kLlamaTensorTileTokens = 256;
 constexpr NSUInteger kLlamaTensorTileK = 64;
 constexpr NSUInteger kLlamaTensorTileThreads = 128;
+
+struct TensorGeometry {
+    const char* label;
+    NSUInteger tile_rows;
+    NSUInteger tile_tokens;
+    NSUInteger tile_k;
+};
+
+constexpr TensorGeometry kTensorGeometries[] = {
+    {"64x32_bk64", 64, 32, 64},
+    {"64x32_bk128", 64, 32, 128},
+    {"64x64_bk64", 64, 64, 64},
+    {"64x64_bk128", 64, 64, 128},
+    {"64x128_bk64", 64, 128, 64},
+    {"64x128_bk128", 64, 128, 128},
+    {"128x128_bk64", 128, 128, 64},
+    {"128x128_bk128", 128, 128, 128},
+    {"128x256_bk64", 128, 256, 64},
+    {"128x256_bk128", 128, 256, 128},
+};
 
 /// Mirrors `MetalModel::Impl::tensor_pipeline` bindings for the batched
 /// (prefill) matmul path.
@@ -135,7 +159,7 @@ public:
             throw std::runtime_error("Metal shader compilation failed: " +
                                      (error ? ns_string(error.localizedDescription) : "unknown"));
         }
-        const std::string tensor_text = std::string(celeg::metal_detail::kTensorShader) +
+        const std::string tensor_text = std::string(celeg::metal_detail::kTensorStrictShader) +
             celeg::metal_benchmark_detail::kLlamaTileTensorShader;
         NSString* tensor_source = [NSString stringWithUTF8String:tensor_text.c_str()];
         tensor_library = [device newLibraryWithSource:tensor_source options:nil error:&error];
@@ -165,6 +189,32 @@ public:
 
     id<MTLComputePipelineState> tensor_pipeline(const char* name) {
         return pipeline_from(tensor_library, name);
+    }
+
+    id<MTLLibrary> tensor_geometry_library(const TensorGeometry& geometry) {
+        std::string source = celeg::metal_detail::kTensorStrictShader;
+        auto replace_constant = [&](const std::string& name, NSUInteger value) {
+            const std::string prefix = "constant int " + name + " = ";
+            const size_t begin = source.find(prefix);
+            if (begin == std::string::npos) {
+                throw std::runtime_error("missing tensor geometry constant: " + name);
+            }
+            const size_t value_begin = begin + prefix.size();
+            const size_t value_end = source.find(';', value_begin);
+            source.replace(value_begin, value_end - value_begin, std::to_string(value));
+        };
+        replace_constant("kCelegTileRows", geometry.tile_rows);
+        replace_constant("kCelegTileTokens", geometry.tile_tokens);
+        replace_constant("kCelegTileK", geometry.tile_k);
+        NSError* error = nil;
+        NSString* metal_source = [NSString stringWithUTF8String:source.c_str()];
+        id<MTLLibrary> result = [device newLibraryWithSource:metal_source options:nil error:&error];
+        if (!result) {
+            throw std::runtime_error(std::string("tensor geometry compilation failed for ") +
+                geometry.label + ": " +
+                (error ? ns_string(error.localizedDescription) : "unknown"));
+        }
+        return result;
     }
 
     id<MTLBuffer> random_buffer(size_t bytes) {
@@ -247,12 +297,14 @@ double roofline(Harness& harness) {
     return static_cast<double>(kElements) * sizeof(float) * 2.0 / (milliseconds * 1.0e6);
 }
 
-std::vector<Row> measure_matvec(Harness& harness) {
+std::vector<Row> measure_matvec(Harness& harness, bool rows8) {
     std::vector<Row> rows;
     for (const Binding& binding : kBindings) {
+        if (rows8 && binding.rows8_matvec == nullptr) continue;
         const celeg::GgmlTypeTrait trait = celeg::ggml_type_trait(binding.type);
         if (trait.block_size == 0) continue;
-        id<MTLComputePipelineState> state = harness.pipeline(binding.matvec);
+        const char* kernel = rows8 ? binding.rows8_matvec : binding.matvec;
+        id<MTLComputePipelineState> state = harness.pipeline(kernel);
         for (const Shape& shape : kShapes) {
             const uint32_t row_bytes =
                 shape.cols / trait.block_size * trait.type_size;
@@ -264,6 +316,8 @@ std::vector<Row> measure_matvec(Harness& harness) {
             const uint32_t cols_value = shape.cols;
             const uint32_t row_bytes_value = row_bytes;
             const int iterations = weight_bytes > (32u << 20) ? 4 : 32;
+            const uint32_t rows_per_threadgroup = binding.rows_per_threadgroup *
+                (rows8 ? 2u : 1u);
             const double milliseconds = harness.time_dispatches(
                 5, iterations, ^(id<MTLComputeCommandEncoder> encoder) {
                     [encoder setComputePipelineState:state];
@@ -279,11 +333,11 @@ std::vector<Row> measure_matvec(Harness& harness) {
                                                     atIndex:0];
                     }
                     [encoder dispatchThreadgroups:MTLSizeMake(
-                        (rows_value + binding.rows_per_threadgroup - 1u) /
-                            binding.rows_per_threadgroup, 1, 1)
+                        (rows_value + rows_per_threadgroup - 1u) /
+                            rows_per_threadgroup, 1, 1)
                             threadsPerThreadgroup:MTLSizeMake(binding.threads, 1, 1)];
                 });
-            rows.push_back({binding.matvec, shape.label, weight_bytes, milliseconds,
+            rows.push_back({kernel, shape.label, weight_bytes, milliseconds,
                             static_cast<double>(weight_bytes) / (milliseconds * 1.0e6)});
         }
     }
@@ -291,14 +345,15 @@ std::vector<Row> measure_matvec(Harness& harness) {
 }
 
 std::vector<Row> measure_matmul_geometry(
-    Harness& harness, const TensorBinding* bindings, size_t binding_count,
+    Harness& harness, id<MTLLibrary> library,
+    const TensorBinding* bindings, size_t binding_count,
     NSUInteger tile_rows, NSUInteger tile_tokens, NSUInteger tile_k,
     NSUInteger tile_threads) {
     std::vector<Row> rows;
     for (size_t binding_index = 0; binding_index < binding_count; ++binding_index) {
         const TensorBinding& binding = bindings[binding_index];
         const celeg::GgmlTypeTrait trait = celeg::ggml_type_trait(binding.type);
-        id<MTLComputePipelineState> state = harness.tensor_pipeline(binding.kernel);
+        id<MTLComputePipelineState> state = harness.pipeline_from(library, binding.kernel);
         for (const Shape& shape : kShapes) {
             id<MTLBuffer> weights;
             uint32_t row_bytes = 0;
@@ -351,15 +406,30 @@ std::vector<Row> measure_matmul_geometry(
 /// are reported only as a stable reference; `ms` is the metric to compare.
 std::vector<Row> measure_matmul(Harness& harness) {
     return measure_matmul_geometry(
-        harness, kTensorBindings, sizeof(kTensorBindings) / sizeof(kTensorBindings[0]),
+        harness, harness.tensor_library,
+        kTensorBindings, sizeof(kTensorBindings) / sizeof(kTensorBindings[0]),
         kTensorTileRows, kTensorTileTokens, kTensorTileK, kTensorTileThreads);
 }
 
-/// Historical 128x256 large-tile control retained to document the rejected
-/// geometry experiment. It is not the current llama.cpp Metal matmul shape.
+std::vector<std::pair<std::string, std::vector<Row>>> measure_matmul_sweep(Harness& harness) {
+    std::vector<std::pair<std::string, std::vector<Row>>> result;
+    for (const TensorGeometry& geometry : kTensorGeometries) {
+        id<MTLLibrary> library = harness.tensor_geometry_library(geometry);
+        result.emplace_back(
+            geometry.label,
+            measure_matmul_geometry(
+                harness, library,
+                kTensorBindings, sizeof(kTensorBindings) / sizeof(kTensorBindings[0]),
+                geometry.tile_rows, geometry.tile_tokens, geometry.tile_k,
+                kTensorTileThreads));
+    }
+    return result;
+}
+
+/// Measures the pinned llama.cpp 128x256 outer geometry as a control.
 std::vector<Row> measure_matmul_llama_tile(Harness& harness) {
     return measure_matmul_geometry(
-        harness, kLlamaTensorBindings,
+        harness, harness.tensor_library, kLlamaTensorBindings,
         sizeof(kLlamaTensorBindings) / sizeof(kLlamaTensorBindings[0]),
         kLlamaTensorTileRows, kLlamaTensorTileTokens, kLlamaTensorTileK,
         kLlamaTensorTileThreads);
@@ -585,8 +655,10 @@ int main() {
     try {
         Harness harness;
         const double peak = roofline(harness);
-        const std::vector<Row> matvec = measure_matvec(harness);
+        const std::vector<Row> matvec = measure_matvec(harness, false);
+        const std::vector<Row> matvec_rows8 = measure_matvec(harness, true);
         const std::vector<Row> matmul = measure_matmul(harness);
+        const auto matmul_sweep = measure_matmul_sweep(harness);
         const std::vector<Row> matmul_large_tile_control = measure_matmul_llama_tile(harness);
         const std::vector<Row> prefill_aux = measure_prefill_aux(harness);
         const std::vector<Row> attention = measure_attention(harness);
@@ -594,8 +666,12 @@ int main() {
                   << "  \"copy_roofline_gb_per_second\": " << std::setprecision(6) << peak
                   << ",\n  \"rows\": [\n";
         bool first = true;
-        emit(matvec, peak, "matvec", first);
+        emit(matvec, peak, "matvec_rows4", first);
+        emit(matvec_rows8, peak, "matvec_rows8_candidate", first);
         emit(matmul, peak, "matmul", first);
+        for (const auto& [geometry, rows] : matmul_sweep) {
+            emit(rows, peak, ("matmul_" + geometry).c_str(), first);
+        }
         emit(matmul_large_tile_control, peak, "matmul_128x256_control", first);
         emit(prefill_aux, peak, "prefill_aux", first);
         emit(attention, peak, "attention", first);

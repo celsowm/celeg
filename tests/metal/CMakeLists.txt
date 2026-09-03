@@ -29,6 +29,12 @@ if(TARGET celeg_metal_backend)
         endif()
     endforeach()
 
+    if(CELEG_RUN_METAL_TESTS)
+        add_test(NAME metal_compare_preflight_test
+            COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/tests/metal/compare_metal_preflight_test.py)
+    endif()
+
     add_executable(metal_rope_table_benchmark apps/benchmark/metal/rope_table.mm)
     target_include_directories(metal_rope_table_benchmark PRIVATE
         include src tests src/backend/metal "${CMAKE_BINARY_DIR}/generated")
