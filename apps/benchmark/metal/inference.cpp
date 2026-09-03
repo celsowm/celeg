@@ -135,8 +135,28 @@ void json_samples(std::ostream& output, const std::vector<Sample>& samples,
 }
 
 std::string json_string(const std::string& value) {
+    static constexpr char kHex[] = "0123456789abcdef";
     std::ostringstream output;
-    output << std::quoted(value);
+    output << '"';
+    for (const unsigned char byte : value) {
+        switch (byte) {
+            case '"': output << "\\\""; break;
+            case '\\': output << "\\\\"; break;
+            case '\b': output << "\\b"; break;
+            case '\f': output << "\\f"; break;
+            case '\n': output << "\\n"; break;
+            case '\r': output << "\\r"; break;
+            case '\t': output << "\\t"; break;
+            default:
+                if (byte < 0x20u) {
+                    output << "\\u00" << kHex[byte >> 4] << kHex[byte & 0x0fu];
+                } else {
+                    output << static_cast<char>(byte);
+                }
+                break;
+        }
+    }
+    output << '"';
     return output.str();
 }
 
