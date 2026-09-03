@@ -81,10 +81,17 @@ def main() -> int:
         "--binary", str(bench),
     ])
 
-    print("\n=== Q4_K relaxed N128 vs N32 ===")
+    print("\n=== Q4_K relaxed N128 vs N32 production tiles ===")
     run([sys.executable, str(ROOT / "scripts" / "metal_q4k_relaxed_n32.py")])
 
     print_matvec_profile(build_dir)
+
+    print("\n=== Real one-token decode GPU dispatch profile ===")
+    run([
+        sys.executable,
+        str(ROOT / "scripts" / "metal_decode_dispatch_profile.py"),
+        "--binary", str(bench),
+    ])
     return 0
 
 
