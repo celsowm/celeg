@@ -38,6 +38,12 @@ def resolve_models(model_dir: pathlib.Path, requested: list[str] | None) -> list
     return [by_name[name] for name in names]
 
 
+def parse_benchmark_json(stdout: str) -> dict[str, object]:
+    # celeg-metal-bench historically used std::quoted for JSON strings. That
+    # leaves raw control characters possible inside backend descriptions.
+    return json.loads(stdout, strict=False)
+
+
 def gpu_profiles(stderr: str) -> list[list[tuple[str, float]]]:
     profiles: list[list[tuple[str, float]]] = []
     current: list[tuple[str, float]] | None = None
@@ -80,7 +86,7 @@ def profile(binary: pathlib.Path, model: pathlib.Path, prompt_tokens: int) -> tu
     )
     if process.returncode != 0:
         raise RuntimeError(process.stdout + process.stderr)
-    report = json.loads(process.stdout)
+    report = parse_benchmark_json(process.stdout)
     profiles = gpu_profiles(process.stderr)
     if len(profiles) < 2:
         detail = "\n".join(process.stderr.splitlines()[-30:])
