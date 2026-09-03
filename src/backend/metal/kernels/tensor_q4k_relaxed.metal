@@ -43,7 +43,7 @@ void celeg_matmul_tensor_quantized_relaxed(
                             dynamic_extent, false, true, true,
                             matmul2d_descriptor::mode::multiply_accumulate),
         execution_simdgroups<4>> operation;
-    auto result = operation.get_destination_cooperative_tensor<
+    auto result = operation.template get_destination_cooperative_tensor<
         decltype(input_tensor), decltype(weights_type), float>();
     for (uint16_t index = 0; index < result.get_capacity(); ++index) {
         if (result.is_valid_element(index)) result[index] = 0.0f;

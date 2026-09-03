@@ -36,7 +36,7 @@ void celeg_matmul_tensor_dense_relaxed_impl(
         input, dextents<int32_t, 2>(static_cast<int32_t>(cols),
                                     static_cast<int32_t>(rows)),
         array<int32_t, 2>({1, static_cast<int32_t>(cols)}));
-    auto result = operation.get_destination_cooperative_tensor<
+    auto result = operation.template get_destination_cooperative_tensor<
         decltype(input_shape), decltype(weights_type), float>();
     for (uint16_t index = 0; index < result.get_capacity(); ++index) {
         if (result.is_valid_element(index)) result[index] = 0.0f;
