@@ -27,8 +27,7 @@ def build() -> None:
     )
     source = source.replace(
         'read_text("apps/benchmark/metal/tensor_relaxed_precision.metal")',
-        'read_text("src/backend/metal/kernels/tensor_q4k_relaxed.metal") + "\\n" +\n'
-        '            read_text("apps/benchmark/metal/tensor_q4k_relaxed_n32.metal")',
+        'read_text("src/backend/metal/kernels/tensor_q4k_relaxed.metal")',
     )
     pipeline_block = (
         '        id<MTLComputePipelineState> baseline =\n'
@@ -38,7 +37,7 @@ def build() -> None:
     )
     pipeline_replacement = (
         '        id<MTLComputePipelineState> baseline =\n'
-        '            make_pipeline(device, library, "celeg_matmul_tensor_q4k_relaxed");\n'
+        '            make_pipeline(device, library, "celeg_matmul_tensor_q4k_relaxed_n128");\n'
         '        id<MTLComputePipelineState> relaxed =\n'
         '            make_pipeline(device, library, "celeg_matmul_tensor_q4k_relaxed_n32");'
     )
@@ -47,7 +46,7 @@ def build() -> None:
     source = source.replace(pipeline_block, pipeline_replacement)
     source = source.replace(
         "Metal TensorOps relaxed-precision A/B on ",
-        "Metal relaxed Q4_K N128 vs N32 A/B on ",
+        "Metal production relaxed Q4_K N128 vs N32 A/B on ",
     )
     source = source.replace(
         "geometry=64x128xK64 threads=128 bit_exact=required\\n\\n",
@@ -87,7 +86,7 @@ def build() -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Compare the production relaxed Q4_K N128 TensorOps tile with an N32 candidate."
+        description="Compare production relaxed Q4_K N128 and N32 TensorOps tiles."
     )
     parser.add_argument("--build-only", action="store_true")
     args = parser.parse_args()
