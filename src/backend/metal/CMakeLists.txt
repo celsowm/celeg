@@ -25,6 +25,7 @@ set(CELEG_METAL_SHADER_SOURCES
     src/backend/metal/kernels/inference.metal
     src/backend/metal/kernels/inference/common.metal
     src/backend/metal/kernels/inference/vector.metal
+    src/backend/metal/kernels/inference/dense_matvec_rows.metal
     src/backend/metal/kernels/inference/state.metal
     src/backend/metal/kernels/inference/projection.metal
     src/backend/metal/kernels/inference/batch.metal
@@ -47,6 +48,13 @@ set(CELEG_METAL_SHADER_SOURCES
     src/backend/metal/kernels/tensor_q4k_relaxed.metal
     src/backend/metal/kernels/tensor_dense_relaxed.metal
 )
+
+set(_CELEG_METAL_DENSE_MATVEC_ROWS_SOURCE_FILE
+    "${CMAKE_CURRENT_LIST_DIR}/kernels/inference/dense_matvec_rows.metal")
+file(READ "${_CELEG_METAL_DENSE_MATVEC_ROWS_SOURCE_FILE}"
+    CELEG_METAL_DENSE_MATVEC_ROWS_SOURCE)
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+    "${_CELEG_METAL_DENSE_MATVEC_ROWS_SOURCE_FILE}")
 
 set(_CELEG_METAL_KV_STORE_SOURCE_FILE
     "${CMAKE_CURRENT_LIST_DIR}/kernels/inference/kv_store.metal")
