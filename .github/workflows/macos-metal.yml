@@ -38,6 +38,7 @@ jobs:
                 src/backend/metal/kernels/tensor_q4k_relaxed.metal \
                 src/backend/metal/kernels/tensor_dense_relaxed.metal \
                 apps/benchmark/metal/tensor_dense_64x256.metal \
+                apps/benchmark/metal/tensor_dense_k32.metal \
                 > tensor-complete.metal
             xcrun --sdk macosx metal -c tensor-complete.metal -o tensor-complete.air
           else
@@ -63,6 +64,8 @@ jobs:
         run: python scripts/metal_tile_64x256.py --build-only
       - name: Compile dense 64x256 tensor harness
         run: python scripts/metal_dense_64x256.py --build-only
+      - name: Compile dense K32 tensor harness
+        run: python scripts/metal_dense_k32.py --build-only
       - name: Compile relaxed-precision tensor harness
         run: python scripts/metal_relaxed_precision.py --build-only
       - name: Compile relaxed Q4_K N32 harness
@@ -96,7 +99,7 @@ jobs:
       - name: Compile tiled simdgroup attention harness
         run: python scripts/metal_attention_tiled_simdgroup.py --build-only
       - name: Check Metal benchmark runners
-        run: python -m py_compile benchmarks/compare_metal.py scripts/metal_prefill_storage_profile.py scripts/metal_q4k_relaxed_n32.py scripts/metal_prefill_policy_compare.py scripts/metal_prefill_next_relaxed.py scripts/metal_rope_table.py scripts/metal_prefill_tail.py scripts/metal_counter_capabilities.py scripts/metal_attention_one_exp.py scripts/metal_attention_materialized_simdgroup.py scripts/metal_attention_tiled_simdgroup.py scripts/metal_shortconv_batch_parallel.py scripts/metal_q4k_k32_llama_relaxed.py scripts/metal_dense_64x256.py
+        run: python -m py_compile benchmarks/compare_metal.py scripts/metal_prefill_storage_profile.py scripts/metal_q4k_relaxed_n32.py scripts/metal_prefill_policy_compare.py scripts/metal_prefill_next_relaxed.py scripts/metal_rope_table.py scripts/metal_prefill_tail.py scripts/metal_counter_capabilities.py scripts/metal_attention_one_exp.py scripts/metal_attention_materialized_simdgroup.py scripts/metal_attention_tiled_simdgroup.py scripts/metal_shortconv_batch_parallel.py scripts/metal_q4k_k32_llama_relaxed.py scripts/metal_dense_64x256.py scripts/metal_dense_k32.py
       - name: Build Metal backend and test targets
         run: python scripts/dev.py build --backend metal --celeg-tests off --build-type Release --jobs 2
       - name: Compile fused RoPE table harness
