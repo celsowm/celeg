@@ -63,6 +63,10 @@ jobs:
         run: xcrun --sdk macosx metal -c apps/benchmark/metal/prefill_tail_fast.metal -o prefill-tail.air
       - name: Compile dense matvec vector candidate shader
         run: xcrun --sdk macosx metal -c apps/benchmark/metal/dense_matvec_vector.metal -o dense-matvec-vector.air
+      - name: Compile llama-style dense matvec candidate shader
+        run: xcrun --sdk macosx metal -c apps/benchmark/metal/dense_matvec_llama16.metal -o dense-matvec-llama16.air
+      - name: Compile dense matvec row-reuse candidate shader
+        run: xcrun --sdk macosx metal -c apps/benchmark/metal/dense_matvec_rows.metal -o dense-matvec-rows.air
       - name: Compile 64x256 tensor tile harness
         run: python scripts/metal_tile_64x256.py --build-only
       - name: Compile dense 64x256 tensor harness
@@ -73,6 +77,10 @@ jobs:
         run: python scripts/metal_dense_stage16.py --build-only
       - name: Compile dense matvec vector harness
         run: python scripts/metal_dense_matvec_vector.py --build-only
+      - name: Compile llama-style dense matvec harness
+        run: python scripts/metal_dense_matvec_llama16.py --build-only
+      - name: Compile dense matvec row-reuse harness
+        run: python scripts/metal_dense_matvec_rows.py --build-only
       - name: Compile relaxed-precision tensor harness
         run: python scripts/metal_relaxed_precision.py --build-only
       - name: Compile relaxed Q4_K N32 harness
@@ -106,7 +114,7 @@ jobs:
       - name: Compile tiled simdgroup attention harness
         run: python scripts/metal_attention_tiled_simdgroup.py --build-only
       - name: Check Metal benchmark runners
-        run: python -m py_compile benchmarks/compare_metal.py scripts/metal_prefill_storage_profile.py scripts/metal_prefill_gpu_profile.py scripts/metal_q4k_relaxed_n32.py scripts/metal_prefill_policy_compare.py scripts/metal_prefill_next_relaxed.py scripts/metal_rope_table.py scripts/metal_prefill_tail.py scripts/metal_counter_capabilities.py scripts/metal_attention_one_exp.py scripts/metal_attention_materialized_simdgroup.py scripts/metal_attention_tiled_simdgroup.py scripts/metal_shortconv_batch_parallel.py scripts/metal_q4k_k32_llama_relaxed.py scripts/metal_dense_64x256.py scripts/metal_dense_k32.py scripts/metal_dense_stage16.py scripts/metal_dense_stage16_sharedmem.py scripts/metal_dense_stage16_promotion.py scripts/metal_decode_gpu_profile.py scripts/metal_dense_matvec_vector.py
+        run: python -m py_compile benchmarks/compare_metal.py scripts/metal_prefill_storage_profile.py scripts/metal_prefill_gpu_profile.py scripts/metal_q4k_relaxed_n32.py scripts/metal_prefill_policy_compare.py scripts/metal_prefill_next_relaxed.py scripts/metal_rope_table.py scripts/metal_prefill_tail.py scripts/metal_counter_capabilities.py scripts/metal_attention_one_exp.py scripts/metal_attention_materialized_simdgroup.py scripts/metal_attention_tiled_simdgroup.py scripts/metal_shortconv_batch_parallel.py scripts/metal_q4k_k32_llama_relaxed.py scripts/metal_dense_64x256.py scripts/metal_dense_k32.py scripts/metal_dense_stage16.py scripts/metal_dense_stage16_sharedmem.py scripts/metal_dense_stage16_promotion.py scripts/metal_decode_gpu_profile.py scripts/metal_dense_matvec_vector.py scripts/metal_dense_matvec_real_shapes.py scripts/metal_dense_matvec_llama16.py scripts/metal_dense_matvec_rows.py
       - name: Build Metal backend and test targets
         run: python scripts/dev.py build --backend metal --celeg-tests off --build-type Release --jobs 2
       - name: Compile fused RoPE table harness
