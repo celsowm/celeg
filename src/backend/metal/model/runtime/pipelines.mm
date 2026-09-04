@@ -1,6 +1,7 @@
 #include "detail.hpp"
 
 #include <algorithm>
+#include <cstdlib>
 #include <stdexcept>
 #include <string>
 
@@ -55,6 +56,14 @@ constexpr std::string_view kQ6KStrictFastN32Kernel =
     "celeg_matmul_tensor_q6k_fast_strict_n32";
 constexpr std::string_view kQ80RelaxedN32Kernel =
     "celeg_matmul_tensor_q8_0_relaxed_n32";
+
+bool dense_matvec_rows_experiment_enabled() {
+    static const bool enabled = [] {
+        const char* value = std::getenv("CELEG_METAL_DENSE_MATVEC_ROWS");
+        return value != nullptr && value[0] == '1' && value[1] == '\0';
+    }();
+    return enabled;
+}
 }
 
 std::optional<std::string_view> MetalModel::Impl::linear_kernel(
@@ -92,10 +101,22 @@ MetalMatvecKernel MetalModel::Impl::matvec_kernel(LinearStorage storage,
     const bool ffn_contraction = rows <= 2048 && cols >= 4096 && cols < 32768;
     const bool m5_fast = options.numerical_policy == MetalNumericalPolicy::Fast &&
         ns_string(device.name).find("Apple M5") != std::string::npos;
+    const bool dense_rows = m5_fast && dense_matvec_rows_experiment_enabled();
     switch (storage) {
         case LinearStorage::Float32: return {"celeg_matvec", 8, 256, 0};
-        case LinearStorage::Float16: return {"celeg_matvec_f16", 2, 128, 8};
-        case LinearStorage::BFloat16: return {"celeg_matvec_bf16", 2, 128, 8};
+        case LinearStorage::Float16:
+            if (dense_rows && rows == 1024 && cols == 1024) {
+                return {"celeg_matvec_f16_rows8", 8, 128, 32};
+            }
+            if (dense_rows && cols == 1024 && (rows == 3072 || rows == 4608)) {
+                return {"celeg_matvec_f16_rows4", 4, 128, 16};
+            }
+            return {"celeg_matvec_f16", 2, 128, 8};
+        case LinearStorage::BFloat16:
+            if (dense_rows && rows == 1024 && cols == 4608) {
+                return {"celeg_matvec_bf16_rows8", 8, 128, 32};
+            }
+            return {"celeg_matvec_bf16", 2, 128, 8};
         case LinearStorage::Q4_0: return {"celeg_matvec_q4_0", 16, 128, 0};
         case LinearStorage::Q4K: return ffn_expansion
             ? MetalMatvecKernel{"celeg_matvec_q4k_rows8", 32, 128, 0}
