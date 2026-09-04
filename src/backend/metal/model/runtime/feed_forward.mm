@@ -22,12 +22,29 @@ void MetalModel::Impl::encode_dense_feed_forward(
 
 void MetalModel::Impl::encode_dense_feed_forward_batch(
     id<MTLComputeCommandEncoder> encoder, Layer& layer, uint32_t rows) {
+    const auto tag_last_gpu_dispatch = [&](std::string_view role, const Linear& weight) {
+        if (!gpu_counter_samples || gpu_counter_dispatches.empty()) return;
+        std::string& name = gpu_counter_dispatches.back();
+        name += "[";
+        name += role;
+        name += " ";
+        name += std::to_string(weight.cols);
+        name += "->";
+        name += std::to_string(weight.rows);
+        name += " pp";
+        name += std::to_string(rows);
+        name += "]";
+        metal_model_detail::record_dispatch_count(name);
+    };
+
     const uint32_t intermediate = static_cast<uint32_t>(layer.intermediate);
     encode_matmul(encoder, layer.ffn_gate, batch_normed, batch_gate_up, rows,
                   0, 0, intermediate * 2);
+    tag_last_gpu_dispatch("ffn_gate", layer.ffn_gate);
     encode_matmul(encoder, layer.ffn_up, batch_normed, batch_gate_up, rows,
                   0, static_cast<NSUInteger>(intermediate) * sizeof(float),
                   intermediate * 2);
+    tag_last_gpu_dispatch("ffn_up", layer.ffn_up);
 
     set_buffer(encoder, batch_gate_up, 0);
     set_buffer(encoder, batch_activated, 1);
@@ -47,6 +64,7 @@ void MetalModel::Impl::encode_dense_feed_forward_batch(
     record_dispatch(swiglu_kernel);
 
     encode_matmul(encoder, layer.ffn_down, batch_activated, batch_operation, rows);
+    tag_last_gpu_dispatch("ffn_down", layer.ffn_down);
 }
 
 }
