@@ -60,7 +60,13 @@ def family(name: str) -> str:
     return "other"
 
 
-def run_profile(binary: pathlib.Path, model: pathlib.Path, rows: int, repetitions: int) -> dict[str, object]:
+def run_profile(
+    binary: pathlib.Path,
+    model: pathlib.Path,
+    rows: int,
+    repetitions: int,
+    mode: str,
+) -> dict[str, object]:
     context = max(rows + 128, 640)
     process = subprocess.run(
         [
@@ -72,7 +78,7 @@ def run_profile(binary: pathlib.Path, model: pathlib.Path, rows: int, repetition
             "--numerical-policy", "fast",
             "--warmup", "1",
             "--repetitions", str(repetitions),
-            "--profile-dispatches", "gpu-stage",
+            "--profile-dispatches", mode,
         ],
         cwd=ROOT,
         text=True,
@@ -85,7 +91,12 @@ def run_profile(binary: pathlib.Path, model: pathlib.Path, rows: int, repetition
     return json.loads(process.stdout, strict=False)
 
 
-def print_report(model: pathlib.Path, report: dict[str, object], top: int) -> None:
+def print_report(
+    model: pathlib.Path,
+    baseline: dict[str, object],
+    report: dict[str, object],
+    top: int,
+) -> None:
     profile = report["profile_dispatches"]
     if not isinstance(profile, dict):
         raise RuntimeError("missing gpu-stage profile")
@@ -97,6 +108,8 @@ def print_report(model: pathlib.Path, report: dict[str, object], top: int) -> No
         raise RuntimeError("invalid prefill kernel profile")
 
     runs = int(prefill.get("runs", 1))
+    base_wall_ms = float(baseline["prefill_ms"])
+    base_gpu_ms = float(baseline["prefill_gpu_execution_ms"])
     wall_ms = float(report["prefill_ms"])
     gpu_ms = float(report["prefill_gpu_execution_ms"])
     encode_ms = float(report["prefill_command_encoding_ms"])
@@ -106,14 +119,21 @@ def print_report(model: pathlib.Path, report: dict[str, object], top: int) -> No
 
     print(model.name)
     print(
-        f"  pp{report['prompt_tokens']}: wall={wall_ms:.3f} ms  "
-        f"gpu={gpu_ms:.3f} ms  encode={encode_ms:.3f} ms  wait={wait_ms:.3f} ms"
+        f"  single-encoder: wall={base_wall_ms:.3f} ms  gpu={base_gpu_ms:.3f} ms"
+    )
+    print(
+        f"  split+counter:  wall={wall_ms:.3f} ms  gpu={gpu_ms:.3f} ms  "
+        f"encode={encode_ms:.3f} ms  wait={wait_ms:.3f} ms"
+    )
+    print(
+        f"  mode speedup: wall={base_wall_ms / wall_ms:.3f}x  "
+        f"gpu={base_gpu_ms / gpu_ms:.3f}x"
     )
     print(
         f"  sampled_dispatch={sampled_total:.3f} ms/run  "
-        f"schedule_distortion={distortion:+.1f}%"
+        f"sample-vs-stage-gpu={distortion:+.1f}%"
     )
-    print("  NOTE: gpu-stage intentionally distorts scheduling; use percentages and kernel totals for diagnosis, not throughput.")
+    print("  NOTE: split+counter uses one compute encoder per dispatch; compare its wall/GPU time with the counts baseline to diagnose encoder segmentation.")
 
     normalized: list[tuple[str, float, float, float, float, float]] = []
     family_ms: dict[str, float] = defaultdict(float)
@@ -129,12 +149,12 @@ def print_report(model: pathlib.Path, report: dict[str, object], top: int) -> No
         normalized.append((name, total_ms, phase_percent, count_per_run, median_ms, p95_ms))
         family_ms[family(name)] += total_ms
 
-    print("\n  families")
+    print("\n  split+counter families")
     for name, total_ms in sorted(family_ms.items(), key=lambda item: (-item[1], item[0])):
         percent = total_ms * 100.0 / sampled_total if sampled_total > 0.0 else 0.0
         print(f"    {name:<22} {total_ms:9.3f} ms/run  {percent:6.2f}%")
 
-    print("\n  hottest kernels")
+    print("\n  hottest split+counter kernels")
     print(
         f"    {'kernel':<72} {'ms/run':>9} {'phase':>8} {'count':>8} "
         f"{'median':>9} {'p95':>9}"
@@ -142,6 +162,8 @@ def print_report(model: pathlib.Path, report: dict[str, object], top: int) -> No
     for name, total_ms, phase_percent, count_per_run, median_ms, p95_ms in sorted(
         normalized, key=lambda item: (-item[1], item[0])
     )[:top]:
+        if total_ms <= 0.0:
+            continue
         print(
             f"    {name:<72} {total_ms:9.3f} {phase_percent:7.2f}% "
             f"{count_per_run:8.1f} {median_ms:9.4f} {p95_ms:9.4f}"
@@ -151,7 +173,7 @@ def print_report(model: pathlib.Path, report: dict[str, object], top: int) -> No
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Profile pp512 Metal GPU time by kernel and kernel family for dense LFM2.5 models."
+        description="Compare single-encoder and split-encoder pp512 Metal execution and profile the split path."
     )
     parser.add_argument("--model-dir", type=pathlib.Path, default=DEFAULT_MODEL_DIR)
     parser.add_argument("--binary", type=pathlib.Path, default=DEFAULT_BINARY)
@@ -170,11 +192,13 @@ def main() -> int:
         raise SystemExit("--rows, --repetitions, and --top must be positive")
 
     models = resolve_models(args.model_dir, args.models)
-    print("Metal pp512 GPU-stage profile")
+    print("Metal pp512 encoder-mode comparison")
     print(f"binary={binary}")
     print(f"rows={args.rows} repetitions={args.repetitions}\n")
     for model in models:
-        print_report(model, run_profile(binary, model, args.rows, args.repetitions), args.top)
+        baseline = run_profile(binary, model, args.rows, args.repetitions, "counts")
+        staged = run_profile(binary, model, args.rows, args.repetitions, "gpu-stage")
+        print_report(model, baseline, staged, args.top)
     return 0
 
 
