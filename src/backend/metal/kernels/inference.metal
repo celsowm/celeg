@@ -7,6 +7,7 @@
  */
 #include "inference/common.metal"
 #include "inference/vector.metal"
+#include "inference/dense_matvec_rows.metal"
 #include "inference/state.metal"
 #include "inference/projection.metal"
 #define celeg_attention_batch celeg_attention_batch_baseline
@@ -25,4 +26,4 @@
 #include "inference/qk_norm.metal"
 #include "inference/mrope_batch.metal"
 #include "inference/attention_output.metal"
-#include "inference/attention_gate.metal"
+#include "inference/attention_gate.metal"}
