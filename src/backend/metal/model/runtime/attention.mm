@@ -102,6 +102,7 @@ void MetalModel::Impl::encode_attention_span(
     }
     const NSUInteger shared_floats =
         2u * kAttentionSimdgroups + kAttentionSimdgroups * head_dim;
+    encoder = compute_encoder(encoder);
     [encoder setComputePipelineState:state];
     [encoder setThreadgroupMemoryLength:shared_floats * sizeof(float) atIndex:0];
     [encoder dispatchThreadgroups:MTLSizeMake(query_heads, rows, 1)
@@ -330,7 +331,8 @@ void MetalModel::Impl::encode_attention(
         } else {
             const NSUInteger value_offset =
                 static_cast<NSUInteger>(position_value) * key_width * sizeof(float);
-            [encoder setBuffer:layer.value_cache offset:value_offset atIndex:1];
+            [compute_encoder(encoder) setBuffer:layer.value_cache
+                                          offset:value_offset atIndex:1];
         }
         set_bytes(encoder, &rows, sizeof(rows), 2);
         set_bytes(encoder, &query_heads, sizeof(query_heads), 3);
@@ -522,6 +524,7 @@ void MetalModel::Impl::encode_attention_batch(
         if (state.maxTotalThreadsPerThreadgroup < threads) {
             throw std::runtime_error("Metal pipeline cannot run the batch KV store kernel");
         }
+        encoder = compute_encoder(encoder);
         [encoder setComputePipelineState:state];
         [encoder dispatchThreadgroups:MTLSizeMake(
             (kv_width + threads - 1u) / threads, rows, 1)
@@ -558,6 +561,7 @@ void MetalModel::Impl::encode_attention_batch(
         if (state.maxTotalThreadsPerThreadgroup >= kTiledAttentionThreads &&
             state.staticThreadgroupMemoryLength + shared_bytes <=
                 device.maxThreadgroupMemoryLength) {
+            encoder = compute_encoder(encoder);
             [encoder setComputePipelineState:state];
             [encoder setThreadgroupMemoryLength:shared_bytes atIndex:0];
             [encoder dispatchThreadgroups:MTLSizeMake(
@@ -598,7 +602,8 @@ void MetalModel::Impl::encode_attention_batch(
         } else {
             const NSUInteger value_offset =
                 static_cast<NSUInteger>(base_position) * kv_width * sizeof(float);
-            [encoder setBuffer:layer.value_cache offset:value_offset atIndex:1];
+            [compute_encoder(encoder) setBuffer:layer.value_cache
+                                          offset:value_offset atIndex:1];
         }
         set_bytes(encoder, &rows, sizeof(rows), 2);
         set_bytes(encoder, &query_heads, sizeof(query_heads), 3);

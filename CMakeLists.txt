@@ -332,6 +332,7 @@ if(CELEG_ENABLE_METAL)
     target_link_libraries(celeg-metal-run PRIVATE celeg_serve_metal)
     add_executable(celeg-metal-bench ${CELEG_METAL_APP_SOURCES})
     target_include_directories(celeg-metal-bench PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
         "${CMAKE_CURRENT_BINARY_DIR}/generated")
     target_link_libraries(celeg-metal-bench PRIVATE celeg_serve_metal)
     add_executable(celeg-metal-kernel-benchmark apps/benchmark/metal/kernels.mm)

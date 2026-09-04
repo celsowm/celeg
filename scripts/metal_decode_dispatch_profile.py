@@ -4,9 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import pathlib
-import re
 import subprocess
 
 
@@ -23,9 +21,6 @@ DEFAULT_MODELS = (
     "LFM2.5-350M-Q6_K.gguf",
     "LFM2.5-350M-Q8_0.gguf",
 )
-GPU_LINE = re.compile(r"^\s{2}(\S+)=([0-9]+(?:\.[0-9]+)?)ms$")
-
-
 def resolve_models(model_dir: pathlib.Path, requested: list[str] | None) -> list[pathlib.Path]:
     by_name = {
         path.name: path
@@ -44,29 +39,7 @@ def parse_benchmark_json(stdout: str) -> dict[str, object]:
     return json.loads(stdout, strict=False)
 
 
-def gpu_profiles(stderr: str) -> list[list[tuple[str, float]]]:
-    profiles: list[list[tuple[str, float]]] = []
-    current: list[tuple[str, float]] | None = None
-    for line in stderr.splitlines():
-        if line == "metal gpu dispatch profile":
-            current = []
-            profiles.append(current)
-            continue
-        if current is None:
-            continue
-        match = GPU_LINE.fullmatch(line)
-        if match:
-            name, milliseconds = match.groups()
-            current.append((name, float(milliseconds)))
-        elif not line.startswith("  "):
-            current = None
-    return profiles
-
-
 def profile(binary: pathlib.Path, model: pathlib.Path, prompt_tokens: int) -> tuple[dict[str, object], list[tuple[str, float]]]:
-    env = os.environ.copy()
-    env["CELEG_METAL_GPU_PROFILE"] = "1"
-    env.pop("CELEG_METAL_DISPATCH_PROFILE", None)
     process = subprocess.run(
         [
             str(binary),
@@ -77,9 +50,9 @@ def profile(binary: pathlib.Path, model: pathlib.Path, prompt_tokens: int) -> tu
             "--numerical-policy", "fast",
             "--warmup", "0",
             "--repetitions", "1",
+            "--profile-dispatches", "gpu-stage",
         ],
         cwd=ROOT,
-        env=env,
         text=True,
         capture_output=True,
         check=False,
@@ -87,11 +60,15 @@ def profile(binary: pathlib.Path, model: pathlib.Path, prompt_tokens: int) -> tu
     if process.returncode != 0:
         raise RuntimeError(process.stdout + process.stderr)
     report = parse_benchmark_json(process.stdout)
-    profiles = gpu_profiles(process.stderr)
-    if len(profiles) < 2:
-        detail = "\n".join(process.stderr.splitlines()[-30:])
-        raise RuntimeError("expected prefill and decode GPU dispatch profiles\n" + detail)
-    return report, profiles[-1]
+    dispatch_profile = report.get("profile_dispatches")
+    if not isinstance(dispatch_profile, dict) or dispatch_profile.get("mode") != "gpu-stage":
+        raise RuntimeError("benchmark did not return a gpu-stage dispatch profile")
+    entries = [
+        (str(entry["kernel"]), float(entry.get("total_ms", 0.0)))
+        for entry in dispatch_profile["decode"]["kernels"]
+    ]
+    entries.sort(key=lambda item: item[1], reverse=True)
+    return report, entries
 
 
 def main() -> int:

@@ -1,5 +1,6 @@
 #include "celeg/backend/metal/model.hpp"
 #include "celeg_build_info.hpp"
+#include "backend/metal/model/runtime/profiling.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -8,6 +9,7 @@
 #include <filesystem>
 #include <iomanip>
 #include <iostream>
+#include <map>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -24,6 +26,8 @@ struct Arguments {
     int repetitions = 3;
     celeg::MetalStorageMode storage_mode = celeg::MetalStorageMode::Shared;
     celeg::MetalNumericalPolicy numerical_policy = celeg::MetalNumericalPolicy::Strict;
+    celeg::metal_model_detail::DispatchProfileMode dispatch_profile =
+        celeg::metal_model_detail::DispatchProfileMode::Off;
 };
 
 std::string value(int& index, int argc, char** argv, const std::string& key) {
@@ -57,11 +61,25 @@ Arguments parse(int argc, char** argv) {
                 throw std::invalid_argument("numerical policy must be strict or fast");
             }
         }
+        else if (key == "--profile-dispatches") {
+            const std::string mode = value(index, argc, argv, key);
+            if (mode == "counts") {
+                result.dispatch_profile =
+                    celeg::metal_model_detail::DispatchProfileMode::Counts;
+            } else if (mode == "gpu-stage") {
+                result.dispatch_profile =
+                    celeg::metal_model_detail::DispatchProfileMode::GpuStage;
+            } else {
+                throw std::invalid_argument(
+                    "dispatch profile must be counts or gpu-stage");
+            }
+        }
         else if (key == "--help") {
             std::cout << "celeg-metal-bench --model PATH [--context N] "
                          "[--prompt-tokens N] [--decode-tokens N] "
                          "[--warmup N] [--repetitions N] [--storage-mode shared|private] "
-                         "[--numerical-policy strict|fast]\n";
+                         "[--numerical-policy strict|fast] "
+                         "[--profile-dispatches counts|gpu-stage]\n";
             std::exit(0);
         } else {
             throw std::invalid_argument("unknown argument: " + key);
@@ -81,6 +99,8 @@ struct Sample {
     double decode_ms = 0.0;
     celeg::MetalExecutionMetrics prefill_execution;
     celeg::MetalExecutionMetrics decode_execution;
+    celeg::metal_model_detail::DispatchProfileReport prefill_profile;
+    celeg::metal_model_detail::DispatchProfileReport decode_profile;
 };
 
 celeg::MetalExecutionMetrics difference(const celeg::MetalExecutionMetrics& after,
@@ -99,18 +119,28 @@ Sample run(celeg::MetalModel& model,
            const std::vector<int32_t>& prompt,
            const std::vector<int32_t>& decode) {
     auto session = model.session();
+    celeg::metal_model_detail::reset_dispatch_profile();
     const auto prefill_start = std::chrono::steady_clock::now();
     session.prefill(prompt);
     const auto prefill_end = std::chrono::steady_clock::now();
     const celeg::MetalExecutionMetrics prefill_execution = model.execution_metrics();
+    auto prefill_profile = celeg::metal_model_detail::take_dispatch_profile(
+        prefill_execution.gpu_execution_ms);
+    celeg::metal_model_detail::reset_dispatch_profile();
     const auto decode_start = std::chrono::steady_clock::now();
     for (const int32_t token : decode) session.eval_token(token);
     const auto decode_end = std::chrono::steady_clock::now();
+    const celeg::MetalExecutionMetrics decode_execution =
+        difference(model.execution_metrics(), prefill_execution);
+    auto decode_profile = celeg::metal_model_detail::take_dispatch_profile(
+        decode_execution.gpu_execution_ms);
     return {
         std::chrono::duration<double, std::milli>(prefill_end - prefill_start).count(),
         std::chrono::duration<double, std::milli>(decode_end - decode_start).count(),
         prefill_execution,
-        difference(model.execution_metrics(), prefill_execution)};
+        decode_execution,
+        std::move(prefill_profile),
+        std::move(decode_profile)};
 }
 
 double average(const std::vector<Sample>& samples, double Sample::*field) {
@@ -173,6 +203,68 @@ std::string json_string(const std::string& value) {
     return output.str();
 }
 
+struct AggregatedKernelProfile {
+    uint64_t count = 0;
+    std::vector<double> samples_ms;
+};
+
+void json_dispatch_phase(
+    std::ostream& output, const std::vector<Sample>& samples,
+    celeg::metal_model_detail::DispatchProfileReport Sample::*field) {
+    std::map<std::string, AggregatedKernelProfile> kernels;
+    double gpu_execution_ms = 0.0;
+    double sampled_dispatch_ms = 0.0;
+    for (const Sample& sample : samples) {
+        const auto& report = sample.*field;
+        gpu_execution_ms += report.gpu_execution_ms;
+        for (const auto& profile : report.kernels) {
+            auto& aggregate = kernels[profile.kernel];
+            aggregate.count += profile.count;
+            aggregate.samples_ms.insert(aggregate.samples_ms.end(),
+                                        profile.samples_ms.begin(),
+                                        profile.samples_ms.end());
+            for (const double value : profile.samples_ms) sampled_dispatch_ms += value;
+        }
+    }
+    const double distortion_percent = gpu_execution_ms > 0.0 && sampled_dispatch_ms > 0.0
+        ? (sampled_dispatch_ms / gpu_execution_ms - 1.0) * 100.0 : 0.0;
+    output << "{\"runs\": " << samples.size()
+           << ", \"gpu_execution_ms_total\": " << gpu_execution_ms
+           << ", \"sampled_dispatch_ms_total\": " << sampled_dispatch_ms
+           << ", \"distortion_percent\": " << distortion_percent
+           << ", \"kernels\": [";
+    size_t emitted = 0;
+    for (auto& [name, profile] : kernels) {
+        if (emitted++ != 0) output << ", ";
+        std::sort(profile.samples_ms.begin(), profile.samples_ms.end());
+        const auto percentile = [&](double fraction) {
+            if (profile.samples_ms.empty()) return 0.0;
+            const size_t index = std::min(
+                profile.samples_ms.size() - 1,
+                static_cast<size_t>(fraction * static_cast<double>(
+                    profile.samples_ms.size() - 1)));
+            return profile.samples_ms[index];
+        };
+        double total_ms = 0.0;
+        for (const double value : profile.samples_ms) total_ms += value;
+        output << "{\"kernel\": " << json_string(name)
+               << ", \"count\": " << profile.count
+               << ", \"count_per_run\": "
+               << static_cast<double>(profile.count) /
+                      static_cast<double>(samples.size());
+        if (!profile.samples_ms.empty()) {
+            output << ", \"total_ms\": " << total_ms
+                   << ", \"median_ms\": " << percentile(0.5)
+                   << ", \"p95_ms\": " << percentile(0.95)
+                   << ", \"phase_percent\": "
+                   << (sampled_dispatch_ms > 0.0
+                           ? total_ms * 100.0 / sampled_dispatch_ms : 0.0);
+        }
+        output << '}';
+    }
+    output << "]}";
+}
+
 }
 
 int main(int argc, char** argv) {
@@ -199,6 +291,7 @@ int main(int argc, char** argv) {
         for (int index = 0; index < args.warmup; ++index) {
             static_cast<void>(run(model, prompt, decode));
         }
+        celeg::metal_model_detail::set_dispatch_profile_mode(args.dispatch_profile);
         std::vector<Sample> samples;
         samples.reserve(static_cast<size_t>(args.repetitions));
         for (int index = 0; index < args.repetitions; ++index) {
@@ -231,6 +324,26 @@ int main(int argc, char** argv) {
                   << "  \"numerical_policy\": "
                   << json_string(args.numerical_policy == celeg::MetalNumericalPolicy::Fast
                                      ? "fast" : "strict") << ",\n"
+                  << "  \"profile_dispatches\": ";
+        if (args.dispatch_profile ==
+            celeg::metal_model_detail::DispatchProfileMode::Off) {
+            std::cout << "null,\n";
+        } else {
+            std::cout << "{\"mode\": "
+                      << json_string(args.dispatch_profile ==
+                              celeg::metal_model_detail::DispatchProfileMode::Counts
+                                  ? "counts" : "gpu-stage")
+                      << ", \"schedule_distorted\": "
+                      << (args.dispatch_profile ==
+                              celeg::metal_model_detail::DispatchProfileMode::GpuStage
+                                  ? "true" : "false")
+                      << ", \"prefill\": ";
+            json_dispatch_phase(std::cout, samples, &Sample::prefill_profile);
+            std::cout << ", \"decode\": ";
+            json_dispatch_phase(std::cout, samples, &Sample::decode_profile);
+            std::cout << "},\n";
+        }
+        std::cout
                   << "  \"prefill_ms\": " << std::setprecision(10) << prefill_ms << ",\n"
                   << "  \"prefill_samples_ms\": ";
         json_samples(std::cout, samples, &Sample::prefill_ms);

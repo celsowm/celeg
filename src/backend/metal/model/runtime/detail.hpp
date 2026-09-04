@@ -7,6 +7,7 @@
 #include "celeg/model/linear_operation.hpp"
 #include "celeg/model/weights/roles.hpp"
 #include "linear_bindings.hpp"
+#include "profiling.hpp"
 
 #import <Metal/Metal.h>
 
@@ -90,6 +91,8 @@ struct MetalModel::Impl {
         uint32_t cols = 0;
         uint32_t row_bytes = 0;
         LinearStorage storage = LinearStorage::Float32;
+        std::optional<TensorRole> role;
+        int layer = -1;
     };
 
     struct MetalKernelBinding {
@@ -234,10 +237,11 @@ struct MetalModel::Impl {
     MetalExecutionMetrics execution_metrics;
     std::chrono::steady_clock::time_point command_started;
     uint64_t command_dispatches = 0;
-    std::unordered_map<std::string, uint64_t> dispatch_histogram;
     id<MTLCounterSampleBuffer> gpu_counter_samples = nil;
     std::vector<std::string> gpu_counter_dispatches;
     NSUInteger gpu_counter_next_sample = 0;
+    id<MTLCommandBuffer> gpu_profile_command_buffer = nil;
+    id<MTLComputeCommandEncoder> gpu_profile_encoder = nil;
 
     id<MTLBuffer> buffer(const std::vector<float>& values);
     id<MTLBuffer> immutable_buffer(const void* data, size_t bytes) const;
@@ -271,6 +275,7 @@ struct MetalModel::Impl {
     void dispatch_cooperative(id<MTLComputeCommandEncoder> encoder, std::string_view name,
                               NSUInteger groups);
     void record_dispatch(std::string_view name);
+    id<MTLComputeCommandEncoder> compute_encoder(id<MTLComputeCommandEncoder> fallback);
     void set_buffer(id<MTLComputeCommandEncoder> encoder, id<MTLBuffer> value,
                     NSUInteger index, NSUInteger offset = 0);
     void set_bytes(id<MTLComputeCommandEncoder> encoder, const void* value,

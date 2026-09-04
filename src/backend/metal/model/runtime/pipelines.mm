@@ -1,7 +1,6 @@
 #include "detail.hpp"
 
 #include <algorithm>
-#include <iostream>
 #include <stdexcept>
 #include <string>
 
@@ -50,15 +49,12 @@ constexpr std::string_view kQ5KRelaxedN32Kernel =
     "celeg_matmul_tensor_q5k_relaxed_n32";
 constexpr std::string_view kQ6KRelaxedN32Kernel =
     "celeg_matmul_tensor_q6k_fast_n32";
+constexpr std::string_view kQ6KStrictFastKernel =
+    "celeg_matmul_tensor_q6k_fast_strict";
+constexpr std::string_view kQ6KStrictFastN32Kernel =
+    "celeg_matmul_tensor_q6k_fast_strict_n32";
 constexpr std::string_view kQ80RelaxedN32Kernel =
     "celeg_matmul_tensor_q8_0_relaxed_n32";
-thread_local id<MTLComputeCommandEncoder> gGpuProfileEncoder = nil;
-
-bool gpu_dispatch_profile_enabled() {
-    const char* value = std::getenv("CELEG_METAL_GPU_PROFILE");
-    return value != nullptr && value[0] == '1' && value[1] == '\0';
-}
-
 }
 
 std::optional<std::string_view> MetalModel::Impl::linear_kernel(
@@ -94,6 +90,8 @@ MetalMatvecKernel MetalModel::Impl::matvec_kernel(LinearStorage storage,
                                                   uint32_t cols) const {
     const bool ffn_expansion = rows >= 4096 && rows < 32768 && cols <= 2048;
     const bool ffn_contraction = rows <= 2048 && cols >= 4096 && cols < 32768;
+    const bool m5_fast = options.numerical_policy == MetalNumericalPolicy::Fast &&
+        ns_string(device.name).find("Apple M5") != std::string::npos;
     switch (storage) {
         case LinearStorage::Float32: return {"celeg_matvec", 8, 256, 0};
         case LinearStorage::Float16: return {"celeg_matvec_f16", 2, 128, 8};
@@ -106,8 +104,10 @@ MetalMatvecKernel MetalModel::Impl::matvec_kernel(LinearStorage storage,
             ? MetalMatvecKernel{"celeg_matvec_q5k_rows8", 32, 128, 0}
             : MetalMatvecKernel{"celeg_matvec_q5k", 16, 128, 0};
         case LinearStorage::Q6K: return {"celeg_matvec_q6k", 16, 128, 0};
-        case LinearStorage::Q8_0: return ffn_expansion || ffn_contraction
-            ? MetalMatvecKernel{"celeg_matvec_q8_0_rows8", 32, 128, 0}
+        case LinearStorage::Q8_0: return m5_fast
+            ? MetalMatvecKernel{"celeg_matvec_q8_0_m5", 2, 128, 8}
+            : ffn_expansion || ffn_contraction
+                ? MetalMatvecKernel{"celeg_matvec_q8_0_rows8", 32, 128, 0}
             : MetalMatvecKernel{"celeg_matvec_q8_0", 16, 128, 0};
     }
     return {};
@@ -116,13 +116,17 @@ MetalMatvecKernel MetalModel::Impl::matvec_kernel(LinearStorage storage,
 MetalMatvecKernel MetalModel::Impl::swiglu_matvec_kernel(LinearStorage storage,
                                                          uint32_t rows,
                                                          uint32_t cols) const {
+    const bool m5_fast = options.numerical_policy == MetalNumericalPolicy::Fast &&
+        ns_string(device.name).find("Apple M5") != std::string::npos;
     switch (storage) {
         case LinearStorage::Q4_0: return {"celeg_swiglu_matvec_q4_0", 16, 128, 0};
         case LinearStorage::Q4K: return {"celeg_swiglu_matvec_q4k", 16, 128, 0};
         case LinearStorage::Q5K: return {"celeg_swiglu_matvec_q5k", 16, 128, 0};
         case LinearStorage::Q6K: return {"celeg_swiglu_matvec_q6k", 16, 128, 0};
         case LinearStorage::Q8_0: return rows <= 2048 && cols >= 4096 && cols < 32768
-            ? MetalMatvecKernel{"celeg_swiglu_matvec_q8_0_rows8", 32, 128, 0}
+            ? m5_fast
+                ? MetalMatvecKernel{"celeg_swiglu_matvec_q8_0_m5", 2, 128, 8}
+                : MetalMatvecKernel{"celeg_swiglu_matvec_q8_0_rows8", 32, 128, 0}
             : MetalMatvecKernel{};
         default: return {};
     }
@@ -137,15 +141,16 @@ void MetalModel::Impl::begin_commands(
     }
     command_started = std::chrono::steady_clock::now();
     command_dispatches = 0;
-    dispatch_histogram.clear();
     gpu_counter_samples = nil;
     gpu_counter_dispatches.clear();
     gpu_counter_next_sample = 0;
-    gGpuProfileEncoder = nil;
+    gpu_profile_command_buffer = nil;
+    gpu_profile_encoder = nil;
 
-    if (gpu_dispatch_profile_enabled()) {
+    if (metal_model_detail::dispatch_profile_mode() ==
+        metal_model_detail::DispatchProfileMode::GpuStage) {
         if (@available(macOS 11.0, *)) {
-            if ([device supportsCounterSampling:MTLCounterSamplingPointAtDispatchBoundary]) {
+            if ([device supportsCounterSampling:MTLCounterSamplingPointAtStageBoundary]) {
                 id<MTLCounterSet> timestamp_set = nil;
                 for (id<MTLCounterSet> counter_set in device.counterSets) {
                     if ([counter_set.name isEqualToString:MTLCommonCounterSetTimestamp]) {
@@ -163,24 +168,24 @@ void MetalModel::Impl::begin_commands(
                     gpu_counter_samples = [device
                         newCounterSampleBufferWithDescriptor:descriptor
                                                      error:&counter_error];
-                    if (!gpu_counter_samples && counter_error) {
-                        std::cerr << "metal gpu dispatch profile unavailable: "
-                                  << ns_string(counter_error.localizedDescription) << '\n';
+                    if (!gpu_counter_samples) {
+                        const std::string detail = counter_error
+                            ? ns_string(counter_error.localizedDescription)
+                            : "timestamp counter buffer creation failed";
+                        throw std::runtime_error("Metal gpu-stage profile unavailable: " + detail);
                     }
                 }
             }
         }
+        if (!gpu_counter_samples) {
+            throw std::runtime_error(
+                "Metal gpu-stage profile requires timestamp sampling at stage boundaries");
+        }
     }
 
     if (gpu_counter_samples) {
-        MTLComputePassDescriptor* pass_descriptor =
-            [MTLComputePassDescriptor computePassDescriptor];
-        MTLComputePassSampleBufferAttachmentDescriptor* attachment =
-            pass_descriptor.sampleBufferAttachments[0];
-        attachment.sampleBuffer = gpu_counter_samples;
-        attachment.startOfEncoderSampleIndex = MTLCounterDontSample;
-        attachment.endOfEncoderSampleIndex = MTLCounterDontSample;
-        encoder = [command_buffer computeCommandEncoderWithDescriptor:pass_descriptor];
+        gpu_profile_command_buffer = command_buffer;
+        encoder = compute_encoder(nil);
     } else {
         encoder = [command_buffer computeCommandEncoder];
     }
@@ -188,19 +193,16 @@ void MetalModel::Impl::begin_commands(
         throw std::runtime_error("Metal compute encoder creation failed");
     }
 
-    if (gpu_counter_samples) {
-        gGpuProfileEncoder = encoder;
-        [encoder sampleCountersInBuffer:gpu_counter_samples
-                          atSampleIndex:0
-                            withBarrier:NO];
-        gpu_counter_next_sample = 1;
-    }
 }
 
 void MetalModel::Impl::finish_commands(
     id<MTLCommandBuffer>& command_buffer,
     id<MTLComputeCommandEncoder>& encoder) {
-    [encoder endEncoding];
+    if (gpu_counter_samples) {
+        if (gpu_profile_encoder) [gpu_profile_encoder endEncoding];
+    } else {
+        [encoder endEncoding];
+    }
     const auto encoding_finished = std::chrono::steady_clock::now();
     [command_buffer commit];
     const auto waiting_started = std::chrono::steady_clock::now();
@@ -224,62 +226,32 @@ void MetalModel::Impl::finish_commands(
     ++execution_metrics.command_buffers;
     execution_metrics.dispatches += command_dispatches;
 
-    if (gpu_counter_samples && gpu_counter_next_sample > 1) {
+    if (gpu_counter_samples && !gpu_counter_dispatches.empty()) {
+        const NSUInteger resolved_sample_count = gpu_counter_dispatches.size() * 2;
         NSData* resolved = [gpu_counter_samples resolveCounterRange:
-            NSMakeRange(0, gpu_counter_next_sample)];
+            NSMakeRange(0, resolved_sample_count)];
         const NSUInteger expected =
-            gpu_counter_next_sample * sizeof(MTLCounterResultTimestamp);
+            resolved_sample_count * sizeof(MTLCounterResultTimestamp);
         if (resolved.length >= expected) {
             const auto* samples = static_cast<const MTLCounterResultTimestamp*>(resolved.bytes);
-            std::unordered_map<std::string, double> gpu_ms;
-            size_t invalid_intervals = 0;
             for (size_t index = 0; index < gpu_counter_dispatches.size(); ++index) {
-                const uint64_t start = samples[index].timestamp;
-                const uint64_t end = samples[index + 1].timestamp;
+                const uint64_t start = samples[index * 2].timestamp;
+                const uint64_t end = samples[index * 2 + 1].timestamp;
                 if (start == MTLCounterErrorValue || end == MTLCounterErrorValue ||
                     end < start) {
-                    ++invalid_intervals;
                     continue;
                 }
-                gpu_ms[gpu_counter_dispatches[index]] +=
-                    static_cast<double>(end - start) / 1.0e6;
+                metal_model_detail::record_dispatch_gpu_time(
+                    gpu_counter_dispatches[index],
+                    static_cast<double>(end - start) / 1.0e6);
             }
-            std::vector<std::pair<std::string, double>> entries(
-                gpu_ms.begin(), gpu_ms.end());
-            std::sort(entries.begin(), entries.end(),
-                      [](const auto& left, const auto& right) {
-                          return left.second > right.second;
-                      });
-            std::cerr << "metal gpu dispatch profile" << '\n';
-            for (const auto& [name, milliseconds] : entries) {
-                std::cerr << "  " << name << "=" << milliseconds << "ms\n";
-            }
-            if (invalid_intervals != 0) {
-                std::cerr << "metal gpu dispatch profile invalid_intervals="
-                          << invalid_intervals << '\n';
-            }
-        } else {
-            std::cerr << "metal gpu dispatch profile resolve size=" << resolved.length
-                      << " expected=" << expected << '\n';
-        }
-    }
-
-    if (std::getenv("CELEG_METAL_DISPATCH_PROFILE") != nullptr) {
-        std::vector<std::pair<std::string, uint64_t>> entries(
-            dispatch_histogram.begin(), dispatch_histogram.end());
-        std::sort(entries.begin(), entries.end(),
-                  [](const auto& left, const auto& right) {
-                      return left.second > right.second;
-                  });
-        std::cerr << "metal dispatch profile" << '\n';
-        for (const auto& [name, count] : entries) {
-            std::cerr << "  " << name << "=" << count << '\n';
         }
     }
     gpu_counter_samples = nil;
     gpu_counter_dispatches.clear();
     gpu_counter_next_sample = 0;
-    gGpuProfileEncoder = nil;
+    gpu_profile_command_buffer = nil;
+    gpu_profile_encoder = nil;
     encoder = nil;
     command_buffer = nil;
 }
@@ -354,6 +326,7 @@ void MetalModel::Impl::dispatch(id<MTLComputeCommandEncoder> encoder, std::strin
                                 NSUInteger count) {
     if (count == 0) return;
     id<MTLComputePipelineState> state = pipeline(name);
+    encoder = compute_encoder(encoder);
     [encoder setComputePipelineState:state];
     const NSUInteger threads = std::min(count, state.maxTotalThreadsPerThreadgroup);
     [encoder dispatchThreads:MTLSizeMake(count, 1, 1)
@@ -369,6 +342,7 @@ void MetalModel::Impl::dispatch_cooperative(id<MTLComputeCommandEncoder> encoder
     if (state.maxTotalThreadsPerThreadgroup < threads) {
         throw std::runtime_error("Metal pipeline cannot run cooperative kernel");
     }
+    encoder = compute_encoder(encoder);
     [encoder setComputePipelineState:state];
     [encoder dispatchThreadgroups:MTLSizeMake(groups, 1, 1)
        threadsPerThreadgroup:MTLSizeMake(threads, 1, 1)];
@@ -377,27 +351,45 @@ void MetalModel::Impl::dispatch_cooperative(id<MTLComputeCommandEncoder> encoder
 
 void MetalModel::Impl::record_dispatch(std::string_view name) {
     ++command_dispatches;
-    if (std::getenv("CELEG_METAL_DISPATCH_PROFILE") != nullptr) {
-        ++dispatch_histogram[std::string(name)];
-    }
-    if (gpu_counter_samples && gGpuProfileEncoder &&
-        gpu_counter_next_sample < gpu_counter_samples.sampleCount) {
+    metal_model_detail::record_dispatch_count(name);
+    if (gpu_counter_samples && gpu_profile_encoder) {
         gpu_counter_dispatches.emplace_back(name);
-        [gGpuProfileEncoder sampleCountersInBuffer:gpu_counter_samples
-                                     atSampleIndex:gpu_counter_next_sample
-                                       withBarrier:YES];
-        ++gpu_counter_next_sample;
+        [gpu_profile_encoder endEncoding];
+        gpu_profile_encoder = nil;
     }
+}
+
+id<MTLComputeCommandEncoder> MetalModel::Impl::compute_encoder(
+    id<MTLComputeCommandEncoder> fallback) {
+    if (!gpu_counter_samples) return fallback;
+    if (gpu_profile_encoder) return gpu_profile_encoder;
+    if (gpu_counter_next_sample + 2 > gpu_counter_samples.sampleCount) {
+        throw std::runtime_error("Metal gpu-stage profile exceeded its sample capacity");
+    }
+    MTLComputePassDescriptor* pass_descriptor =
+        [MTLComputePassDescriptor computePassDescriptor];
+    MTLComputePassSampleBufferAttachmentDescriptor* attachment =
+        pass_descriptor.sampleBufferAttachments[0];
+    attachment.sampleBuffer = gpu_counter_samples;
+    attachment.startOfEncoderSampleIndex = gpu_counter_next_sample;
+    attachment.endOfEncoderSampleIndex = gpu_counter_next_sample + 1;
+    gpu_counter_next_sample += 2;
+    gpu_profile_encoder =
+        [gpu_profile_command_buffer computeCommandEncoderWithDescriptor:pass_descriptor];
+    if (!gpu_profile_encoder) {
+        throw std::runtime_error("Metal gpu-stage compute encoder creation failed");
+    }
+    return gpu_profile_encoder;
 }
 
 void MetalModel::Impl::set_buffer(id<MTLComputeCommandEncoder> encoder, id<MTLBuffer> value,
                                   NSUInteger index, NSUInteger offset) {
-    [encoder setBuffer:value offset:offset atIndex:index];
+    [compute_encoder(encoder) setBuffer:value offset:offset atIndex:index];
 }
 
 void MetalModel::Impl::set_bytes(id<MTLComputeCommandEncoder> encoder, const void* value,
                                  NSUInteger length, NSUInteger index) {
-    [encoder setBytes:value length:length atIndex:index];
+    [compute_encoder(encoder) setBytes:value length:length atIndex:index];
 }
 
 void MetalModel::Impl::encode_matvec(id<MTLComputeCommandEncoder> encoder,
@@ -417,6 +409,7 @@ void MetalModel::Impl::encode_matvec(id<MTLComputeCommandEncoder> encoder,
         weight.storage, weight.rows, weight.cols);
     if (!selected.name) throw std::runtime_error("unsupported Metal matvec binding");
     id<MTLComputePipelineState> state = pipeline(selected.name);
+    encoder = compute_encoder(encoder);
     [encoder setComputePipelineState:state];
     if (selected.threadgroup_floats != 0) {
         [encoder setThreadgroupMemoryLength:selected.threadgroup_floats * sizeof(float)
@@ -442,6 +435,7 @@ bool MetalModel::Impl::encode_swiglu_matvec(
     set_bytes(encoder, &weight.cols, sizeof(weight.cols), 4);
     set_bytes(encoder, &weight.row_bytes, sizeof(weight.row_bytes), 5);
     id<MTLComputePipelineState> state = pipeline(selected.name);
+    encoder = compute_encoder(encoder);
     [encoder setComputePipelineState:state];
     if (selected.threadgroup_floats != 0) {
         [encoder setThreadgroupMemoryLength:selected.threadgroup_floats * sizeof(float)
@@ -515,6 +509,10 @@ void MetalModel::Impl::encode_matmul(id<MTLComputeCommandEncoder> encoder,
         bool custom_tensor = false;
         const bool relaxed = options.numerical_policy == MetalNumericalPolicy::Fast &&
             fast_tensor_matmul_available(weight.storage);
+        const bool m5_q6_gate = rows >= 128 &&
+            ns_string(device.name).find("Apple M5") != std::string::npos &&
+            weight.role == TensorRole::FfnGate && weight.layer >= 0 &&
+            weight.layer < 8;
 
         if (relaxed && weight.storage == LinearStorage::Float16) {
             selected_kernel = rows <= 32 ? kF16RelaxedN32Kernel : kF16RelaxedKernel;
@@ -532,7 +530,13 @@ void MetalModel::Impl::encode_matmul(id<MTLComputeCommandEncoder> encoder,
             selected_kernel = rows <= 32 ? kQ5KRelaxedN32Kernel : kQ5KRelaxedKernel;
             custom_tensor = true;
         } else if (relaxed && weight.storage == LinearStorage::Q6K) {
-            selected_kernel = rows <= 32 ? kQ6KRelaxedN32Kernel : kQ6KRelaxedKernel;
+            if (m5_q6_gate) {
+                selected_kernel = rows <= 32
+                    ? kQ6KRelaxedN32Kernel : kQ6KRelaxedKernel;
+            } else {
+                selected_kernel = rows <= 32
+                    ? kQ6KStrictFastN32Kernel : kQ6KStrictFastKernel;
+            }
             custom_tensor = true;
         } else if (relaxed && weight.storage == LinearStorage::Q8_0) {
             selected_kernel = rows <= 32 ? kQ80RelaxedN32Kernel : kQ80RelaxedKernel;
@@ -560,6 +564,7 @@ void MetalModel::Impl::encode_matmul(id<MTLComputeCommandEncoder> encoder,
             state = tensor_pipeline(selected_kernel);
         }
 
+        encoder = compute_encoder(encoder);
         [encoder setComputePipelineState:state];
         [encoder setThreadgroupMemoryLength:shared_bytes atIndex:0];
         const NSUInteger row_groups = exact_groups
@@ -577,6 +582,7 @@ void MetalModel::Impl::encode_matmul(id<MTLComputeCommandEncoder> encoder,
     if (!kernel) throw std::runtime_error("unsupported Metal matmul binding");
     const NSUInteger groups = (weight.rows + 7u) / 8u;
     id<MTLComputePipelineState> state = pipeline(*kernel);
+    encoder = compute_encoder(encoder);
     [encoder setComputePipelineState:state];
     [encoder dispatchThreadgroups:MTLSizeMake(groups, rows, 1)
              threadsPerThreadgroup:MTLSizeMake(256, 1, 1)];
@@ -680,6 +686,7 @@ void MetalModel::Impl::encode_rmsnorm_batch(id<MTLComputeCommandEncoder> encoder
     set_bytes(encoder, &width, sizeof(width), 4);
     set_bytes(encoder, &epsilon, sizeof(epsilon), 5);
     id<MTLComputePipelineState> state = pipeline("celeg_rmsnorm_batch");
+    encoder = compute_encoder(encoder);
     [encoder setComputePipelineState:state];
     [encoder dispatchThreadgroups:MTLSizeMake(rows, 1, 1)
        threadsPerThreadgroup:MTLSizeMake(256, 1, 1)];

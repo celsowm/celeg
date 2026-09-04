@@ -4,9 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import pathlib
-import re
 import subprocess
 
 
@@ -26,9 +24,6 @@ EXPECTED_MODELS = (
     "LFM2.5-350M-Q8_0.gguf",
     "LFM2.5-350M-QAD-Q4_0.gguf",
 )
-PROFILE_LINE = re.compile(r"^\s{2}(\S+)=(\d+)$")
-
-
 def resolve_models(model_dir: pathlib.Path, requested: list[str] | None) -> list[pathlib.Path]:
     by_name: dict[str, pathlib.Path] = {}
     for path in sorted(model_dir.expanduser().glob("snapshots/*/*.gguf")):
@@ -51,9 +46,6 @@ def parse_benchmark_json(stdout: str) -> dict[str, object]:
 
 def profile(binary: pathlib.Path, model: pathlib.Path, rows: int, repetitions: int) -> tuple[dict[str, object], dict[str, int]]:
     context = max(128, rows + 128)
-    env = os.environ.copy()
-    env["CELEG_METAL_DISPATCH_PROFILE"] = "1"
-    env.pop("CELEG_METAL_GPU_PROFILE", None)
     result = subprocess.run(
         [
             str(binary),
@@ -64,9 +56,9 @@ def profile(binary: pathlib.Path, model: pathlib.Path, rows: int, repetitions: i
             "--numerical-policy", "fast",
             "--warmup", "1",
             "--repetitions", str(repetitions),
+            "--profile-dispatches", "counts",
         ],
         cwd=ROOT,
-        env=env,
         text=True,
         capture_output=True,
         check=False,
@@ -74,12 +66,10 @@ def profile(binary: pathlib.Path, model: pathlib.Path, rows: int, repetitions: i
     if result.returncode != 0:
         raise RuntimeError(result.stdout + result.stderr)
     report = parse_benchmark_json(result.stdout)
-    histogram: dict[str, int] = {}
-    for line in result.stderr.splitlines():
-        match = PROFILE_LINE.fullmatch(line)
-        if match:
-            name, count = match.groups()
-            histogram[name] = histogram.get(name, 0) + int(count)
+    histogram = {
+        str(entry["kernel"]): int(entry["count"])
+        for entry in report["profile_dispatches"]["prefill"]["kernels"]
+    }
     return report, histogram
 
 

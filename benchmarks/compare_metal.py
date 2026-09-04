@@ -124,10 +124,7 @@ def resolve_models(model_dir, requested):
 
 
 def celeg_env():
-    env = os.environ.copy()
-    env.pop("CELEG_METAL_DISPATCH_PROFILE", None)
-    env.pop("CELEG_METAL_GPU_PROFILE", None)
-    return env
+    return os.environ.copy()
 
 
 def run_json(command, *, env=None, include_stderr=False):
@@ -159,29 +156,25 @@ def run_warmups(celeg_command, llama_command, warmup, celeg_process_env):
     run_json([*llama_command, "-r", warmup, "--no-warmup"])
 
 
-def dispatch_histogram(stderr):
-    histogram = {}
-    for line in stderr.splitlines():
-        fields = line.strip().split("=", 1)
-        if len(fields) == 2 and fields[0].startswith("celeg_") and fields[1].isdigit():
-            histogram[fields[0]] = histogram.get(fields[0], 0) + int(fields[1])
-    return histogram
-
-
 def validate_fast_preflight(command, model):
     env = celeg_env()
-    env["CELEG_METAL_DISPATCH_PROFILE"] = "1"
-    result, stderr = run_json(
-        [*command, "--decode-tokens", 0, "--warmup", 0, "--repetitions", 1],
+    result = run_json(
+        [*command, "--decode-tokens", 0, "--warmup", 0, "--repetitions", 1,
+         "--profile-dispatches", "counts"],
         env=env,
-        include_stderr=True,
     )
     backend = result.get("backend", "")
     if result.get("numerical_policy") != "fast":
         raise RuntimeError("Celeg preflight did not request the fast numerical policy")
     if "policy_requested=fast" not in backend or "policy_effective=fast" not in backend:
         raise RuntimeError(f"Celeg fast policy is unavailable for {model.name}: {backend}")
-    histogram = dispatch_histogram(stderr)
+    profile = result.get("profile_dispatches") or {}
+    if profile.get("mode") != "counts" or profile.get("schedule_distorted"):
+        raise RuntimeError("Celeg preflight did not produce an undistorted count profile")
+    histogram = {
+        entry["kernel"]: int(entry["count"])
+        for entry in profile.get("prefill", {}).get("kernels", [])
+    }
     tensor_dispatches = sum(
         count for name, count in histogram.items()
         if name.startswith("celeg_matmul_tensor_")
@@ -236,13 +229,14 @@ def llama_rows(rows, prompt_tokens, decode_tokens):
         selected[key] = row
     combined = selected[(prompt_tokens, decode_tokens)]
     prompt = selected[(prompt_tokens, 0)]
+    decode = selected[(0, decode_tokens)] if decode_tokens else None
     combined_ms = [value / 1.0e6 for value in combined["samples_ns"]]
     prompt_ms = [value / 1.0e6 for value in prompt["samples_ns"]]
-    if len(combined_ms) != len(prompt_ms):
-        raise RuntimeError("llama.cpp prompt and combined sample counts differ")
-    decode_ms = [total - prefill for total, prefill in zip(combined_ms, prompt_ms)]
-    if any(value <= 0.0 for value in decode_ms):
-        raise RuntimeError("llama.cpp decode measurement is not positive")
+    decode_ms = [] if decode is None else [
+        value / 1.0e6 for value in decode["samples_ns"]
+    ]
+    if any(value <= 0.0 for value in combined_ms + prompt_ms + decode_ms):
+        raise RuntimeError("llama.cpp phase measurement is not positive")
     return {
         "combined": distribution(combined_ms, prompt_tokens + decode_tokens),
         "prefill_batched": distribution(prompt_ms, prompt_tokens),
@@ -283,7 +277,7 @@ def collect_workload(model, args, workload):
         args.llama_bench,
         "-m", model,
         "-p", prompt_tokens,
-        "-n", 0,
+        "-n", decode_tokens,
         "-pg", f"{prompt_tokens},{decode_tokens}",
         "-b", prompt_tokens,
         "-ub", prompt_tokens,

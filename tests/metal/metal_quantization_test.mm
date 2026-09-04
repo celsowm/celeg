@@ -80,19 +80,24 @@ std::vector<float> run_embedding(id<MTLDevice> device,
 std::vector<float> run_matvec(id<MTLDevice> device,
                               const celeg::GgufTensorView& tensor,
                               uint32_t rows,
-                              const std::vector<float>& input) {
+                              const std::vector<float>& input,
+                              const char* requested_kernel = nullptr,
+                              uint32_t rows_per_threadgroup = 16,
+                              uint32_t threadgroup_floats = 0) {
     NSError* error = nil;
     NSString* source = [NSString stringWithUTF8String:celeg::metal_detail::kInferenceShader];
     id<MTLLibrary> library = [device newLibraryWithSource:source options:nil error:&error];
     if (!library) throw std::runtime_error("Metal matvec shader compilation failed");
-    const char* kernel = nullptr;
-    switch (tensor.type) {
-        case celeg::GgmlType::Q4_0: kernel = "celeg_matvec_q4_0"; break;
-        case celeg::GgmlType::Q4_K: kernel = "celeg_matvec_q4k"; break;
-        case celeg::GgmlType::Q5_K: kernel = "celeg_matvec_q5k"; break;
-        case celeg::GgmlType::Q6_K: kernel = "celeg_matvec_q6k"; break;
-        case celeg::GgmlType::Q8_0: kernel = "celeg_matvec_q8_0"; break;
-        default: throw std::runtime_error("unsupported Metal matvec test type");
+    const char* kernel = requested_kernel;
+    if (!kernel) {
+        switch (tensor.type) {
+            case celeg::GgmlType::Q4_0: kernel = "celeg_matvec_q4_0"; break;
+            case celeg::GgmlType::Q4_K: kernel = "celeg_matvec_q4k"; break;
+            case celeg::GgmlType::Q5_K: kernel = "celeg_matvec_q5k"; break;
+            case celeg::GgmlType::Q6_K: kernel = "celeg_matvec_q6k"; break;
+            case celeg::GgmlType::Q8_0: kernel = "celeg_matvec_q8_0"; break;
+            default: throw std::runtime_error("unsupported Metal matvec test type");
+        }
     }
     id<MTLFunction> function = [library newFunctionWithName:
         [NSString stringWithUTF8String:kernel]];
@@ -122,7 +127,11 @@ std::vector<float> run_matvec(id<MTLDevice> device,
     [encoder setBytes:&rows length:sizeof(rows) atIndex:3];
     [encoder setBytes:&cols length:sizeof(cols) atIndex:4];
     [encoder setBytes:&row_bytes length:sizeof(row_bytes) atIndex:5];
-    [encoder dispatchThreadgroups:MTLSizeMake((rows + 15u) / 16u, 1, 1)
+    if (threadgroup_floats != 0) {
+        [encoder setThreadgroupMemoryLength:threadgroup_floats * sizeof(float) atIndex:0];
+    }
+    [encoder dispatchThreadgroups:MTLSizeMake(
+        (rows + rows_per_threadgroup - 1u) / rows_per_threadgroup, 1, 1)
              threadsPerThreadgroup:MTLSizeMake(128, 1, 1)];
     [encoder endEncoding];
     [command_buffer commit];
@@ -298,7 +307,9 @@ bool check_type(const celeg::GgufFile& file, celeg::GgmlType type,
 }
 
 bool check_matvec(const celeg::GgufFile& file, celeg::GgmlType type,
-                  id<MTLDevice> device) {
+                  id<MTLDevice> device, const char* kernel_name = nullptr,
+                  uint32_t rows_per_threadgroup = 16,
+                  uint32_t threadgroup_floats = 0) {
     for (const std::string& name : file.tensor_names()) {
         const celeg::GgufTensorView tensor = file.tensor(name);
         const celeg::GgmlTypeTrait trait = celeg::ggml_type_trait(type);
@@ -312,7 +323,9 @@ bool check_matvec(const celeg::GgufFile& file, celeg::GgmlType type,
         for (uint32_t index = 0; index < cols; ++index) {
             input[index + 1] = std::sin(static_cast<float>(index + 1) * 0.017f);
         }
-        const std::vector<float> actual = run_matvec(device, tensor, rows, input);
+        const std::vector<float> actual = run_matvec(
+            device, tensor, rows, input, kernel_name,
+            rows_per_threadgroup, threadgroup_floats);
         celeg::GgmlMatrixView matrix;
         matrix.type = type;
         matrix.rows = static_cast<uint32_t>(tensor.shape.at(0));
@@ -331,6 +344,7 @@ bool check_matvec(const celeg::GgufFile& file, celeg::GgmlType type,
             maximum = std::max(maximum, std::abs(reference - actual[row]));
         }
         std::cout << celeg::ggml_type_name(type) << " matvec=" << name
+                  << " kernel=" << (kernel_name ? kernel_name : "default")
                   << " max_error=" << maximum << '\n';
         if (!(maximum < 1.0e-3f)) {
             throw std::runtime_error("Metal quantized matvec differs from FP32 reference");
@@ -456,6 +470,7 @@ int main(int argc, char** argv) {
             celeg::GgmlType::Q8_0};
         int checked = 0;
         int matvec_checked = 0;
+        bool q8_0_m5_matvec_checked = false;
         bool q4_0_matmul_checked = false;
         bool q4k_matmul_checked = false;
         bool q5k_matmul_checked = false;
@@ -482,6 +497,9 @@ int main(int argc, char** argv) {
                 (type == celeg::GgmlType::Q8_0 && type_checked);
             matvec_checked += check_matvec(file, type, device) ? 1 : 0;
         }
+        q8_0_m5_matvec_checked = check_matvec(
+            file, celeg::GgmlType::Q8_0, device,
+            "celeg_matvec_q8_0_m5", 2, 8);
         q4_0_matmul_checked = check_matmul_quantized(
             file, celeg::GgmlType::Q4_0, "celeg_matmul_tensor_q4_0", device);
         q4k_matmul_checked = check_matmul_quantized(
@@ -502,6 +520,8 @@ int main(int argc, char** argv) {
             file, celeg::GgmlType::Q6_K, "celeg_swiglu_matvec_q6k", device) ? 1 : 0;
         swiglu_checked += check_swiglu_matvec(
             file, celeg::GgmlType::Q8_0, "celeg_swiglu_matvec_q8_0_rows8", device) ? 1 : 0;
+        const bool q8_0_m5_swiglu_checked = check_swiglu_matvec(
+            file, celeg::GgmlType::Q8_0, "celeg_swiglu_matvec_q8_0_m5", device);
         if (checked == 0) throw std::runtime_error("cached GGUF has no native Metal test tensor");
         if (matvec_checked == 0) {
             throw std::runtime_error("cached GGUF has no native Metal matvec test tensor");
@@ -518,6 +538,9 @@ int main(int argc, char** argv) {
             swiglu_checked == 0) {
             throw std::runtime_error(
                 "cached GGUF has no native Metal quantized SwiGLU test tensor");
+        }
+        if (q8_0_checked && (!q8_0_m5_matvec_checked || !q8_0_m5_swiglu_checked)) {
+            throw std::runtime_error("cached Q8_0 GGUF did not exercise M5 matvec kernels");
         }
         return 0;
     } catch (const std::exception& error) {

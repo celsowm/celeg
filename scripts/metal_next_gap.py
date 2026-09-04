@@ -43,17 +43,19 @@ def print_matvec_profile(build_dir: pathlib.Path) -> None:
         raise RuntimeError(f"missing kernel benchmark: {binary}")
     result = run([str(binary)], capture=True)
     report = json.loads(result.stdout)
-    peak = float(report["copy_roofline_gb_per_second"])
+    streaming_peak = float(report["copy_streaming_gb_per_second"])
+    hot_peak = float(report["copy_hot_cache_gb_per_second"])
     print("\n=== Metal decode matvec roofline ===")
-    print(f"copy_roofline={peak:.1f} GB/s")
+    print(f"copy_streaming={streaming_peak:.1f} GB/s copy_hot={hot_peak:.1f} GB/s")
     print(f"{'kernel':28s} {'shape':24s} {'ms':>9s} {'GB/s':>9s} {'roof':>8s}")
     for row in report["rows"]:
-        if row.get("section") != "matvec":
+        if not str(row.get("section", "")).startswith("matvec_"):
             continue
         print(
             f"{str(row['kernel']):28s} {str(row['shape']):24s} "
             f"{float(row['ms']):9.4f} {float(row['gb_per_second']):9.1f} "
-            f"{float(row['percent_of_roofline']):7.1f}%"
+            f"{float(row['percent_of_streaming_roofline']):7.1f}% streaming "
+            f"{float(row['percent_of_hot_cache_roofline']):7.1f}% hot"
         )
 
 

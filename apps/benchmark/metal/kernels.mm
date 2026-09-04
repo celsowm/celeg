@@ -24,6 +24,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <iomanip>
 #include <iostream>
 #include <random>
@@ -221,9 +222,15 @@ public:
         id<MTLBuffer> buffer = [device newBufferWithLength:bytes
                                                    options:MTLResourceStorageModeShared];
         auto* bytes_out = static_cast<uint8_t*>(buffer.contents);
-        std::mt19937 generator(12345);
-        for (size_t index = 0; index < bytes; ++index) {
-            bytes_out[index] = static_cast<uint8_t>(generator() & 0xffu);
+        std::mt19937_64 generator(12345);
+        size_t index = 0;
+        for (; index + sizeof(uint64_t) <= bytes; index += sizeof(uint64_t)) {
+            const uint64_t value = generator();
+            std::memcpy(bytes_out + index, &value, sizeof(value));
+        }
+        if (index < bytes) {
+            const uint64_t value = generator();
+            std::memcpy(bytes_out + index, &value, bytes - index);
         }
         return buffer;
     }
@@ -266,6 +273,31 @@ public:
         return samples[samples.size() / 2];
     }
 
+    /// Encodes indexed dispatches so a benchmark can rotate through distinct
+    /// regions instead of repeatedly serving one hot weight matrix.
+    double time_indexed_dispatches(
+            int repetitions, int iterations,
+            void (^encode)(id<MTLComputeCommandEncoder>, int)) {
+        std::vector<double> samples;
+        samples.reserve(static_cast<size_t>(repetitions));
+        for (int repetition = 0; repetition < repetitions + 1; ++repetition) {
+            id<MTLCommandBuffer> command_buffer = [queue commandBuffer];
+            id<MTLComputeCommandEncoder> encoder = [command_buffer computeCommandEncoder];
+            for (int index = 0; index < iterations; ++index) encode(encoder, index);
+            [encoder endEncoding];
+            [command_buffer commit];
+            [command_buffer waitUntilCompleted];
+            if (command_buffer.status != MTLCommandBufferStatusCompleted) {
+                throw std::runtime_error("command buffer failed");
+            }
+            if (repetition == 0) continue;
+            samples.push_back((command_buffer.GPUEndTime - command_buffer.GPUStartTime) *
+                              1000.0 / static_cast<double>(iterations));
+        }
+        std::sort(samples.begin(), samples.end());
+        return samples[samples.size() / 2];
+    }
+
     id<MTLDevice> device = nil;
     id<MTLCommandQueue> queue = nil;
     id<MTLLibrary> library = nil;
@@ -280,21 +312,22 @@ struct Row {
     double gb_per_second = 0.0;
 };
 
-double roofline(Harness& harness) {
-    constexpr size_t kElements = 64u * 1024u * 1024u;
-    id<MTLBuffer> source = harness.zero_buffer(kElements * sizeof(float));
-    id<MTLBuffer> destination = harness.zero_buffer(kElements * sizeof(float));
+double roofline(Harness& harness, size_t elements, int iterations) {
+    id<MTLBuffer> source = harness.random_buffer(elements * sizeof(float));
+    id<MTLBuffer> destination = harness.zero_buffer(elements * sizeof(float));
     id<MTLComputePipelineState> state = harness.pipeline("celeg_copy_batch");
-    const uint32_t count = static_cast<uint32_t>(kElements);
-    const double milliseconds = harness.time_dispatches(5, 1, ^(id<MTLComputeCommandEncoder> encoder) {
-        [encoder setComputePipelineState:state];
-        [encoder setBuffer:source offset:0 atIndex:0];
-        [encoder setBuffer:destination offset:0 atIndex:1];
-        [encoder setBytes:&count length:sizeof(count) atIndex:2];
-        [encoder dispatchThreads:MTLSizeMake(count, 1, 1)
-           threadsPerThreadgroup:MTLSizeMake(state.maxTotalThreadsPerThreadgroup, 1, 1)];
-    });
-    return static_cast<double>(kElements) * sizeof(float) * 2.0 / (milliseconds * 1.0e6);
+    const uint32_t count = static_cast<uint32_t>(elements);
+    const double milliseconds = harness.time_dispatches(
+        5, iterations, ^(id<MTLComputeCommandEncoder> encoder) {
+            [encoder setComputePipelineState:state];
+            [encoder setBuffer:source offset:0 atIndex:0];
+            [encoder setBuffer:destination offset:0 atIndex:1];
+            [encoder setBytes:&count length:sizeof(count) atIndex:2];
+            [encoder dispatchThreads:MTLSizeMake(count, 1, 1)
+               threadsPerThreadgroup:MTLSizeMake(state.maxTotalThreadsPerThreadgroup, 1, 1)];
+        });
+    return static_cast<double>(elements) * sizeof(float) * 2.0 /
+        (milliseconds * 1.0e6);
 }
 
 std::vector<Row> measure_matvec(Harness& harness, bool rows8) {
@@ -340,6 +373,72 @@ std::vector<Row> measure_matvec(Harness& harness, bool rows8) {
             rows.push_back({kernel, shape.label, weight_bytes, milliseconds,
                             static_cast<double>(weight_bytes) / (milliseconds * 1.0e6)});
         }
+    }
+    return rows;
+}
+
+std::vector<Row> measure_matvec_model_sequence(Harness& harness) {
+    constexpr size_t kStreamingBytes = 192u * 1024u * 1024u;
+    constexpr Shape kLayerSequence[] = {
+        {"qkv", 1024, 1024},
+        {"out", 1024, 1024},
+        {"recurrent", 1024, 1024},
+        {"ffn_gate", 6656, 1024},
+        {"ffn_up", 6656, 1024},
+        {"ffn_down", 1024, 6656},
+    };
+    struct Dispatch {
+        size_t offset;
+        size_t bytes;
+        uint32_t rows;
+        uint32_t cols;
+        uint32_t row_bytes;
+    };
+    std::vector<Row> rows;
+    for (const Binding& binding : kBindings) {
+        const celeg::GgmlTypeTrait trait = celeg::ggml_type_trait(binding.type);
+        if (trait.block_size == 0) continue;
+        std::vector<Dispatch> dispatches;
+        size_t total_bytes = 0;
+        while (total_bytes < kStreamingBytes) {
+            for (const Shape& shape : kLayerSequence) {
+                const uint32_t row_bytes =
+                    shape.cols / trait.block_size * trait.type_size;
+                const size_t bytes = static_cast<size_t>(shape.rows) * row_bytes;
+                dispatches.push_back({total_bytes, bytes, shape.rows, shape.cols, row_bytes});
+                total_bytes += bytes;
+            }
+        }
+        id<MTLBuffer> weights = harness.random_buffer(total_bytes);
+        id<MTLBuffer> input = harness.float_buffer(kPrefillIntermediate);
+        id<MTLBuffer> output = harness.zero_buffer(65536u * sizeof(float));
+        id<MTLComputePipelineState> state = harness.pipeline(binding.matvec);
+        const int iterations = static_cast<int>(dispatches.size());
+        const double milliseconds = harness.time_indexed_dispatches(
+            5, iterations, ^(id<MTLComputeCommandEncoder> encoder, int index) {
+                const Dispatch& dispatch = dispatches[static_cast<size_t>(index)];
+                [encoder setComputePipelineState:state];
+                [encoder setBuffer:weights offset:dispatch.offset atIndex:0];
+                [encoder setBuffer:input offset:0 atIndex:1];
+                [encoder setBuffer:output offset:0 atIndex:2];
+                [encoder setBytes:&dispatch.rows length:sizeof(dispatch.rows) atIndex:3];
+                [encoder setBytes:&dispatch.cols length:sizeof(dispatch.cols) atIndex:4];
+                [encoder setBytes:&dispatch.row_bytes
+                           length:sizeof(dispatch.row_bytes) atIndex:5];
+                if (binding.threadgroup_floats != 0) {
+                    [encoder setThreadgroupMemoryLength:binding.threadgroup_floats *
+                                                       sizeof(float)
+                                                atIndex:0];
+                }
+                [encoder dispatchThreadgroups:MTLSizeMake(
+                    (dispatch.rows + binding.rows_per_threadgroup - 1u) /
+                        binding.rows_per_threadgroup, 1, 1)
+                        threadsPerThreadgroup:MTLSizeMake(binding.threads, 1, 1)];
+            });
+        const size_t average_bytes = total_bytes / dispatches.size();
+        rows.push_back({binding.matvec, "lfm25_layer_cycle", average_bytes,
+                        milliseconds, static_cast<double>(average_bytes) /
+                            (milliseconds * 1.0e6)});
     }
     return rows;
 }
@@ -636,7 +735,8 @@ std::vector<Row> measure_attention(Harness& harness) {
     return rows;
 }
 
-void emit(const std::vector<Row>& rows, double peak, const char* section, bool& first) {
+void emit(const std::vector<Row>& rows, double streaming_peak, double hot_peak,
+          const char* section, bool& first) {
     for (const Row& row : rows) {
         if (!first) std::cout << ",\n";
         first = false;
@@ -644,8 +744,12 @@ void emit(const std::vector<Row>& rows, double peak, const char* section, bool& 
                   << "\", \"shape\": \"" << row.shape << "\", \"bytes\": " << row.bytes
                   << ", \"ms\": " << std::setprecision(6) << row.milliseconds
                   << ", \"gb_per_second\": " << row.gb_per_second
-                  << ", \"percent_of_roofline\": "
-                  << (peak > 0.0 ? row.gb_per_second * 100.0 / peak : 0.0) << "}";
+                  << ", \"percent_of_streaming_roofline\": "
+                  << (streaming_peak > 0.0
+                        ? row.gb_per_second * 100.0 / streaming_peak : 0.0)
+                  << ", \"percent_of_hot_cache_roofline\": "
+                  << (hot_peak > 0.0 ? row.gb_per_second * 100.0 / hot_peak : 0.0)
+                  << "}";
     }
 }
 
@@ -654,27 +758,37 @@ void emit(const std::vector<Row>& rows, double peak, const char* section, bool& 
 int main() {
     try {
         Harness harness;
-        const double peak = roofline(harness);
+        constexpr size_t kHotElements = 1u * 1024u * 1024u;
+        constexpr size_t kStreamingElements = 64u * 1024u * 1024u;
+        const double hot_peak = roofline(harness, kHotElements, 32);
+        const double streaming_peak = roofline(harness, kStreamingElements, 1);
         const std::vector<Row> matvec = measure_matvec(harness, false);
         const std::vector<Row> matvec_rows8 = measure_matvec(harness, true);
+        const std::vector<Row> matvec_model_sequence =
+            measure_matvec_model_sequence(harness);
         const std::vector<Row> matmul = measure_matmul(harness);
         const auto matmul_sweep = measure_matmul_sweep(harness);
         const std::vector<Row> matmul_large_tile_control = measure_matmul_llama_tile(harness);
         const std::vector<Row> prefill_aux = measure_prefill_aux(harness);
         const std::vector<Row> attention = measure_attention(harness);
         std::cout << "{\n  \"device\": \"" << ns_string(harness.device.name) << "\",\n"
-                  << "  \"copy_roofline_gb_per_second\": " << std::setprecision(6) << peak
+                  << "  \"copy_hot_cache_gb_per_second\": " << std::setprecision(6)
+                  << hot_peak
+                  << ",\n  \"copy_streaming_gb_per_second\": " << streaming_peak
                   << ",\n  \"rows\": [\n";
         bool first = true;
-        emit(matvec, peak, "matvec_rows4", first);
-        emit(matvec_rows8, peak, "matvec_rows8_candidate", first);
-        emit(matmul, peak, "matmul", first);
+        emit(matvec, streaming_peak, hot_peak, "matvec_rows4", first);
+        emit(matvec_rows8, streaming_peak, hot_peak, "matvec_rows8_candidate", first);
+        emit(matvec_model_sequence, streaming_peak, hot_peak,
+             "matvec_model_sequence_streaming", first);
+        emit(matmul, streaming_peak, hot_peak, "matmul", first);
         for (const auto& [geometry, rows] : matmul_sweep) {
-            emit(rows, peak, ("matmul_" + geometry).c_str(), first);
+            emit(rows, streaming_peak, hot_peak, ("matmul_" + geometry).c_str(), first);
         }
-        emit(matmul_large_tile_control, peak, "matmul_128x256_control", first);
-        emit(prefill_aux, peak, "prefill_aux", first);
-        emit(attention, peak, "attention", first);
+        emit(matmul_large_tile_control, streaming_peak, hot_peak,
+             "matmul_128x256_control", first);
+        emit(prefill_aux, streaming_peak, hot_peak, "prefill_aux", first);
+        emit(attention, streaming_peak, hot_peak, "attention", first);
         std::cout << "\n  ]\n}\n";
         return 0;
     } catch (const std::exception& error) {

@@ -6,7 +6,6 @@ import argparse
 import json
 import os
 import pathlib
-import re
 import subprocess
 import sys
 
@@ -45,9 +44,6 @@ def benchmark(build_dir: pathlib.Path, output: pathlib.Path, *, fast: bool) -> d
 def prefill_dispatch_profile(
     build_dir: pathlib.Path, checkpoint: pathlib.Path, *, fast: bool
 ) -> list[tuple[str, int]]:
-    env = policy_env()
-    env["CELEG_METAL_DISPATCH_PROFILE"] = "1"
-    env.pop("CELEG_METAL_GPU_PROFILE", None)
     binary = build_dir / "celeg-metal-bench"
     result = subprocess.run([
         str(binary),
@@ -58,15 +54,16 @@ def prefill_dispatch_profile(
         "--numerical-policy", "fast" if fast else "strict",
         "--warmup", "0",
         "--repetitions", "1",
-    ], cwd=ROOT, env=env, text=True, capture_output=True, check=False)
+        "--profile-dispatches", "counts",
+    ], cwd=ROOT, env=policy_env(), text=True, capture_output=True, check=False)
     if result.returncode != 0:
         raise RuntimeError(result.stdout + result.stderr)
 
-    histogram: dict[str, int] = {}
-    for line in result.stderr.splitlines():
-        match = re.fullmatch(r"\s{2}(\S+)=(\d+)", line)
-        if match:
-            histogram[match.group(1)] = histogram.get(match.group(1), 0) + int(match.group(2))
+    report = json.loads(result.stdout)
+    histogram = {
+        str(entry["kernel"]): int(entry["count"])
+        for entry in report["profile_dispatches"]["prefill"]["kernels"]
+    }
     return sorted(histogram.items(), key=lambda item: (-item[1], item[0]))
 
 

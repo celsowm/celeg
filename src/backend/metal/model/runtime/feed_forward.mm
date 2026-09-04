@@ -38,6 +38,7 @@ void MetalModel::Impl::encode_dense_feed_forward_batch(
         ? "celeg_swiglu_batch_2d_relaxed"
         : "celeg_swiglu_batch_2d";
     id<MTLComputePipelineState> swiglu = pipeline(swiglu_kernel);
+    encoder = compute_encoder(encoder);
     [encoder setComputePipelineState:swiglu];
     const NSUInteger threads_x = std::min<NSUInteger>(
         intermediate, swiglu.maxTotalThreadsPerThreadgroup);

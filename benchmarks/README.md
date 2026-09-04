@@ -208,6 +208,27 @@ llama.cpp commit and binary SHA-256, both model and executable paths, GGUF
 SHA-256, macOS version/build, SDK, backend/device description, commands, and
 sample order.
 
+llama.cpp prefill, decode, and combined timings come from its separate
+`(p,0)`, `(0,g)`, and `(p,g)` benchmark rows. Decode is never inferred by
+subtracting two independently timed rows, which is unstable when eight-token
+decode is smaller than ordinary prefill variance.
+
+Dispatch attribution is emitted as structured JSON by the benchmark binary:
+
+```bash
+celeg-metal-bench --model MODEL.gguf --context 640 --prompt-tokens 512 \
+  --decode-tokens 8 --numerical-policy fast --profile-dispatches counts
+celeg-metal-bench --model MODEL.gguf --context 640 --prompt-tokens 512 \
+  --decode-tokens 8 --numerical-policy fast --profile-dispatches gpu-stage
+```
+
+Use `counts` for preflight because it does not change the production schedule.
+Use `gpu-stage` only for diagnosis: M5 supports timestamp samples at encoder
+stage boundaries, so this mode creates one compute encoder per dispatch and
+reports the resulting schedule distortion alongside total, median, p95, and
+phase share for every kernel. There are no environment-variable aliases for
+either mode.
+
 The complete 16-cell gate requires per-cell prefill/decode median parity,
 combined median and first-quartile parity, and at least `1.10x` geometric-mean
 combined speedup. A complete matrix returns exit code `2` when this performance

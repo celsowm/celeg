@@ -149,7 +149,10 @@ MetalModel::Impl::Linear MetalModel::Impl::load_linear(TensorRole role, int laye
     const TensorRequest& request = request_for(model.weight_plan.requests, role, layer);
     if (!request.source_name) throw std::runtime_error("Metal matrix request was not resolved");
     const std::string& name = *request.source_name;
-    return load_linear_source(name, rows, cols);
+    Linear result = load_linear_source(name, rows, cols);
+    result.role = role;
+    result.layer = layer;
+    return result;
 }
 
 MetalModel::Impl::Linear MetalModel::Impl::load_linear_source(const std::string& name,

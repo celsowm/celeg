@@ -355,4 +355,3 @@ kernel void celeg_attention_batch(device const float* query [[buffer(0)]],
                                                     0u, page_tokens, scale),
                          CelegAttentionNoBias{}, shared, lane, simd, simd_count);
 }
-
