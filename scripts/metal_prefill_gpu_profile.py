@@ -33,8 +33,14 @@ def resolve_models(model_dir: pathlib.Path, requested: list[str] | None) -> list
 
 
 def family(name: str) -> str:
+    if "[ffn_gate " in name:
+        return "dense FFN gate"
+    if "[ffn_up " in name:
+        return "dense FFN up"
+    if "[ffn_down " in name:
+        return "dense FFN down"
     if name.startswith("celeg_matmul_tensor_f16") or name.startswith("celeg_matmul_tensor_bf16"):
-        return "dense TensorOps"
+        return "dense non-FFN"
     if name.startswith("celeg_matmul_tensor_"):
         return "quantized TensorOps"
     if "attention" in name:
@@ -130,14 +136,14 @@ def print_report(model: pathlib.Path, report: dict[str, object], top: int) -> No
 
     print("\n  hottest kernels")
     print(
-        f"    {'kernel':<52} {'ms/run':>9} {'phase':>8} {'count':>8} "
+        f"    {'kernel':<72} {'ms/run':>9} {'phase':>8} {'count':>8} "
         f"{'median':>9} {'p95':>9}"
     )
     for name, total_ms, phase_percent, count_per_run, median_ms, p95_ms in sorted(
         normalized, key=lambda item: (-item[1], item[0])
     )[:top]:
         print(
-            f"    {name:<52} {total_ms:9.3f} {phase_percent:7.2f}% "
+            f"    {name:<72} {total_ms:9.3f} {phase_percent:7.2f}% "
             f"{count_per_run:8.1f} {median_ms:9.4f} {p95_ms:9.4f}"
         )
     print()
