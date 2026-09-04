@@ -2,7 +2,9 @@
  * @brief Dense TensorOps fast path with specialized prompt tiles.
  *
  * This source reuses the shared tile constants and MPP imports from the
- * strict TensorOps source. The host selects it through MetalNumericalPolicy::Fast.
+ * strict TensorOps source. The host selects it only through
+ * MetalNumericalPolicy::Fast, so the TensorOps descriptor enables reduced
+ * precision just like the quantized fast families and llama.cpp mul_mm.
  */
 
 template <typename T, int TileTokens>
@@ -29,7 +31,7 @@ void celeg_matmul_tensor_dense_relaxed_impl(
 
     matmul2d<
         matmul2d_descriptor(TileTokens, kCelegTileRows, dynamic_extent,
-                            false, true, false,
+                            false, true, true,
                             matmul2d_descriptor::mode::multiply_accumulate),
         execution_simdgroups<4>> operation;
     auto input_shape = tensor(
