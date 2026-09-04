@@ -33,6 +33,8 @@ inline void celeg_dense_matvec_vector_core(
     const uint first_row = group * 2u;
     if (first_row >= rows) return;
 
+    const uint values_per_lane = VectorsPerLane * 4u;
+    if ((cols % values_per_lane) != 0u) return;
     const uint vectors_per_row = cols / 4u;
     const uint chunks = vectors_per_row / VectorsPerLane;
     float sums[2] = {0.0f, 0.0f};
@@ -48,38 +50,6 @@ inline void celeg_dense_matvec_vector_core(
             if (first_row + 1u < rows) {
                 const size_t row1 = static_cast<size_t>(first_row + 1u) * vectors_per_row + vector;
                 sums[1] += dot(celeg_decode_matvec_weights(weights[row1]), activation);
-            }
-        }
-    }
-
-    // The benchmark shapes are multiples of 8, so vec4/vec8 cover K exactly.
-    // Keep a scalar tail here so the candidate remains correct for arbitrary
-    // dense shapes if the harness is extended later.
-    const uint covered = chunks * VectorsPerLane * 4u;
-    for (uint column = covered + simd * 32u + lane;
-         column < cols; column += 128u) {
-        const float activation = reinterpret_cast<device const float*>(input)[column];
-        const size_t row0 = static_cast<size_t>(first_row) * cols + column;
-        if constexpr (is_same_v<Packed, half4>) {
-            const device half* scalar_weights =
-                reinterpret_cast<device const half*>(weights);
-            sums[0] += static_cast<float>(scalar_weights[row0]) * activation;
-            if (first_row + 1u < rows) {
-                sums[1] += static_cast<float>(
-                    scalar_weights[static_cast<size_t>(first_row + 1u) * cols + column]) *
-                    activation;
-            }
-        } else {
-            const device ushort* scalar_weights =
-                reinterpret_cast<device const ushort*>(weights);
-            const auto bf16 = [](ushort bits) {
-                return as_type<float>(static_cast<uint>(bits) << 16);
-            };
-            sums[0] += bf16(scalar_weights[row0]) * activation;
-            if (first_row + 1u < rows) {
-                sums[1] += bf16(
-                    scalar_weights[static_cast<size_t>(first_row + 1u) * cols + column]) *
-                    activation;
             }
         }
     }
