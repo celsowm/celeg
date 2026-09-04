@@ -1,7 +1,8 @@
 // Benchmark-only dense TensorOps candidate matching llama.cpp's dense weight staging.
 // Geometry: 64 output rows x 128 prompt tokens x K32, relaxed precision.
-// Each of the 128 threads loads one contiguous 16-element weight chunk into
-// threadgroup memory instead of staging scalar elements independently.
+// Each of the 128 threads stages one contiguous 16-element / 32-byte weight
+// chunk with raw vector loads, avoiding scalar element copies and remaining
+// portable across Metal SDKs that expose scalar bfloat but not bfloat4x4.
 
 constant int kCelegDenseStage16TileRows = 64;
 constant int kCelegDenseStage16TileTokens = 128;
@@ -11,7 +12,7 @@ constant int kCelegDenseStage16Chunk = 16;
 constant int kCelegDenseStage16ChunksPerRow =
     kCelegDenseStage16TileK / kCelegDenseStage16Chunk;
 
-template <typename T, typename Packed>
+template <typename T>
 void celeg_matmul_tensor_dense_stage16_impl(
         device const T* weights,
         device float* input,
@@ -70,14 +71,16 @@ void celeg_matmul_tensor_dense_stage16_impl(
 
             if (source_row < static_cast<int>(output_rows) &&
                 source_col + kCelegDenseStage16Chunk <= static_cast<int>(cols)) {
-                device const Packed* packed_source =
-                    (device const Packed*)(weights +
+                // 16 F16/BF16 values are exactly 32 bytes. Copy them as two
+                // 16-byte uint4 vectors so BF16 remains bit-identical and the
+                // compiler can issue coalesced vector device/threadgroup IO.
+                device const uint4* packed_source =
+                    reinterpret_cast<device const uint4*>(weights +
                         static_cast<size_t>(source_row) * cols + source_col);
-                const Packed packed = *packed_source;
-                #pragma unroll
-                for (int index = 0; index < kCelegDenseStage16Chunk; ++index) {
-                    weights_tile[destination + index] = packed[index / 4][index % 4];
-                }
+                threadgroup uint4* packed_destination =
+                    reinterpret_cast<threadgroup uint4*>(weights_tile + destination);
+                packed_destination[0] = packed_source[0];
+                packed_destination[1] = packed_source[1];
             } else {
                 #pragma unroll
                 for (int index = 0; index < kCelegDenseStage16Chunk; ++index) {
@@ -107,7 +110,7 @@ void celeg_matmul_tensor_dense_stage16_impl(
     result.store(output_tile);
 }
 
-#define CELEG_DENSE_STAGE16_MATMUL(NAME, TYPE, PACKED) \
+#define CELEG_DENSE_STAGE16_MATMUL(NAME, TYPE) \
 kernel void NAME( \
         device const TYPE* weights [[buffer(0)]], \
         device float* input [[buffer(1)]], \
@@ -119,12 +122,12 @@ kernel void NAME( \
         threadgroup TYPE* weights_tile [[threadgroup(0)]], \
         uint thread_index [[thread_index_in_threadgroup]], \
         uint2 grid [[threadgroup_position_in_grid]]) { \
-    celeg_matmul_tensor_dense_stage16_impl<TYPE, PACKED>( \
+    celeg_matmul_tensor_dense_stage16_impl<TYPE>( \
         weights, input, output, rows, cols, output_rows, output_stride, \
         weights_tile, thread_index, grid); \
 }
 
-CELEG_DENSE_STAGE16_MATMUL(celeg_matmul_tensor_f16_fast_stage16, half, half4x4)
-CELEG_DENSE_STAGE16_MATMUL(celeg_matmul_tensor_bf16_fast_stage16, bfloat, bfloat4x4)
+CELEG_DENSE_STAGE16_MATMUL(celeg_matmul_tensor_f16_fast_stage16, half)
+CELEG_DENSE_STAGE16_MATMUL(celeg_matmul_tensor_bf16_fast_stage16, bfloat)
 
 #undef CELEG_DENSE_STAGE16_MATMUL
