@@ -78,18 +78,28 @@ public:
                 std::istreambuf_iterator<char>(stream), std::istreambuf_iterator<char>());
         }
         const auto tokenizer_config = root / "tokenizer_config.json";
-        if (std::filesystem::is_regular_file(tokenizer_config) &&
-            !result.metadata.contains("chat_template") &&
-            !result.metadata.contains("tokenizer.chat_template")) {
-            std::ifstream stream(tokenizer_config, std::ios::binary);
-            if (stream) {
-                try {
-                    const auto tok_json = Json::parse_file(tokenizer_config.string());
-                    if (tok_json.contains("chat_template")) {
-                        result.metadata.values["tokenizer.chat_template"] = tok_json["chat_template"].as_string();
-                    }
-                } catch (...) {
+        if (std::filesystem::is_regular_file(tokenizer_config)) {
+            const bool want_chat_template =
+                !result.metadata.contains("chat_template") &&
+                !result.metadata.contains("tokenizer.chat_template");
+            try {
+                const auto tok_json = Json::parse_file(tokenizer_config.string());
+                if (want_chat_template && tok_json.contains("chat_template")) {
+                    result.metadata.values["tokenizer.chat_template"] =
+                        tok_json["chat_template"].as_string();
                 }
+                // Whether the checkpoint's own tokenizer prepends BOS. Read
+                // unconditionally: unlike chat_template it has no other source,
+                // and a raw prompt that assumes BOS corrupts checkpoints that
+                // set this false -- Granite 4.1 uses <|end_of_text|> as both BOS
+                // and EOS, so an assumed BOS is an end-of-text marker in
+                // position 0.
+                if (tok_json.contains("add_bos_token") &&
+                    tok_json["add_bos_token"].is_bool()) {
+                    result.metadata.values["tokenizer.add_bos_token"] =
+                        tok_json["add_bos_token"].as_bool();
+                }
+            } catch (...) {
             }
         }
         // generation_config.json is HF's authoritative source for the token

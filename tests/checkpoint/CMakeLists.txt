@@ -16,3 +16,11 @@ endforeach()
 
 target_include_directories(gguf_repository_test PRIVATE
     src/checkpoint/repositories/detail)
+
+# Needs apps/run_preparation.cpp for the raw-prompt BOS policy it asserts.
+add_executable(tokenizer_bos_policy_test
+    tests/checkpoint/tokenizer_bos_policy_test.cpp
+    apps/run_preparation.cpp)
+target_include_directories(tokenizer_bos_policy_test PRIVATE include src tests)
+target_link_libraries(tokenizer_bos_policy_test PRIVATE celeg_base)
+add_test(NAME tokenizer_bos_policy_test COMMAND tokenizer_bos_policy_test)

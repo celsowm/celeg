@@ -21,6 +21,26 @@ bool is_gguf_repo(std::string_view repo, std::string_view quant_tag) {
 
 }
 
+/// Whether a raw prompt should be prefixed with the checkpoint's BOS token.
+///
+/// Safetensors checkpoints declare this as `add_bos_token` in
+/// tokenizer_config.json and GGUF as `tokenizer.ggml.add_bos_token`; both mean
+/// the same thing, so read whichever the checkpoint provides rather than
+/// assuming. Assuming BOS silently corrupts every checkpoint that sets it
+/// false and whose BOS doubles as its end-of-text marker: ibm-granite/
+/// granite-4.1-3b uses <|end_of_text|> for both, so an assumed BOS asks the
+/// model to continue past the end of a document and it degenerates into a
+/// single repeated token.
+///
+/// Default to true when the checkpoint is silent, matching Hugging Face's own
+/// default for tokenizers that do not carry the field.
+bool raw_prompt_takes_bos(const CheckpointMetadata& metadata) {
+    if (metadata.contains("tokenizer.ggml.add_bos_token")) {
+        return metadata.boolean_or("tokenizer.ggml.add_bos_token", true);
+    }
+    return metadata.boolean_or("tokenizer.add_bos_token", true);
+}
+
 void assign_model_or_repo_token(const std::string& token, std::string& model,
                                 std::string& repo) {
     if (std::filesystem::exists(token)) {
@@ -77,7 +97,11 @@ PreparedRun prepare_run(const RunInputs& inputs, bool resolve_chat) {
 
 std::vector<std::int32_t> prepare_prompt(const RunInputs& inputs,
                                          const PreparedRun& prepared) {
-    if (inputs.raw_prompt) return prepared.tokenizer->encode(inputs.prompt, true);
+    if (inputs.raw_prompt) {
+        return prepared.tokenizer->encode(
+            inputs.prompt,
+            raw_prompt_takes_bos(prepared.bootstrap.checkpoint.metadata));
+    }
     if (!prepared.chat_template) {
         throw std::logic_error("chat prompt requested without a resolved template");
     }

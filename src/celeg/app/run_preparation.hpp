@@ -43,6 +43,12 @@ struct PreparedRun {
 PreparedRun prepare_run(const RunInputs& inputs, bool resolve_chat_template = true);
 std::vector<std::int32_t> prepare_prompt(const RunInputs& inputs,
                                          const PreparedRun& prepared);
+
+// Whether a raw prompt should be prefixed with the checkpoint's BOS token.
+// Safetensors declares this as `add_bos_token` in tokenizer_config.json and
+// GGUF as `tokenizer.ggml.add_bos_token`; true when the checkpoint is silent,
+// matching Hugging Face's default for tokenizers that omit the field.
+bool raw_prompt_takes_bos(const CheckpointMetadata& metadata);
 GenerationConfig generation_config(const RunInputs& inputs);
 
 // Assigns a bare CLI token (no --model/--repo given) to `model` when it names
