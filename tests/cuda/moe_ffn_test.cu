@@ -185,6 +185,7 @@ int main() {
         cfg.routed_scaling_factor = 1.0f;
 
         celeg::CudaStream stream;
+        celeg::CublasHandle cublas(stream.get());
 
         celeg::DeviceBuffer<float> d_hidden(p.rows * p.hidden);
         celeg::DeviceBuffer<float> d_router(static_cast<size_t>(p.experts) * p.hidden);
@@ -205,7 +206,7 @@ int main() {
         rdev.routing_weights = d_wts.data();
         rdev.rows = p.rows;
         rdev.hidden_dim = p.hidden;
-        celeg::launch_moe_router(rdev, cfg, d_scratch.data(), stream.get());
+        celeg::launch_moe_router(rdev, cfg, d_scratch.data(), cublas.get(), stream.get());
         CELEG_CUDA(cudaStreamSynchronize(stream.get()));
 
         std::vector<int> sel_gpu(static_cast<size_t>(p.rows) * p.K);

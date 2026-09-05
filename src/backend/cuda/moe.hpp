@@ -17,6 +17,10 @@ using __nv_bfloat16 = __opencode_bf16;
 using cudaStream_t = struct CUstream_st*;
 #endif
 
+/// Declared the same way as cudaStream_t above so this header stays includable
+/// from non-CUDA translation units without pulling in cublas_v2.h.
+using cublasHandle_t = struct cublasContext*;
+
 namespace celeg {
 
 #if defined(__CUDACC__)
@@ -57,9 +61,14 @@ struct MoeRouterDevice {
     int hidden_dim = 0;
 };
 
+/// `cublas` must already be bound to `stream` and must outlive the call. The
+/// router runs inside the captured decode graph, and creating a cuBLAS handle
+/// under an active stream capture fails with CUBLAS_STATUS_NOT_INITIALIZED, so
+/// the caller owns the handle rather than this function.
 void launch_moe_router(const MoeRouterDevice& device,
                        const MoeRouterConfig& cfg,
                        float* scratch_logits,
+                       cublasHandle_t cublas,
                        cudaStream_t stream);
 
 void compute_moe_router(const std::vector<float>& hidden,

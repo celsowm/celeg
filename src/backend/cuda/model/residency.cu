@@ -213,7 +213,8 @@ void CudaCompiledModel::run_mlp_moe_decode(const LayerCommon& common_layer,
     router.routing_weights = workspace_.moe_routing_w_.data();
     router.rows = 1;
     router.hidden_dim = resources_.program_.hidden;
-    launch_moe_router(router, cfg, workspace_.moe_router_scratch_.data(), stream_.get());
+    launch_moe_router(router, cfg, workspace_.moe_router_scratch_.data(),
+                      gemm_->cublas().get(), stream_.get());
     CELEG_CUDA(cudaEventRecord(workspace_.router_done_event_.get(), stream_.get()));
 
     resources_.weights_->residency_coordinator->ensure(ExpertResidencyRequest{
@@ -303,7 +304,8 @@ void CudaCompiledModel::run_mlp_moe_prefill(const LayerCommon& common_layer, int
     router.routing_weights = workspace_.moe_pf_routing_w_.data();
     router.rows = rows;
     router.hidden_dim = resources_.program_.hidden;
-    launch_moe_router(router, cfg, workspace_.moe_pf_router_scratch_.data(), stream_.get());
+    launch_moe_router(router, cfg, workspace_.moe_pf_router_scratch_.data(),
+                      gemm_->cublas().get(), stream_.get());
     CELEG_CUDA(cudaEventRecord(workspace_.router_done_event_.get(), stream_.get()));
 
     resources_.weights_->residency_coordinator->ensure(ExpertResidencyRequest{

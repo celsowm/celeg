@@ -150,6 +150,7 @@ __global__ void moe_router_kernel(const float* expert_bias,
 void launch_moe_router(const MoeRouterDevice& device,
                        const MoeRouterConfig& cfg,
                        float* scratch_logits,
+                       cublasHandle_t cublas,
                        cudaStream_t stream) {
     if (cfg.num_experts <= 0 || cfg.experts_per_token <= 0 ||
         cfg.experts_per_token > cfg.num_experts) {
@@ -161,13 +162,15 @@ void launch_moe_router(const MoeRouterDevice& device,
     if (device.rows <= 0 || device.hidden_dim <= 0) {
         throw std::invalid_argument("invalid MoE router dimensions");
     }
+    if (cublas == nullptr) {
+        throw std::invalid_argument("MoE router requires a cuBLAS handle");
+    }
 
     const int E = cfg.num_experts;
-    CublasHandle cublas(stream);
     const float alpha = 1.0f;
     const float beta = 0.0f;
     CELEG_CUBLAS(cublasSgemm(
-        cublas.get(), CUBLAS_OP_T, CUBLAS_OP_N,
+        cublas, CUBLAS_OP_T, CUBLAS_OP_N,
         E, device.rows, device.hidden_dim,
         &alpha, device.router_weight, device.hidden_dim,
         device.hidden_data, device.hidden_dim,

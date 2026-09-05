@@ -40,6 +40,7 @@ int main() {
         build_problem(rows, hidden, experts, hv, rw, bias);
 
         celeg::CudaStream stream;
+        celeg::CublasHandle cublas(stream.get());
 
         celeg::DeviceBuffer<float> d_hidden(rows * hidden);
         celeg::DeviceBuffer<float> d_router(static_cast<size_t>(experts) * hidden);
@@ -66,7 +67,7 @@ int main() {
             dev.rows = rows;
             dev.hidden_dim = hidden;
 
-            celeg::launch_moe_router(dev, cfg, d_scratch.data(), stream.get());
+            celeg::launch_moe_router(dev, cfg, d_scratch.data(), cublas.get(), stream.get());
             CELEG_CUDA(cudaStreamSynchronize(stream.get()));
 
             std::vector<int> sel_gpu(static_cast<size_t>(rows) * K);
@@ -181,7 +182,7 @@ int main() {
             dev.routing_weights = dw1.data();
             dev.rows = R1;
             dev.hidden_dim = H1;
-            celeg::launch_moe_router(dev, cfg, dscr1.data(), stream.get());
+            celeg::launch_moe_router(dev, cfg, dscr1.data(), cublas.get(), stream.get());
             CELEG_CUDA(cudaStreamSynchronize(stream.get()));
 
             std::vector<int> sg(static_cast<size_t>(R1) * K1);
@@ -231,7 +232,7 @@ int main() {
             dev.routing_weights = dw2.data();
             dev.rows = R2;
             dev.hidden_dim = H2;
-            celeg::launch_moe_router(dev, cfg, dscr2.data(), stream.get());
+            celeg::launch_moe_router(dev, cfg, dscr2.data(), cublas.get(), stream.get());
             CELEG_CUDA(cudaStreamSynchronize(stream.get()));
 
             std::vector<int> sg(static_cast<size_t>(R2) * K2);

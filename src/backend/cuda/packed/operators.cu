@@ -683,7 +683,8 @@ void PackedMoeExecutor::run(
     router.routing_weights = w.moe_routing_w.data();
     router.rows = rows;
     router.hidden_dim = context.program.hidden;
-    launch_moe_router(router, cfg, w.moe_router_scratch.data(), w.stream.get());
+    launch_moe_router(router, cfg, w.moe_router_scratch.data(),
+                      w.cublas.get(), w.stream.get());
 
     if (batch_models && !batch_models->empty() && layer_index >= 0) {
         const PackedSessionContext& session = batch_models->front();
