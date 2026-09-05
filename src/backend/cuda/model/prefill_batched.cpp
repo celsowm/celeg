@@ -50,6 +50,22 @@ void debug_layer_stats(CudaCompiledModel& model, int layer_index, int rows,
     }
     fprintf(stderr, "[cuda layer %d %s] norm=%.4f last_row=%.4f max=%.4f bad=%d\n",
             layer_index, stage, std::sqrt(sq), std::sqrt(last_sq), mx, bad ? 1 : 0);
+
+    /// Norms alone cannot distinguish "wrong magnitude" from "wrong direction",
+    /// so mirror the CPU backend's CELEG_DEBUG_HIDDEN_DIR hook and write the
+    /// last row out for an elementwise comparison against a reference run.
+    const char* dump_dir = getenv("CELEG_DEBUG_HIDDEN_DIR");
+    if (!dump_dir) return;
+    std::vector<float> row(static_cast<size_t>(hidden));
+    for (int i = 0; i < hidden; ++i) {
+        row[static_cast<size_t>(i)] = __bfloat162float(host[last_row_begin + static_cast<size_t>(i)]);
+    }
+    char path[512];
+    snprintf(path, sizeof(path), "%s/cuda_layer%d_%s.f32", dump_dir, layer_index, stage);
+    if (FILE* out = fopen(path, "wb")) {
+        fwrite(row.data(), sizeof(float), row.size(), out);
+        fclose(out);
+    }
 }
 
 void run_mixer(
