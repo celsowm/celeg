@@ -43,7 +43,8 @@ if(TARGET celeg_cuda_backend)
     add_executable(cuda_factorized_attention_binding_test
         tests/model/cuda_factorized_attention_binding_test.cpp)
     target_include_directories(cuda_factorized_attention_binding_test PRIVATE
-        include src tests src/backend/cuda src/backend/cuda/model)
+        include src tests src/backend/cuda src/backend/cuda/kernels
+        src/backend/cuda/model)
     target_link_libraries(cuda_factorized_attention_binding_test PRIVATE
         celeg_cuda_backend Threads::Threads)
     add_test(NAME cuda_factorized_attention_binding_test
@@ -59,7 +60,8 @@ if(TARGET celeg_cuda_backend)
 
     add_executable(expert_weight_test tests/model/expert_weight_test.cpp)
     target_include_directories(expert_weight_test PRIVATE
-        include src tests src/backend/cuda src/backend/cuda/model)
+        include src tests src/backend/cuda src/backend/cuda/kernels
+        src/backend/cuda/model)
     target_link_libraries(expert_weight_test PRIVATE celeg_cuda_backend)
     if(CELEG_RUN_CUDA_TESTS)
         add_test(NAME expert_weight_test COMMAND expert_weight_test)

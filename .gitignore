@@ -28,6 +28,8 @@ model/
 !include/celeg/model/**
 !include/celeg/detail/model/
 !include/celeg/detail/model/**
+!tests/model/
+!tests/model/**
 
 # Third-party sources cloned/built locally for reference benchmarking
 # (e.g. llama.cpp). Never committed. Benchmark model weights are not stored
