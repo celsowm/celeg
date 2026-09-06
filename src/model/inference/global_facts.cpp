@@ -195,7 +195,8 @@ void initialize_graph(CanonicalInferenceContext& context) {
             semantic_layer.feed_forward = DenseFeedForwardSpec{
                 context.intermediate_sizes.at(
                     static_cast<size_t>(layer)),
-                ActivationKind::SwiGLU};
+                context.input.metadata.core.feed_forward_activation.value_or(
+                    ActivationKind::SwiGLU)};
         }
     }
 }

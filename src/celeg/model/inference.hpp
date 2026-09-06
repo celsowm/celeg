@@ -209,6 +209,10 @@ struct CoreModelFacts {
     std::optional<int> pad_token_id;
     std::optional<bool> tied_embeddings;
     std::optional<bool> feed_forward_auto_adjust;
+    /// Gated feed-forward activation, from the checkpoint's hidden_act /
+    /// hidden_activation. Absent when the checkpoint names none, in which case
+    /// the dense feed-forward falls back to SwiGLU.
+    std::optional<ActivationKind> feed_forward_activation;
 };
 
 /// Facts governing attention layer geometry, normalization, and positional encoding.

@@ -271,6 +271,42 @@ std::optional<T> aliases(const CheckpointMetadata& metadata,
     return result;
 }
 
+/// The checkpoint's gated feed-forward activation, from hidden_act /
+/// hidden_activation. Hugging Face names the elementwise function, and for a
+/// gated MLP that determines the gate: silu gives SwiGLU, the tanh-approximated
+/// GELUs give GeGLU. Absent when the checkpoint names none; an unrecognized
+/// name is a hard failure rather than a silent fallback, because running the
+/// wrong activation produces fluent-looking nonsense instead of an error.
+std::optional<ActivationKind> feed_forward_activation(
+    const CheckpointMetadata& metadata, std::vector<EvidenceItem>& evidence) {
+    for (const std::string_view key : {
+             std::string_view("hidden_act"),
+             std::string_view("hidden_activation"),
+             std::string_view("text_config.hidden_act"),
+             std::string_view("text_config.hidden_activation")}) {
+        if (!metadata.contains(key)) continue;
+        const auto* name = std::get_if<std::string>(&metadata.value(key));
+        if (name == nullptr) continue;
+        std::optional<ActivationKind> kind;
+        if (*name == "silu" || *name == "swish" || *name == "swiglu") {
+            kind = ActivationKind::SwiGLU;
+        } else if (*name == "gelu_pytorch_tanh" || *name == "gelu_tanh" ||
+                   *name == "gelu_new" || *name == "gelu") {
+            kind = ActivationKind::GeluTanh;
+        } else if (*name == "relu2" || *name == "relu_squared") {
+            kind = ActivationKind::Relu2;
+        } else {
+            inference_detail::fail(
+                ResolutionFailureKind::UnsupportedSemanticFeature,
+                "unsupported feed-forward activation: " + *name);
+        }
+        evidence.push_back({EvidenceKind::AliasMetadata, std::string(key),
+                            "feed_forward_activation = " + *name});
+        return kind;
+    }
+    return std::nullopt;
+}
+
 std::optional<int> tokenizer_vocabulary_size(const CheckpointMetadata& metadata,
                                              std::vector<EvidenceItem>& evidence) {
     constexpr std::string_view key = "tokenizer.ggml.tokens";
@@ -422,6 +458,8 @@ NormalizedModelMetadata normalize_model_metadata(const CheckpointMetadata& metad
     result.core.logits_divisor = aliases<float>(
         metadata, {"logits_divisor", "logits_scaling"}, result.evidence,
         "logits_divisor");
+    result.core.feed_forward_activation =
+        feed_forward_activation(metadata, result.evidence);
     result.short_conv.cache_length = aliases<int>(metadata, {"conv_L_cache"}, result.evidence,
                                                   "shortconv_cache", "shortconv.l_cache");
     std::optional<double> rope_theta = aliases<double>(
