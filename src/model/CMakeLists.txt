@@ -16,6 +16,7 @@ set(CELEG_MODEL_SOURCES
     src/model/inference.cpp
     src/model/inference/global_facts.cpp
     src/model/inference/bindings/globals.cpp
+    src/model/inference/bindings/per_layer_input.cpp
     src/model/inference/bindings/norms.cpp
     src/model/inference/bindings/feed_forward.cpp
     src/model/inference/bindings/attention_policy.cpp

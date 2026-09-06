@@ -23,6 +23,7 @@ void resolve_canonical_layers(CanonicalInferenceContext& context) {
         resolve_layer_feed_forward(context, layer);
     }
 
+    bind_per_layer_input(context);
     apply_attention_output_scale(context);
     facts.graph.validate();
     facts.bindings = BindingSolver{}.solve(facts.bindings.values);
