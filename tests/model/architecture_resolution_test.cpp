@@ -4,8 +4,10 @@
 #include "celeg/model/inference.hpp"
 #include "celeg/model/program.hpp"
 #include "celeg/runtime/context.hpp"
+#include "model/inference/support.hpp"
 #include "support/assertions.hpp"
 
+#include <cstdlib>
 #include <iostream>
 #include <memory>
 #include <stdexcept>
@@ -204,6 +206,131 @@ celeg::ResolvedModel resolve_postnorm_evidence(
     const auto& architecture = catalog.select(checkpoint.metadata);
     CELEG_TEST_CHECK(architecture.id() == "automatic");
     return architecture.resolve(checkpoint);
+}
+
+/// Four-layer hybrid fixture mirroring Ling's grammar: KDA layers (separate
+/// q/k/v/f/b/g projections with per-stream convolutions) everywhere except
+/// the last layer of each group, which is factorized latent attention with a
+/// head-wise output gate. No feed-forward tensors, so every layer resolves
+/// with a monostate feed-forward and the mixer assertions stand alone.
+class HybridKdaMlaRepository final : public celeg::IWeightRepository {
+public:
+    HybridKdaMlaRepository() {
+        shapes_["model.embed_tokens.weight"] = {32, 8};
+        shapes_["model.norm.weight"] = {8};
+        shapes_["lm_head.weight"] = {32, 8};
+        for (int layer = 0; layer < 4; ++layer) {
+            const std::string prefix = "model.layers." + std::to_string(layer);
+            shapes_[prefix + ".input_layernorm.weight"] = {8};
+            if (layer == 3) {
+                shapes_[prefix + ".attention.q_a_proj.weight"] = {4, 8};
+                shapes_[prefix + ".attention.q_a_layernorm.weight"] = {4};
+                shapes_[prefix + ".attention.q_b_proj.weight"] = {12, 4};
+                shapes_[prefix + ".attention.kv_a_proj_with_mqa.weight"] = {4, 8};
+                shapes_[prefix + ".attention.kv_a_layernorm.weight"] = {2};
+                shapes_[prefix + ".attention.kv_b_proj.weight"] = {16, 2};
+                shapes_[prefix + ".attention.dense.weight"] = {8, 8};
+                shapes_[prefix + ".attention.g_proj.weight"] = {2, 8};
+            } else {
+                for (const std::string& proj :
+                     {"q_proj.weight", "k_proj.weight", "v_proj.weight",
+                      "f_proj.weight", "g_proj.weight"}) {
+                    shapes_[prefix + ".attention." + proj] = {8, 8};
+                }
+                shapes_[prefix + ".attention.b_proj.weight"] = {2, 8};
+                for (const std::string& conv :
+                     {"q_conv1d.weight", "k_conv1d.weight", "v_conv1d.weight"}) {
+                    shapes_[prefix + ".attention." + conv] = {8, 1, 4};
+                }
+                shapes_[prefix + ".attention.dt_bias"] = {8};
+                shapes_[prefix + ".attention.A_log"] = {2};
+                shapes_[prefix + ".attention.o_norm.weight"] = {4};
+                shapes_[prefix + ".attention.o_proj.weight"] = {8, 8};
+            }
+        }
+    }
+
+    bool contains(std::string_view name) const override {
+        return shapes_.contains(std::string(name));
+    }
+
+    celeg::HostTensorView tensor(std::string_view name) const override {
+        return {celeg::TensorDType::BF16, shapes_.at(std::string(name)), nullptr, 0};
+    }
+
+    std::vector<std::string> names() const override {
+        std::vector<std::string> result;
+        result.reserve(shapes_.size());
+        for (const auto& [name, shape] : shapes_) {
+            (void)shape;
+            result.push_back(name);
+        }
+        return result;
+    }
+
+private:
+    std::unordered_map<std::string, std::vector<int64_t>> shapes_;
+};
+
+celeg::CheckpointMetadata hybrid_kda_mla_metadata(std::string model_type) {
+    celeg::CheckpointMetadata metadata;
+    metadata.values["model_type"] = std::move(model_type);
+    metadata.values["hidden_size"] = int64_t(8);
+    metadata.values["num_hidden_layers"] = int64_t(4);
+    metadata.values["num_attention_heads"] = int64_t(2);
+    metadata.values["head_dim"] = int64_t(4);
+    metadata.values["v_head_dim"] = int64_t(4);
+    metadata.values["q_lora_rank"] = int64_t(4);
+    metadata.values["kv_lora_rank"] = int64_t(2);
+    metadata.values["qk_nope_head_dim"] = int64_t(4);
+    metadata.values["qk_rope_head_dim"] = int64_t(2);
+    metadata.values["vocab_size"] = int64_t(32);
+    metadata.values["max_position_embeddings"] = int64_t(128);
+    metadata.values["bos_token_id"] = int64_t(1);
+    metadata.values["eos_token_id"] = int64_t(2);
+    metadata.values["pad_token_id"] = int64_t(0);
+    metadata.values["norm_eps"] = 1.0e-6;
+    metadata.values["rope_theta"] = 100000.0;
+    metadata.values["tie_word_embeddings"] = false;
+    metadata.values["short_conv_kernel_size"] = int64_t(4);
+    metadata.values["kda_safe_gate"] = true;
+    metadata.values["kda_lower_bound"] = -5.0;
+    /// Ling's exact hybrid key set: schedule + projection style + gate
+    /// granularity are consumed and verified, the rest are proven inert.
+    metadata.values["layer_group_size"] = int64_t(4);
+    metadata.values["no_kda_lora"] = true;
+    metadata.values["gated_attention_proj_granularity_type"] = std::string("head_wise");
+    metadata.values["linear_silu"] = true;
+    metadata.values["group_norm_size"] = int64_t(1);
+    metadata.values["num_kv_heads_for_linear_attn"] = int64_t(0);
+    metadata.values["embedding_dropout"] = 0.0;
+    metadata.values["use_mla_nope"] = false;
+    return metadata;
+}
+
+celeg::ResolvedModel resolve_hybrid_kda_mla(
+    const celeg::ArchitectureCatalog& catalog,
+    celeg::CheckpointMetadata metadata) {
+    celeg::CheckpointView checkpoint;
+    checkpoint.metadata = std::move(metadata);
+    checkpoint.repository = std::make_shared<HybridKdaMlaRepository>();
+    const auto& architecture = catalog.select(checkpoint.metadata);
+    CELEG_TEST_CHECK(architecture.id() == "automatic");
+    return architecture.resolve(checkpoint);
+}
+
+bool hybrid_resolve_fails_with(celeg::CheckpointMetadata metadata,
+                               celeg::ResolutionFailureKind expected) {
+    celeg::CheckpointView checkpoint;
+    checkpoint.metadata = std::move(metadata);
+    checkpoint.repository = std::make_shared<HybridKdaMlaRepository>();
+    try {
+        const auto runtime = celeg::create_builtin_runtime_context();
+        (void)runtime->architectures().select(checkpoint.metadata).resolve(checkpoint);
+    } catch (const celeg::ResolutionError& error) {
+        return error.kind() == expected;
+    }
+    return false;
 }
 
 bool equivalent_weight_plan(const celeg::WeightPlan& a, const celeg::WeightPlan& b) {
@@ -488,6 +615,239 @@ int main() {
         CELEG_TEST_CHECK(scaling.original_context == 8192);
     }
 
+    /// Per-pattern RoPE: nested `rope_parameters.<layer_type>.*` fans out over
+    /// the `layer_types` schedule so sliding and full layers carry distinct
+    /// thetas (and rotary fractions) instead of a first-wins global. No test
+    /// fed these nested keys before; without the fan-out the sliding layers
+    /// would silently inherit the full theta.
+    {
+        celeg::CheckpointMetadata nested = postnorm_evidence_metadata("nested_rope_model");
+        nested.values["rope_parameters.sliding_attention.rope_theta"] = int64_t(10000);
+        nested.values["rope_parameters.full_attention.rope_theta"] = int64_t(1000000);
+        nested.values["rope_parameters.full_attention.partial_rotary_factor"] = 0.5;
+        celeg::CheckpointView nested_checkpoint;
+        nested_checkpoint.metadata = std::move(nested);
+        nested_checkpoint.repository = std::make_shared<PostnormEvidenceRepository>();
+        const auto nested_model = catalog.select(nested_checkpoint.metadata).resolve(nested_checkpoint);
+        CELEG_TEST_CHECK(nested_model.graph.layers.size() == 4);
+        for (int layer = 0; layer < 4; ++layer) {
+            const auto& semantic_layer = nested_model.graph.layers[static_cast<size_t>(layer)];
+            const auto& attention = std::get<celeg::AttentionSpec>(semantic_layer.mixer);
+            const auto& rope = std::get<celeg::RopePositionSpec>(attention.position);
+            if (layer < 3) {
+                CELEG_TEST_CHECK(rope.theta == 10000.0);
+                CELEG_TEST_CHECK(rope.rotary_fraction == 1.0);
+            } else {
+                CELEG_TEST_CHECK(rope.theta == 1000000.0);
+                CELEG_TEST_CHECK(std::abs(rope.rotary_fraction - 0.5) < 1.0e-6);
+            }
+            /// Global YaRN still applies (no nested `rope_type` overrides it).
+            CELEG_TEST_CHECK(std::holds_alternative<celeg::YarnRopeScaling>(rope.scaling));
+        }
+    }
+
+    /// `rope_layer_flags`: a false entry disables rotary position on exactly
+    /// that layer (the Lizzy spelling), while true entries keep the resolved
+    /// schedule. A ragged array fails loudly instead of misaligning layers.
+    {
+        celeg::CheckpointMetadata flagged = postnorm_evidence_metadata("flagged_rope_model");
+        flagged.values["rope_layer_flags"] = std::vector<int64_t>{1, 0, 1, 1};
+        celeg::CheckpointView flagged_checkpoint;
+        flagged_checkpoint.metadata = std::move(flagged);
+        flagged_checkpoint.repository = std::make_shared<PostnormEvidenceRepository>();
+        const auto flagged_model = catalog.select(flagged_checkpoint.metadata).resolve(flagged_checkpoint);
+        CELEG_TEST_CHECK(flagged_model.graph.layers.size() == 4);
+        for (int layer = 0; layer < 4; ++layer) {
+            const auto& attention = std::get<celeg::AttentionSpec>(
+                flagged_model.graph.layers[static_cast<size_t>(layer)].mixer);
+            if (layer == 1) {
+                CELEG_TEST_CHECK(std::holds_alternative<celeg::NoPositionEncodingSpec>(
+                    attention.position));
+            } else {
+                CELEG_TEST_CHECK(std::holds_alternative<celeg::RopePositionSpec>(
+                    attention.position));
+            }
+        }
+
+        auto ragged_flags = postnorm_evidence_metadata("ragged_rope_model");
+        ragged_flags.values["rope_layer_flags"] = std::vector<int64_t>{1, 0};
+        CELEG_TEST_CHECK(inference_input_fails_with(
+            std::move(ragged_flags), celeg::ResolutionFailureKind::ConflictingMetadata));
+    }
+
+    /// `no_rope_layer_interval`: the Lizzy fallback -- without usable flags,
+    /// every Nth layer (`(index + 1) % interval == 0`) loses RoPE. A
+    /// non-positive interval fails loudly instead of disabling nothing.
+    {
+        auto interval_metadata = postnorm_evidence_metadata("interval_rope_model");
+        interval_metadata.values["no_rope_layer_interval"] = int64_t(2);
+        celeg::CheckpointView interval_checkpoint;
+        interval_checkpoint.metadata = std::move(interval_metadata);
+        interval_checkpoint.repository = std::make_shared<PostnormEvidenceRepository>();
+        const auto interval_model = catalog.select(interval_checkpoint.metadata).resolve(interval_checkpoint);
+        CELEG_TEST_CHECK(interval_model.graph.layers.size() == 4);
+        for (int layer = 0; layer < 4; ++layer) {
+            const auto& attention = std::get<celeg::AttentionSpec>(
+                interval_model.graph.layers[static_cast<size_t>(layer)].mixer);
+            if (layer == 1 || layer == 3) {
+                CELEG_TEST_CHECK(std::holds_alternative<celeg::NoPositionEncodingSpec>(
+                    attention.position));
+            } else {
+                CELEG_TEST_CHECK(std::holds_alternative<celeg::RopePositionSpec>(
+                    attention.position));
+            }
+        }
+
+        auto bad_interval = postnorm_evidence_metadata("bad_interval_model");
+        bad_interval.values["no_rope_layer_interval"] = int64_t(0);
+        CELEG_TEST_CHECK(inference_input_fails_with(
+            std::move(bad_interval), celeg::ResolutionFailureKind::ConflictingMetadata));
+    }
+
+    /// Stated-and-verified keys: `position_embedding_type`, `mlp_type` and
+    /// `norm_type` confirm the resolved default and fail loudly on anything
+    /// else, so a checkpoint asking for a different policy never resolves
+    /// as RoPE/SwiGLU/RMS silently.
+    {
+        auto policy = structural_metadata("unknown_policy_rope");
+        policy.values["position_embedding_type"] = std::string("rope");
+        celeg::CheckpointView policy_checkpoint;
+        policy_checkpoint.metadata = std::move(policy);
+        policy_checkpoint.repository = std::make_shared<GptxRepository>();
+        (void)catalog.select(policy_checkpoint.metadata).resolve(policy_checkpoint);
+
+        auto absolute = structural_metadata("unknown_policy_absolute");
+        absolute.values["position_embedding_type"] = std::string("absolute");
+        CELEG_TEST_CHECK(normalize_fails_with(
+            std::move(absolute), celeg::ResolutionFailureKind::UnsupportedSemanticFeature));
+
+        auto gated = structural_metadata("unknown_mlp_gated");
+        gated.values["mlp_type"] = std::string("gated");
+        celeg::CheckpointView gated_checkpoint;
+        gated_checkpoint.metadata = std::move(gated);
+        gated_checkpoint.repository = std::make_shared<GptxRepository>();
+        (void)catalog.select(gated_checkpoint.metadata).resolve(gated_checkpoint);
+
+        auto linear_mlp = structural_metadata("unknown_mlp_linear");
+        linear_mlp.values["mlp_type"] = std::string("linear");
+        CELEG_TEST_CHECK(normalize_fails_with(
+            std::move(linear_mlp), celeg::ResolutionFailureKind::UnsupportedSemanticFeature));
+
+        auto rms = structural_metadata("unknown_norm_rms");
+        rms.values["norm_type"] = std::string("rmsnorm");
+        celeg::CheckpointView rms_checkpoint;
+        rms_checkpoint.metadata = std::move(rms);
+        rms_checkpoint.repository = std::make_shared<GptxRepository>();
+        (void)catalog.select(rms_checkpoint.metadata).resolve(rms_checkpoint);
+
+        auto layer_norm = structural_metadata("unknown_norm_layer");
+        layer_norm.values["norm_type"] = std::string("layernorm");
+        CELEG_TEST_CHECK(normalize_fails_with(
+            std::move(layer_norm), celeg::ResolutionFailureKind::UnsupportedSemanticFeature));
+    }
+
+    /// A nested `rope_scaling.rope_theta` restates the global theta and must
+    /// agree with it instead of silently winning.
+    {
+        auto restated = structural_metadata("unknown_theta_restated");
+        restated.values["rope_scaling.rope_theta"] = 100000.0;
+        celeg::CheckpointView restated_checkpoint;
+        restated_checkpoint.metadata = std::move(restated);
+        restated_checkpoint.repository = std::make_shared<GptxRepository>();
+        (void)catalog.select(restated_checkpoint.metadata).resolve(restated_checkpoint);
+
+        auto conflicted = structural_metadata("unknown_theta_conflict");
+        conflicted.values["rope_scaling.rope_theta"] = 999.0;
+        CELEG_TEST_CHECK(normalize_fails_with(
+            std::move(conflicted), celeg::ResolutionFailureKind::ConflictingMetadata));
+    }
+    /// Falsy opt-in flags are provably inert: only a set flag may fail the
+    /// gate, so `use_qkv_bias: false` never blocks resolution while
+    /// `use_qkv_bias: true` without resolver support still fails loudly.
+    CELEG_TEST_CHECK(celeg::inference_detail::metadata_value_is_falsy(
+        celeg::MetadataValue{false}));
+    CELEG_TEST_CHECK(celeg::inference_detail::metadata_value_is_falsy(
+        celeg::MetadataValue{int64_t(0)}));
+    CELEG_TEST_CHECK(celeg::inference_detail::metadata_value_is_falsy(
+        celeg::MetadataValue{0.0}));
+    CELEG_TEST_CHECK(!celeg::inference_detail::metadata_value_is_falsy(
+        celeg::MetadataValue{true}));
+    CELEG_TEST_CHECK(!celeg::inference_detail::metadata_value_is_falsy(
+        celeg::MetadataValue{int64_t(1)}));
+    CELEG_TEST_CHECK(!celeg::inference_detail::metadata_value_is_falsy(
+        celeg::MetadataValue{std::string("false")}));
+
+    /// GGUF sliding schedule: without `layer_types`, the per-layer pattern
+    /// comes from `<arch>.attention.sliding_window_pattern` (1 = sliding).
+    /// A present-but-disagreeing `layer_types` fails loudly.
+    {
+        celeg::CheckpointMetadata gguf_pattern = postnorm_evidence_metadata("gguf_pattern_model");
+        gguf_pattern.source_format = celeg::CheckpointSourceFormat::Gguf;
+        gguf_pattern.values["general.architecture"] = std::string("testarch");
+        gguf_pattern.values.erase("layer_types");
+        gguf_pattern.values["testarch.attention.sliding_window_pattern"] =
+            std::vector<int64_t>{1, 1, 0, 1};
+        celeg::CheckpointView gguf_pattern_checkpoint;
+        gguf_pattern_checkpoint.metadata = std::move(gguf_pattern);
+        gguf_pattern_checkpoint.repository = std::make_shared<PostnormEvidenceRepository>();
+        const auto gguf_pattern_model = catalog.select(gguf_pattern_checkpoint.metadata)
+                                            .resolve(gguf_pattern_checkpoint);
+        CELEG_TEST_CHECK(gguf_pattern_model.graph.layers.size() == 4);
+        for (int layer = 0; layer < 4; ++layer) {
+            const auto& attention = std::get<celeg::AttentionSpec>(
+                gguf_pattern_model.graph.layers[static_cast<size_t>(layer)].mixer);
+            if (layer == 2) {
+                CELEG_TEST_CHECK(std::holds_alternative<celeg::FullCausalPattern>(
+                    attention.pattern));
+            } else {
+                CELEG_TEST_CHECK(std::holds_alternative<celeg::SlidingWindowPattern>(
+                    attention.pattern));
+            }
+        }
+
+        auto conflicted_pattern = postnorm_evidence_metadata("gguf_pattern_conflict");
+        conflicted_pattern.source_format = celeg::CheckpointSourceFormat::Gguf;
+        conflicted_pattern.values["general.architecture"] = std::string("testarch");
+        conflicted_pattern.values["layer_types"] = std::vector<std::string>{
+            "full_attention", "full_attention", "full_attention", "full_attention"};
+        conflicted_pattern.values["testarch.attention.sliding_window_pattern"] =
+            std::vector<int64_t>{1, 1, 0, 1};
+        CELEG_TEST_CHECK(inference_input_fails_with(
+            std::move(conflicted_pattern), celeg::ResolutionFailureKind::ConflictingMetadata));
+    }
+
+    /// GGUF YaRN spellings: `<arch>.rope.scaling.*` merges with the flat
+    /// keys, so a GGUF checkpoint carrying only arch-suffixed YaRN resolves
+    /// identically to its flat-spelled twin.
+    {
+        celeg::CheckpointMetadata gguf_yarn = postnorm_evidence_metadata("gguf_yarn_model");
+        gguf_yarn.source_format = celeg::CheckpointSourceFormat::Gguf;
+        gguf_yarn.values["general.architecture"] = std::string("testarch");
+        gguf_yarn.values.erase("rope_scaling.rope_type");
+        gguf_yarn.values.erase("rope_scaling.factor");
+        gguf_yarn.values.erase("rope_scaling.original_max_position_embeddings");
+        gguf_yarn.values.erase("rope_scaling.attention_factor");
+        gguf_yarn.values.erase("rope_scaling.beta_fast");
+        gguf_yarn.values.erase("rope_scaling.beta_slow");
+        gguf_yarn.values["testarch.rope.scaling.type"] = std::string("yarn");
+        gguf_yarn.values["testarch.rope.scaling.factor"] = 8.0;
+        gguf_yarn.values["testarch.rope.scaling.original_context_length"] = int64_t(8192);
+        gguf_yarn.values["testarch.rope.scaling.yarn_attn_factor"] = 1.2079441541679836;
+        gguf_yarn.values["testarch.rope.scaling.yarn_beta_fast"] = 32.0;
+        gguf_yarn.values["testarch.rope.scaling.yarn_beta_slow"] = 1.0;
+        celeg::CheckpointView gguf_yarn_checkpoint;
+        gguf_yarn_checkpoint.metadata = std::move(gguf_yarn);
+        gguf_yarn_checkpoint.repository = std::make_shared<PostnormEvidenceRepository>();
+        const auto gguf_yarn_model = catalog.select(gguf_yarn_checkpoint.metadata)
+                                         .resolve(gguf_yarn_checkpoint);
+        const auto& yarn_attention = std::get<celeg::AttentionSpec>(
+            gguf_yarn_model.graph.layers[0].mixer);
+        const auto& yarn_rope = std::get<celeg::RopePositionSpec>(yarn_attention.position);
+        const auto& yarn_scaling = std::get<celeg::YarnRopeScaling>(yarn_rope.scaling);
+        CELEG_TEST_CHECK(yarn_scaling.factor == 8.0);
+        CELEG_TEST_CHECK(yarn_scaling.original_context == 8192);
+    }
+
     auto conflicting_layout = structural_metadata("unknown_layout_conflict");
     conflicting_layout.values["layer_layouts"] =
         std::vector<std::string>{"decoder_postnorm"};
@@ -570,6 +930,79 @@ int main() {
                 compiled.layers[2].feed_forward);
             CELEG_TEST_CHECK(std::holds_alternative<celeg::MoeGroupedTopKSelectionSpec>(
                 compiled_moe.router.selection));
+        }
+    }
+
+    /// Ling-style hybrid: KDA layers resolve to the factorized gated-delta
+    /// spec, the group-schedule layer resolves to latent attention with a
+    /// head-wise gate, and the whole hybrid key set is ledger-clean under
+    /// strict semantics. Strict is scoped to this block so the remaining
+    /// tests keep their default warn-mode standing.
+    {
+        const char* previous_strict = std::getenv("CELEG_STRICT_SEMANTICS");
+        const bool had_strict = previous_strict != nullptr;
+        const std::string saved_strict = had_strict ? std::string(previous_strict) : std::string();
+        setenv("CELEG_STRICT_SEMANTICS", "1", 1);
+        const auto hybrid = resolve_hybrid_kda_mla(catalog, hybrid_kda_mla_metadata("ling_hybrid"));
+        CELEG_TEST_CHECK(hybrid.graph.layers.size() == 4);
+        for (int layer = 0; layer < 3; ++layer) {
+            const auto& mixer = std::get<celeg::GatedDeltaNetSpec>(
+                hybrid.graph.layers[static_cast<size_t>(layer)].mixer);
+            CELEG_TEST_CHECK(mixer.vector_decay);
+            CELEG_TEST_CHECK(mixer.safe_decay);
+            CELEG_TEST_CHECK(mixer.factorized_projections);
+            CELEG_TEST_CHECK(mixer.sigmoid_output_gate);
+        }
+        const auto& mla = std::get<celeg::AttentionSpec>(hybrid.graph.layers[3].mixer);
+        CELEG_TEST_CHECK(mla.output_gate.has_value());
+        CELEG_TEST_CHECK(mla.output_gate->granularity ==
+                         celeg::AttentionGateGranularity::HeadWise);
+        CELEG_TEST_CHECK(mla.output_gate_width() == 2);
+
+        /// A stated gate granularity that disagrees with the `g_proj` shape
+        /// is a configuration/weight mismatch, not a resolvable model.
+        {
+            auto mismatch = hybrid_kda_mla_metadata("ling_gate_mismatch");
+            mismatch.values["gated_attention_proj_granularity_type"] =
+                std::string("element_wise");
+            CELEG_TEST_CHECK(hybrid_resolve_fails_with(
+                std::move(mismatch), celeg::ResolutionFailureKind::ConflictingMetadata));
+        }
+
+        /// `no_kda_lora: false` selects the LoRA-factorized KDA dialect no
+        /// rule binds; it must fail loudly rather than misresolve.
+        {
+            auto lora = hybrid_kda_mla_metadata("ling_kda_lora");
+            lora.values["no_kda_lora"] = false;
+            CELEG_TEST_CHECK(hybrid_resolve_fails_with(
+                std::move(lora), celeg::ResolutionFailureKind::UnsupportedSemanticFeature));
+        }
+
+        /// A schedule claim the grammar-resolved mixers contradict (group 2
+        /// would make layers 1 and 3 attention) fails loudly.
+        {
+            auto schedule = hybrid_kda_mla_metadata("ling_schedule_mismatch");
+            schedule.values["layer_group_size"] = int64_t(2);
+            CELEG_TEST_CHECK(hybrid_resolve_fails_with(
+                std::move(schedule), celeg::ResolutionFailureKind::ConflictingMetadata));
+        }
+
+        /// Degenerate proven-inert values are ledger-clean; non-degenerate
+        /// ones stay loud.
+        {
+            auto grouped = hybrid_kda_mla_metadata("ling_grouped_norm");
+            grouped.values["group_norm_size"] = int64_t(2);
+            CELEG_TEST_CHECK(hybrid_resolve_fails_with(
+                std::move(grouped), celeg::ResolutionFailureKind::UnsupportedSemanticFeature));
+            auto kv_heads = hybrid_kda_mla_metadata("ling_linear_kv_heads");
+            kv_heads.values["num_kv_heads_for_linear_attn"] = int64_t(2);
+            CELEG_TEST_CHECK(hybrid_resolve_fails_with(
+                std::move(kv_heads), celeg::ResolutionFailureKind::UnsupportedSemanticFeature));
+        }
+        if (had_strict) {
+            setenv("CELEG_STRICT_SEMANTICS", saved_strict.c_str(), 1);
+        } else {
+            unsetenv("CELEG_STRICT_SEMANTICS");
         }
     }
 

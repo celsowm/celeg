@@ -1,6 +1,7 @@
 #include "backend/cuda/compiler.hpp"
 #include "kernels/kernels.cuh"
 #include "support/assertions.hpp"
+#include "support/cuda_kernel_assertions.cuh"
 #include "utils.cuh"
 
 #include <array>
@@ -32,6 +33,22 @@ celeg::ResolvedModel block_sparse_fixture() {
     layer.feed_forward = celeg::DenseFeedForwardSpec{
         4, celeg::ActivationKind::SwiGLU};
     model.graph.layers.push_back(layer);
+
+    /// `build_model_program` requires every layer to own at least one weight
+    /// request; the fixture has no checkpoint behind it, so declare the roles
+    /// the layer's specs imply directly.
+    for (celeg::TensorRole role : {
+             celeg::TensorRole::AttentionInputNorm,
+             celeg::TensorRole::AttentionQuery,
+             celeg::TensorRole::AttentionKey,
+             celeg::TensorRole::AttentionValue,
+             celeg::TensorRole::AttentionOutput,
+             celeg::TensorRole::FfnInputNorm,
+             celeg::TensorRole::FfnGate,
+             celeg::TensorRole::FfnUp,
+             celeg::TensorRole::FfnDown}) {
+        model.weight_plan.requests.push_back({role, 0, -1, {}});
+    }
     return model;
 }
 
@@ -59,13 +76,16 @@ void check_compiler_contract() {
     celeg::ResolvedModel dynamic = model;
     std::get<celeg::AttentionSpec>(dynamic.graph.layers[0].mixer).pattern =
         celeg::DynamicSparsePattern{2, 1};
-    bool dynamic_rejected = false;
-    try {
-        (void)celeg::CudaModelCompiler{}.compile(dynamic);
-    } catch (const std::invalid_argument&) {
-        dynamic_rejected = true;
-    }
-    CELEG_TEST_CHECK(dynamic_rejected);
+    /// Dynamic-sparse is a supported CUDA pattern (dedicated decode kernels),
+    /// so a well-formed schedule compiles with the pattern preserved; only
+    /// out-of-range schedules (e.g. `max_selected_blocks > 32`, asserted in
+    /// `cuda_dynamic_sparse_attention_test.cu`) are rejected.
+    const auto dynamic_program = celeg::CudaModelCompiler{}.compile(dynamic);
+    const auto* dynamic_compiled = std::get_if<celeg::CompiledAttentionProgram>(
+        &dynamic_program.layers[0].mixer);
+    CELEG_TEST_CHECK(dynamic_compiled != nullptr);
+    CELEG_TEST_CHECK(std::holds_alternative<celeg::DynamicSparsePattern>(
+        dynamic_compiled->semantics.pattern));
 }
 
 void check_block_sparse_prefill(celeg::CudaStream& stream) {

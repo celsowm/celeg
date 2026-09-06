@@ -10,6 +10,7 @@ void apply_cpu_attention_qk(const AttentionSpec& layout,
                             const CpuCompiledModel::AttentionWeights& weights,
                             float* query,
                             float* key,
+                            float* value,
                             int scalar_position,
                             const std::array<int32_t, 3>& rope_position);
 

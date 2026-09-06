@@ -361,6 +361,7 @@ struct CpuCompiledModel {
         CpuLinearWeight out;
         std::vector<float> q_norm;
         std::vector<float> k_norm;
+        std::vector<float> v_norm;
         std::vector<float> latent_q_norm;
         std::vector<float> latent_k_norm;
         std::vector<float> relative_bias;

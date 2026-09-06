@@ -131,6 +131,9 @@ void CpuCompiledModel::forward_token(int32_t token, bool compute_logits,
                                 shared->program.hidden, semantics.mixer_norm.after->epsilon);
         }
         cpu_residual_add(workspace_.hidden.data(), workspace_.residual.data(), shared->program.hidden);
+        celeg_debug_dump_hidden(("layer_" + std::to_string(index) + "_pos" +
+                                    std::to_string(session_.position_value) + "_mixout").c_str(),
+                                workspace_.hidden.data(), shared->program.hidden);
         if (getenv("CELEG_DEBUG_LAYER_STATS")) {
             double sq = 0.0; float mx = 0.0f; bool bad = false;
             for (float v : workspace_.hidden) { sq += (double)v*v; mx = std::max(mx, std::fabs(v)); if (!std::isfinite(v)) bad = true; }
@@ -207,8 +210,9 @@ void CpuCompiledModel::forward_token(int32_t token, bool compute_logits,
             cpu_rmsnorm_inplace(workspace_.hidden.data(), shared->weight_store.final_norm.data(),
                                 shared->program.hidden, shared->program.final_norm.epsilon);
         }
-        if (compute_logits) {
-            celeg_debug_dump_hidden(("layer_" + std::to_string(index)).c_str(),
+        if (std::getenv("CELEG_DEBUG_HIDDEN_DIR")) {
+            celeg_debug_dump_hidden(("layer_" + std::to_string(index) + "_pos" +
+                                        std::to_string(session_.position_value)).c_str(),
                                     workspace_.hidden.data(), shared->program.hidden);
         }
     }

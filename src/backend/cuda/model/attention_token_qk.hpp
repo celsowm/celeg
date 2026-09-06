@@ -14,6 +14,7 @@ void prepare_cuda_token_attention_qk(
     AttentionLayer& attention,
     __nv_bfloat16* query,
     __nv_bfloat16* key,
+    __nv_bfloat16* value,
     bool paged,
     const std::array<int32_t, 3>* rope_position);
 

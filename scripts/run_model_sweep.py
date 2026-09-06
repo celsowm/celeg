@@ -3,8 +3,11 @@
 Run all resolvable HF-cache models on CPU and CUDA backends.
 Classifies each: OK / FAIL / TIMEOUT / OOM, and separately whether the
 generated output is coherent text and whether it answers correctly.
-Writes results to /home/IN.PGE.RJ.GOV.BR/fontesc/celeg/model_sweep_results.json
+Writes results to `benchmarks/results/model_sweep_results.json` (relative to
+the repository root). Run under `CELEG_STRICT_SEMANTICS=1` so silently-dropped
+mathematics fails loudly instead of emitting garbage with exit 0.
 """
+import pathlib
 import re
 import subprocess, json, time, os, sys
 from datetime import datetime
@@ -30,11 +33,25 @@ REPO_LIST = [
 PROMPT = "What is the capital of France?"
 EXPECTED_ANSWER = "paris"
 MAX_TOKENS = 20
+# Thinking-style templates burn the opening tokens on a <think> preamble
+# (verified by dumping the HF reference and counting): 300 tokens is enough
+# for the answer to appear.
+MAX_TOKENS_BY_MODEL = {
+    "openbmb/MiniCPM5-1B": 300,
+    "openbmb/MiniCPM5-1B-GGUF": 300,
+    "flwrlabs/Lizzy-7B": 300,
+    "flwrlabs/Lizzy-7B-GGUF": 300,
+    "inclusionAI/Ling-3.0-tiny": 300,
+}
 TEMP = 0.0
 TOP_K = 1
 
-CPU_RUN = "./out/linux-cpu-relwithdebinfo/celeg-cpu-run"
-CUDA_RUN = "./out/linux-cuda-relwithdebinfo/celeg-run"
+# Resolved relative to the repository root (this script lives in `scripts/`),
+# not hardcoded to one machine's `$HOME`, so the sweep runs wherever the tree
+# is checked out. `--repo` auto-resolves checkpoints from the local HF cache.
+_REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
+CPU_RUN = str(_REPO_ROOT / "out" / "linux-cpu-relwithdebinfo" / "celeg-cpu-run")
+CUDA_RUN = str(_REPO_ROOT / "out" / "linux-cuda-relwithdebinfo" / "celeg-run")
 
 # A run that "succeeds" (exit 0, chat.template= printed) can still produce
 # nonsense: an empty/garbled string, or fluent text that answers wrong. Both
@@ -74,13 +91,13 @@ def run_model(run_cmd, repo, backend, extra_args=None):
     factually wrong; see classify_output().
     """
     cmd = [run_cmd, "--repo", repo, "--prompt", PROMPT,
-           "--max-new-tokens", str(MAX_TOKENS),
+           "--max-new-tokens", str(MAX_TOKENS_BY_MODEL.get(repo, MAX_TOKENS)),
            "--temperature", str(TEMP), "--top-k", str(TOP_K)]
     if extra_args:
         cmd.extend(extra_args)
     start = time.time()
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=300, cwd="/home/IN.PGE.RJ.GOV.BR/fontesc/celeg")
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=300, cwd=str(_REPO_ROOT))
         elapsed = time.time() - start
         stdout = proc.stdout
         stderr = proc.stderr
@@ -173,7 +190,8 @@ def main():
         })
 
     # Write results
-    out_path = "/home/IN.PGE.RJ.GOV.BR/fontesc/celeg/model_sweep_results.json"
+    out_path = _REPO_ROOT / "benchmarks" / "results" / "model_sweep_results.json"
+    out_path.parent.mkdir(parents=True, exist_ok=True)
     with open(out_path, "w") as f:
         json.dump(results, f, indent=2)
     print(f"\n{'='*60}")

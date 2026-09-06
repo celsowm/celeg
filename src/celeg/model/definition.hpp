@@ -68,13 +68,27 @@ struct Llama3FrequencyScaling {
     friend bool operator==(const Llama3FrequencyScaling&, const Llama3FrequencyScaling&) = default;
 };
 
+/// Proportional RoPE keeps a full `head_dim`-length inverse-frequency table
+/// but only rotates the first `partial_rotary_factor * head_dim` dims, with
+/// frequencies derived from `head_dim` (not the rotated width). HF's
+/// `_compute_proportional_rope_parameters` computes `base ** (arange /
+/// head_dim)` for the rotated prefix and pads the remainder with zeros (no
+/// rotation). celeg's ordinary partial-rotary path instead derives from the
+/// rotated width, so this needs its own variant to match HF bit-for-bit.
+struct ProportionalRopeScaling {
+    double factor = 1.0;
+
+    friend bool operator==(const ProportionalRopeScaling&, const ProportionalRopeScaling&) = default;
+};
+
 using RopeScalingSpec = std::variant<
     NoRopeScaling,
     LinearRopeScaling,
     DynamicNtkRopeScaling,
     YarnRopeScaling,
     LongRopeScaling,
-    Llama3FrequencyScaling>;
+    Llama3FrequencyScaling,
+    ProportionalRopeScaling>;
 
 void validate_rope_scaling(const RopeScalingSpec& scaling, int rotary_dimension);
 

@@ -258,9 +258,26 @@ class TestCoordinator:
         if result.returncode != 0:
             raise DevError("CTest failed.")
 
+    def run_boundaries(self) -> None:
+        # Architecture boundary rules keep generic runtime directories free of
+        # family-specific types; previously only `MANIFEST.sha256` referenced
+        # the checker, so violations (like per-model substring probes) landed
+        # silently. Running it here makes `verify` enforce the current
+        # boundary rules on every change.
+        import pathlib as _pathlib
+        root = _pathlib.Path(__file__).resolve().parent.parent / "scripts" / "check_architecture_boundaries.py"
+        # The checker lives in `scripts/`, not in the build directory.
+        result = run_visible(
+            [sys.executable, str(root)],
+            env=self.environment.values,
+        )
+        if result.returncode != 0:
+            raise DevError("Architecture boundary check failed.")
+
     def run(self) -> None:
         self.run_python()
         self.run_ctest()
+        self.run_boundaries()
 
 
 def executable(directory: pathlib.Path, name: str, environment: Environment) -> pathlib.Path:

@@ -198,6 +198,11 @@ struct AttentionSpec {
     int head_dim = 0;
     std::optional<NormSpec> query_norm;
     std::optional<NormSpec> key_norm;
+    /// Per-head value RMSNorm applied to V before the KV store (weightless when
+    /// the checkpoint ships no `v_norm` weight). Absent when the checkpoint has
+    /// no value normalization. Gated off for latent attention, where V is a
+    /// compressed latent vector and a per-head norm is meaningless.
+    std::optional<NormSpec> value_norm;
     AttentionPatternSpec pattern = FullCausalPattern{};
     KvSharingSpec kv_sharing;
     float query_scale = 1.0f;
@@ -287,6 +292,7 @@ struct AttentionSpec {
     bool has_query_key_norm() const {
         return query_norm.has_value() || key_norm.has_value();
     }
+    bool has_value_norm() const { return value_norm.has_value(); }
     int latent_query_projection_width() const {
         const auto* latent = latent_state();
         return latent && latent->factorized()

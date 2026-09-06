@@ -166,6 +166,7 @@ struct CompiledAttentionExecution {
     AttentionExecutionKind kind = AttentionExecutionKind::Standard;
     bool has_key_value = true;
     bool has_query_key_norm = false;
+    bool has_value_norm = false;
     bool has_rope = false;
     bool has_decoupled_rope = false;
     RopePairingKind rope_pairing = RopePairingKind::SplitHalf;

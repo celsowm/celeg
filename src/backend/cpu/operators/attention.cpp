@@ -12,6 +12,7 @@ void apply_cpu_attention_qk(const AttentionSpec& layout,
                             const CpuCompiledModel::AttentionWeights& weights,
                             float* query,
                             float* key,
+                            float* value,
                             int scalar_position,
                             const std::array<int32_t, 3>& rope_position) {
     const int q_width = layout.query_width();
@@ -71,6 +72,23 @@ void apply_cpu_attention_qk(const AttentionSpec& layout,
     if (has_key) {
         prepare_side(key, weights.k_norm.data(), layout.key_value_heads,
                      layout.key_norm);
+    }
+    /// Value RMSNorm runs before the KV store so the cache holds normalized V.
+    /// Weightless norms carry a materialised ones-vector, so the same
+    /// `cpu_qk_norm_only` path covers both weighted and weightless cases.
+    /// Gated off for latent attention (meaningless on the compressed vector).
+    if (value != nullptr && layout.value_norm.has_value() &&
+        !layout.uses_latent_state()) {
+        const NormSpec& v_norm = *layout.value_norm;
+        if (v_norm.granularity == NormGranularity::PerHead) {
+            cpu_qk_norm_only(value, weights.v_norm.data(),
+                             layout.key_value_heads, layout.head_dim,
+                             v_norm.epsilon);
+        } else {
+            cpu_qk_norm_only(value, weights.v_norm.data(), 1,
+                             layout.key_value_heads * layout.head_dim,
+                             v_norm.epsilon);
+        }
     }
 
     const float position_scale = rope

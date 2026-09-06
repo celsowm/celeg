@@ -62,4 +62,26 @@ inline void launch_attention_qk_norm(
     }
 }
 
+/// Value RMSNorm before the KV store so the cache holds normalized V.
+/// Weightless norms carry a materialised ones-vector, so the same RMSNorm path
+/// covers both cases. Gated off for latent attention.
+inline void launch_attention_qkv_norm(
+    const AttentionSpec& layout,
+    __nv_bfloat16* query,
+    __nv_bfloat16* key,
+    __nv_bfloat16* value,
+    const __nv_bfloat16* query_weight,
+    const __nv_bfloat16* key_weight,
+    const __nv_bfloat16* value_weight,
+    int rows,
+    cudaStream_t stream) {
+    launch_attention_qk_norm(layout, query, key, query_weight, key_weight, rows,
+                             stream);
+    if (layout.value_norm && value != nullptr && !layout.uses_latent_state()) {
+        launch_attention_norm(value, value_weight, rows,
+                              layout.key_value_heads, layout.head_dim,
+                              *layout.value_norm, stream);
+    }
+}
+
 }

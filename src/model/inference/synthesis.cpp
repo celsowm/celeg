@@ -41,6 +41,14 @@ ResolvedModel ResolutionAssembler::assemble(const CanonicalModelFacts& facts,
     result.provenance.architecture_id = facts.resolution_mode;
     result.provenance.source_format = facts.source_format;
     result.provenance.checkpoint_profile_id = facts.resolution_mode;
+    for (const EvidenceItem& item : facts.evidence) {
+        result.provenance.evidence.push_back(item.source + ": " + item.fact);
+    }
+    for (const TensorRoleBinding& binding : facts.bindings.values) {
+        for (const EvidenceItem& item : binding.evidence) {
+            result.provenance.evidence.push_back(item.source + ": " + item.fact);
+        }
+    }
     result.topology = compose_runtime_topology(facts.checkpoint, result.graph);
     result.topology.validate();
     CanonicalBindingNamingPolicy naming(facts.bindings);

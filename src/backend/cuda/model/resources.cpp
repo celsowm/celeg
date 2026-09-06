@@ -29,6 +29,7 @@ void CudaCompiledModel::allocate_celeg_resources() {
     workspace_.mamba_projected_.reset(plan.mamba_projection);
     workspace_.mamba_inner_.reset(plan.mamba_inner);
     workspace_.gated_delta_qkv_.reset(plan.gated_delta_qkv);
+    workspace_.gated_delta_qkv_inter_.reset(plan.gated_delta_qkv);
     workspace_.gated_delta_z_.reset(plan.gated_delta_z);
     workspace_.gated_delta_b_.reset(plan.gated_delta_b);
     workspace_.gated_delta_a_.reset(plan.gated_delta_a);

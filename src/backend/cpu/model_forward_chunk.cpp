@@ -116,9 +116,8 @@ void CpuCompiledModel::forward_chunk(std::span<const int32_t> tokens,
     if (const char* dump_dir = std::getenv("CELEG_DEBUG_HIDDEN_DIR")) {
         const std::string path = std::string(dump_dir) + "/layer_embed.f32";
         std::ofstream out(path, std::ios::binary);
-        const float* last_row = workspace_.chunk_hidden.data() + (rows - 1) * hidden;
-        out.write(reinterpret_cast<const char*>(last_row),
-                  static_cast<std::streamsize>(hidden * sizeof(float)));
+        out.write(reinterpret_cast<const char*>(workspace_.chunk_hidden.data()),
+                  static_cast<std::streamsize>(rows * hidden * sizeof(float)));
     }
 
     const PerLayerInputPlan& input_plan = shared->program.per_layer_input;
@@ -233,7 +232,7 @@ void CpuCompiledModel::forward_chunk(std::span<const int32_t> tokens,
                     apply_cpu_attention_qk(
                         layout, *attention,
                         workspace_.chunk_qkv.data() + row * layout.query_projection_width(),
-                        nullptr, position, rope_position);
+                        nullptr, nullptr, position, rope_position);
                 });
                 const auto memory_it = shared->external_attention_memory.find(
                     layout.external_memory_slot());
@@ -417,7 +416,7 @@ void CpuCompiledModel::forward_chunk(std::span<const int32_t> tokens,
                         float* expansion_scratch = workspace_.chunk_latent_projection.data() +
                             row * shared->workspace_plan.latent_projection;
                         for (int head = 0; head < layout.query_heads; ++head) {
-                            shared->linear.gemv_transpose(attention->latent_expansion,
+                            shared->linear.gemv_rows(attention->latent_expansion,
                                 latent_output + head * latent.latent_rank,
                                 expansion_scratch,
                                 static_cast<size_t>(head * expansion_stride + latent.nope_head_dim),
@@ -479,13 +478,14 @@ void CpuCompiledModel::forward_chunk(std::span<const int32_t> tokens,
                     }
                     float* q = query_base + row * query_stride;
                     float* k = workspace_.chunk_op.data() + row * kv_width;
+                    float* v = workspace_.chunk_conv.data() + row * kv_width;
                     const int position = base_position + static_cast<int>(row);
                     const auto* explicit_rope = embeddings
                         ? embeddings->rope_at_position(static_cast<size_t>(position)) : nullptr;
                     const std::array<int32_t, 3> scalar_rope = {
                         position, position, position};
                     const auto& rope_position = explicit_rope ? *explicit_rope : scalar_rope;
-                    apply_cpu_attention_qk(layout, *attention, q, k, position,
+                    apply_cpu_attention_qk(layout, *attention, q, k, v, position,
                                            rope_position);
                 });
                 const int owner = shared->layer_to_kv_owner.at(index);
@@ -542,6 +542,13 @@ void CpuCompiledModel::forward_chunk(std::span<const int32_t> tokens,
                                  semantics.mixer_norm.after->epsilon);
         }
         residual_rows(workspace_.chunk_hidden.data(), workspace_.chunk_residual.data(), hidden);
+        if (const char* dump_dir = std::getenv("CELEG_DEBUG_HIDDEN_DIR")) {
+            const std::string path = std::string(dump_dir) + "/layer_" +
+                std::to_string(index) + "_mixout.f32";
+            std::ofstream out(path, std::ios::binary);
+            out.write(reinterpret_cast<const char*>(workspace_.chunk_hidden.data()),
+                      static_cast<std::streamsize>(rows * hidden * sizeof(float)));
+        }
         if (std::holds_alternative<std::monostate>(semantics.feed_forward)) {
             continue;
         }
@@ -623,9 +630,8 @@ void CpuCompiledModel::forward_chunk(std::span<const int32_t> tokens,
             const std::string path = std::string(dump_dir) + "/layer_" +
                 std::to_string(index) + ".f32";
             std::ofstream out(path, std::ios::binary);
-            const float* last_row = workspace_.chunk_hidden.data() + (rows - 1) * hidden;
-            out.write(reinterpret_cast<const char*>(last_row),
-                      static_cast<std::streamsize>(hidden * sizeof(float)));
+            out.write(reinterpret_cast<const char*>(workspace_.chunk_hidden.data()),
+                      static_cast<std::streamsize>(rows * hidden * sizeof(float)));
         }
     }
 

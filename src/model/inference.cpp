@@ -38,16 +38,95 @@ void apply_attention_patterns(ModelGraph& graph,
 
 void apply_position_scaling(ModelGraph& graph,
                             const NormalizedModelMetadata& metadata) {
-    const auto* inferred = std::get_if<InferredRopePosition>(
-        &metadata.attention.position_encoding);
-    if (inferred == nullptr) return;
-    for (LayerSpec& layer : graph.layers) {
-        auto* attention = std::get_if<AttentionSpec>(&layer.mixer);
+    /// Per-pattern scaling rides alongside the per-pattern theta: each layer's
+    /// own `position_encoding.value_for(layer)` supplies its scaling, falling
+    /// back to `global` when no nested block exists.
+    for (int layer = 0; layer < static_cast<int>(graph.layers.size()); ++layer) {
+        const std::optional<InferredPositionEncoding> inferred =
+            metadata.attention.position_encoding.value_for(layer);
+        if (!inferred.has_value()) continue;
+        const auto* rope_info = std::get_if<InferredRopePosition>(&*inferred);
+        if (rope_info == nullptr) continue;
+        auto* attention = std::get_if<AttentionSpec>(
+            &graph.layers[static_cast<size_t>(layer)].mixer);
         if (attention == nullptr) continue;
         if (auto* rope = std::get_if<RopePositionSpec>(&attention->position)) {
-            rope->scaling = inferred->scaling;
+            rope->scaling = rope_info->scaling;
         } else if (auto* multi = std::get_if<MultiAxisRopeSpec>(&attention->position)) {
-            multi->base.scaling = inferred->scaling;
+            multi->base.scaling = rope_info->scaling;
+        }
+    }
+}
+
+/// Suffix KV sharing from `num_kv_shared_layers`, mirroring HF: the last N
+/// layers consume KV from the last non-shared layer of their own pattern type.
+/// Groups are per layer type because `shared_attention_state_compatible`
+/// requires matching `head_dim`, and sliding vs full widths differ. Layers
+/// that never publish or consume keep `PrivateKv`, so checkpoints without the
+/// key are bit-identical.
+void apply_kv_sharing(ModelGraph& graph,
+                      const NormalizedModelMetadata& metadata) {
+    const std::optional<int> shared = metadata.attention.kv_shared_layers;
+    if (!shared.has_value() || *shared <= 0) return;
+    const int layers = static_cast<int>(graph.layers.size());
+    if (*shared >= layers) {
+        inference_detail::fail(
+            ResolutionFailureKind::ConflictingMetadata,
+            "num_kv_shared_layers covers the whole layer stack");
+    }
+    const int first_shared = layers - *shared;
+    bool has_sliding = false;
+    bool has_full = false;
+    for (int layer = 0; layer < layers; ++layer) {
+        const AttentionPatternKind pattern =
+            metadata.attention.pattern.value_for(layer).value_or(
+                AttentionPatternKind::FullCausal);
+        if (pattern == AttentionPatternKind::SlidingWindow) has_sliding = true;
+        if (pattern == AttentionPatternKind::FullCausal) has_full = true;
+    }
+    const bool has_variants = has_sliding && has_full;
+    const auto group_for = [&](AttentionPatternKind pattern) {
+        return has_variants
+            ? (pattern == AttentionPatternKind::SlidingWindow ? 1 : 0)
+            : 0;
+    };
+    std::optional<int> last_sliding;
+    std::optional<int> last_full;
+    for (int layer = 0; layer < first_shared; ++layer) {
+        const AttentionPatternKind pattern =
+            metadata.attention.pattern.value_for(layer).value_or(
+                AttentionPatternKind::FullCausal);
+        if (pattern == AttentionPatternKind::SlidingWindow) last_sliding = layer;
+        if (pattern == AttentionPatternKind::FullCausal) last_full = layer;
+    }
+    for (int layer = 0; layer < layers; ++layer) {
+        auto* attention = std::get_if<AttentionSpec>(
+            &graph.layers[static_cast<size_t>(layer)].mixer);
+        if (attention == nullptr) continue;
+        const AttentionPatternKind pattern =
+            metadata.attention.pattern.value_for(layer).value_or(
+                AttentionPatternKind::FullCausal);
+        if (pattern != AttentionPatternKind::FullCausal &&
+            pattern != AttentionPatternKind::SlidingWindow) {
+            continue;
+        }
+        const int group = group_for(pattern);
+        const std::optional<int> publisher = pattern == AttentionPatternKind::SlidingWindow
+            ? last_sliding : last_full;
+        if (layer >= first_shared) {
+            if (!publisher.has_value()) {
+                inference_detail::fail(
+                    ResolutionFailureKind::MissingRequiredMetadata,
+                    "KV-shared layer has no publisher of its own pattern type");
+            }
+            attention->kv_sharing = SharedKvConsumer{group};
+            /// Shared layers reuse their publisher's already-normalized KV states,
+            /// so they own no K projection, K norm or V norm. Clearing them keeps
+            /// the weight plan and loaders from requesting unused tensors.
+            attention->key_norm = std::nullopt;
+            attention->value_norm = std::nullopt;
+        } else if (publisher.has_value() && layer == *publisher) {
+            attention->kv_sharing = SharedKvPublisher{group};
         }
     }
 }
@@ -67,6 +146,7 @@ CanonicalModelFacts infer_canonical_model_facts(const InferenceInput& input) {
     inference_detail::resolve_canonical_layers(context);
     apply_attention_patterns(context.facts.graph, input.metadata);
     apply_position_scaling(context.facts.graph, input.metadata);
+    apply_kv_sharing(context.facts.graph, input.metadata);
     context.facts.validate();
     return std::move(context.facts);
 }
@@ -153,6 +233,9 @@ void CanonicalModelFacts::validate() const {
                 }
                 if (attention.key_norm && !attention.key_norm->weightless()) {
                     require(TensorRole::AttentionKeyNorm, layer);
+                }
+                if (attention.value_norm && !attention.value_norm->weightless()) {
+                    require(TensorRole::AttentionValueNorm, layer);
                 }
             }
             require(

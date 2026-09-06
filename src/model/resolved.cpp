@@ -51,6 +51,8 @@ void append_rope(std::ostringstream& out, const RopePositionSpec& rope) {
         } else if constexpr (std::is_same_v<Scaling, Llama3FrequencyScaling>) {
             out << "llama3:" << scaling.factor << ':' << scaling.original_context << ':'
                 << scaling.low_frequency_factor << ':' << scaling.high_frequency_factor;
+        } else if constexpr (std::is_same_v<Scaling, ProportionalRopeScaling>) {
+            out << "proportional:" << scaling.factor;
         } else {
             static_assert(always_false_v<Scaling>, "unhandled RoPE scaling variant");
         }
@@ -97,6 +99,7 @@ void append_attention(std::ostringstream& out, const AttentionSpec& attention) {
     out << attention.query_scale << ':';
     append_optional_norm(out, attention.query_norm);
     append_optional_norm(out, attention.key_norm);
+    append_optional_norm(out, attention.value_norm);
     append_position(out, attention.position);
     out << "pattern:";
     std::visit([&out](const auto& pattern) {
@@ -438,6 +441,13 @@ void ModelGraph::validate() const {
         if (const auto* attention = std::get_if<AttentionSpec>(&layer.mixer)) {
             if (attention->query_norm) attention->query_norm->validate();
             if (attention->key_norm) attention->key_norm->validate();
+            if (attention->value_norm) {
+                attention->value_norm->validate();
+                if (attention->uses_latent_state()) {
+                    throw std::runtime_error(
+                        "value normalization is meaningless for latent attention");
+                }
+            }
             std::visit([&](const auto& position) {
                 using Position = std::decay_t<decltype(position)>;
                 if constexpr (std::is_same_v<Position, NoPositionEncodingSpec>) {

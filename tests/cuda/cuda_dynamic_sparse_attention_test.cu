@@ -1,6 +1,7 @@
 #include "backend/cuda/compiler.hpp"
 #include "kernels/kernels.cuh"
 #include "support/assertions.hpp"
+#include "support/cuda_kernel_assertions.cuh"
 #include "utils.cuh"
 
 #include <array>
@@ -32,6 +33,22 @@ celeg::ResolvedModel dynamic_sparse_fixture() {
     layer.feed_forward = celeg::DenseFeedForwardSpec{
         4, celeg::ActivationKind::SwiGLU};
     model.graph.layers.push_back(layer);
+
+    /// `build_model_program` requires every layer to own at least one weight
+    /// request; the fixture has no checkpoint behind it, so declare the roles
+    /// the layer's specs imply directly.
+    for (celeg::TensorRole role : {
+             celeg::TensorRole::AttentionInputNorm,
+             celeg::TensorRole::AttentionQuery,
+             celeg::TensorRole::AttentionKey,
+             celeg::TensorRole::AttentionValue,
+             celeg::TensorRole::AttentionOutput,
+             celeg::TensorRole::FfnInputNorm,
+             celeg::TensorRole::FfnGate,
+             celeg::TensorRole::FfnUp,
+             celeg::TensorRole::FfnDown}) {
+        model.weight_plan.requests.push_back({role, 0, -1, {}});
+    }
     return model;
 }
 

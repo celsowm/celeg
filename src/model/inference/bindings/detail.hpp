@@ -12,6 +12,7 @@ void infer_and_bind_layer_norms(
 void resolve_layer_feed_forward(
     CanonicalInferenceContext& context, int layer);
 void apply_attention_output_scale(CanonicalInferenceContext& context);
+void apply_value_norm(CanonicalInferenceContext& context);
 void bind_per_layer_input(CanonicalInferenceContext& context);
 
 }

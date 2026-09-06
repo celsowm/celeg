@@ -481,12 +481,14 @@ int main() {
     // architecture with the same hparams must resolve to a real
     // InferredRopePosition carrying those values through unmodified.
     const auto no_rope_facts = celeg::normalize_model_metadata(no_rope_gguf_metadata());
+    CELEG_TEST_CHECK(no_rope_facts.attention.position_encoding.global.has_value());
     CELEG_TEST_CHECK(std::holds_alternative<celeg::NoPositionEncodingSpec>(
-        no_rope_facts.attention.position_encoding));
+        *no_rope_facts.attention.position_encoding.global));
     const auto rope_facts = celeg::normalize_model_metadata(gguf_metadata());
+    CELEG_TEST_CHECK(rope_facts.attention.position_encoding.global.has_value());
     CELEG_TEST_CHECK(std::holds_alternative<celeg::InferredRopePosition>(
-        rope_facts.attention.position_encoding));
-    CELEG_TEST_CHECK(std::get<celeg::InferredRopePosition>(rope_facts.attention.position_encoding).theta ==
+        *rope_facts.attention.position_encoding.global));
+    CELEG_TEST_CHECK(std::get<celeg::InferredRopePosition>(*rope_facts.attention.position_encoding.global).theta ==
         10000.0);
 
     auto ling_alias = metadata();

@@ -279,6 +279,49 @@ void CpuLinearEngine::gemv_transpose(const CpuLinearWeight& weight,
     }
 }
 
+void CpuLinearEngine::gemv_rows(const CpuLinearWeight& weight,
+                                const float* input, float* output,
+                                size_t row_offset, size_t row_count) const {
+    weight.validate();
+    if (!input || !output || row_offset > weight.rows ||
+        row_offset + row_count > weight.rows) {
+        throw std::invalid_argument("invalid CPU row-sliced GEMV arguments");
+    }
+    size_t global_row = 0;
+    for (const CpuLinearMatrix& segment : weight.segments) {
+        const size_t segment_rows =
+            static_cast<size_t>(std::visit([](const auto& m) { return m.rows; }, segment));
+        const size_t begin = std::max(row_offset, global_row);
+        const size_t end = std::min(row_offset + row_count, global_row + segment_rows);
+        if (begin < end) {
+            std::vector<float> row(static_cast<size_t>(weight.cols));
+            for (size_t r = begin; r < end; ++r) {
+                const size_t local = r - global_row;
+                std::visit([&](const auto& matrix) {
+                    using Matrix = std::remove_cvref_t<decltype(matrix)>;
+                    if constexpr (std::is_same_v<Matrix, Q4GroupMatrix>) {
+                        dequantize_q4_row(matrix, local, row.data());
+                    } else if constexpr (std::is_same_v<Matrix, CpuInt8Matrix>) {
+                        for (size_t c = 0; c < static_cast<size_t>(weight.cols); ++c) {
+                            row[c] = static_cast<float>(
+                                         matrix.data()[local * weight.cols + c]) *
+                                matrix.scales->at(local);
+                        }
+                    } else {
+                        ggml_decode_row(matrix, local, row.data());
+                    }
+                }, segment);
+                float sum = 0.0f;
+                for (size_t c = 0; c < static_cast<size_t>(weight.cols); ++c) {
+                    sum += row[c] * input[c];
+                }
+                output[r - row_offset] = sum;
+            }
+        }
+        global_row += segment_rows;
+    }
+}
+
 void CpuLinearEngine::gemm(const CpuLinearWeight& weight, const float* input,
                             float* output, size_t rows, float beta) const {
     weight.validate();

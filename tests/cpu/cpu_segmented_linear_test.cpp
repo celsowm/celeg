@@ -72,4 +72,28 @@ int main() {
     for (size_t i = 0; i < actual_batch.size(); ++i) {
         CELEG_TEST_CHECK(std::abs(actual_batch[i] - expected_batch[i]) < 1e-5f);
     }
+
+    /// Row-sliced GEMV: `gemv_rows` must equal slicing a full GEMV over the
+    /// same quantized segments and must cross a Q4 segment boundary (this is
+    /// the MLA value-decompression primitive; a hand-rolled transpose variant
+    /// once silently produced a column-space contraction instead).
+    {
+        const size_t slice_offset = 7;
+        const size_t slice_rows = 9;
+        std::vector<float> sliced(slice_rows);
+        linear.gemv_rows(segmented, input.data(), sliced.data(),
+                         slice_offset, slice_rows);
+        for (size_t j = 0; j < slice_rows; ++j) {
+            /// Q4 GEMV uses a fused quant path while gemv_rows dequantizes a
+            /// row and dots in FP32; the two converge only up to Q4-row
+            /// rounding, so compare under the suite's Q4 tolerance.
+            CELEG_TEST_CHECK(
+                std::abs(sliced[j] - actual[slice_offset + j]) < 0.08f);
+        }
+        /// Row slices must never bleed into `output` beyond `row_count`.
+        std::vector<float> padded(slice_rows + 1, -1.0f);
+        linear.gemv_rows(segmented, input.data(), padded.data(),
+                         slice_offset, slice_rows);
+        CELEG_TEST_CHECK(padded[slice_rows] == -1.0f);
+    }
 }

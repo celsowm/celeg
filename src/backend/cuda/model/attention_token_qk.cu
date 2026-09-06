@@ -10,6 +10,7 @@ void prepare_cuda_token_attention_qk(
     AttentionLayer& attention,
     __nv_bfloat16* query,
     __nv_bfloat16* key,
+    __nv_bfloat16* value,
     bool paged,
     const std::array<int32_t, 3>* rope_position) {
     const AttentionSpec& layout = attention.layout;
@@ -36,8 +37,10 @@ void prepare_cuda_token_attention_qk(
         .layout = &layout,
         .query = query,
         .key = attention.key ? key : nullptr,
+        .value = attention.value ? value : nullptr,
         .query_norm = attention.q_norm,
         .key_norm = attention.k_norm,
+        .value_norm = attention.v_norm,
         .norm_epsilon = qk_epsilon,
         .position_mode = multi
             ? CudaQkPositionMode::MultiAxisDevice

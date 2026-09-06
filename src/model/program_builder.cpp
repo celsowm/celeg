@@ -40,6 +40,7 @@ CompiledAttentionExecution lower_attention_execution(const AttentionSpec& attent
         !std::holds_alternative<SharedKvConsumer>(attention.kv_sharing) &&
         !attention.uses_external_memory();
     result.has_query_key_norm = attention.has_query_key_norm();
+    result.has_value_norm = attention.has_value_norm();
     result.has_rope = attention.rope_position() != nullptr;
     if (const RopePositionSpec* rope = attention.rope_position()) {
         result.rope_pairing = rope->pairing;

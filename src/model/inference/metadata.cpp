@@ -15,6 +15,10 @@ namespace {
 template <typename T>
 std::optional<T> scalar(const CheckpointMetadata& metadata, std::string_view key) {
     if (!metadata.contains(key)) return std::nullopt;
+    /// Record here, not just in the `aliases` wrapper: this is the single
+    /// choke point every metadata read flows through, so a present key the
+    /// resolver probes is never mistaken for an unread one by the ledger.
+    inference_detail::record_metadata_consumption(key);
     const MetadataValue& value = metadata.value(key);
     if constexpr (std::is_same_v<T, int>) {
         if (const auto* integer = std::get_if<std::int64_t>(&value)) {
@@ -69,6 +73,9 @@ template <typename T>
 std::optional<T> gguf_scalar_or_uniform_schedule(const CheckpointMetadata& metadata,
                                                  std::string_view key) {
     if (!metadata.contains(key)) return std::nullopt;
+    /// Same choke-point recording as `scalar`: direct callers (e.g. the
+    /// `<arch>.rope.dimension_count` read) consume the key too.
+    inference_detail::record_metadata_consumption(key);
     const MetadataValue& value = metadata.value(key);
     if (const auto* values = std::get_if<std::vector<std::int64_t>>(&value)) {
         if (values->empty() || !std::all_of(values->begin() + 1, values->end(),
@@ -110,6 +117,7 @@ LayerScopedValue<T> scoped_aliases(const CheckpointMetadata& metadata,
     std::string source;
     const auto consider_scalar = [&](std::optional<T> value, std::string_view key) {
         if (!value.has_value()) return;
+        inference_detail::record_metadata_consumption(key);
         if (result.global.has_value() && *result.global != *value) {
             inference_detail::fail(ResolutionFailureKind::ConflictingMetadata,
                                    "conflicting metadata aliases for " + std::string(fact));
@@ -129,6 +137,7 @@ LayerScopedValue<T> scoped_aliases(const CheckpointMetadata& metadata,
     };
     const auto consider_vector = [&](const MetadataValue& metadata_value,
                                      std::string_view key) {
+        inference_detail::record_metadata_consumption(key);
         std::vector<std::optional<T>> values;
         if (const auto* integers = std::get_if<std::vector<int64_t>>(&metadata_value)) {
             values.reserve(integers->size());
@@ -244,12 +253,10 @@ std::optional<T> aliases(const CheckpointMetadata& metadata,
     std::string source;
     const auto consider = [&](std::optional<T> value, std::string_view key) {
         if (!value.has_value()) return;
+        inference_detail::record_metadata_consumption(key);
         if (result.has_value() && *result != *value) {
-            if (std::string(fact) != "rope_theta") {
-                inference_detail::fail(ResolutionFailureKind::ConflictingMetadata,
-                                       "conflicting metadata aliases for " + std::string(fact));
-            }
-            return;
+            inference_detail::fail(ResolutionFailureKind::ConflictingMetadata,
+                                   "conflicting metadata aliases for " + std::string(fact));
         }
         result = value;
         source = key;
@@ -279,12 +286,31 @@ std::optional<T> aliases(const CheckpointMetadata& metadata,
 /// wrong activation produces fluent-looking nonsense instead of an error.
 std::optional<ActivationKind> feed_forward_activation(
     const CheckpointMetadata& metadata, std::vector<EvidenceItem>& evidence) {
+    /// `mlp_type` states the feed-forward structure explicitly: celeg builds
+    /// the gated gate/up/down structure from `hidden_act`, so `gated` merely
+    /// confirms it, while anything else fails loudly instead of resolving a
+    /// different MLP shape as SwiGLU (verified against the checkpoint-shipped
+    /// Lizzy reference: `mlp_type == "gated"` guards the gate projection).
+    for (const std::string_view candidate : {
+             std::string_view("mlp_type"),
+             std::string_view("text_config.mlp_type")}) {
+        if (!metadata.contains(candidate)) continue;
+        inference_detail::record_metadata_consumption(candidate);
+        const std::string mlp = metadata.string(candidate);
+        if (mlp != "gated") {
+            inference_detail::fail(ResolutionFailureKind::UnsupportedSemanticFeature,
+                                   "unsupported feed-forward structure: " + mlp);
+        }
+        evidence.push_back({EvidenceKind::ExplicitMetadata, std::string(candidate),
+                            "feed_forward structure = gated"});
+    }
     for (const std::string_view key : {
              std::string_view("hidden_act"),
              std::string_view("hidden_activation"),
              std::string_view("text_config.hidden_act"),
              std::string_view("text_config.hidden_activation")}) {
         if (!metadata.contains(key)) continue;
+        inference_detail::record_metadata_consumption(key);
         const auto* name = std::get_if<std::string>(&metadata.value(key));
         if (name == nullptr) continue;
         std::optional<ActivationKind> kind;
@@ -311,6 +337,7 @@ std::optional<int> tokenizer_vocabulary_size(const CheckpointMetadata& metadata,
                                              std::vector<EvidenceItem>& evidence) {
     constexpr std::string_view key = "tokenizer.ggml.tokens";
     if (!metadata.contains(key)) return std::nullopt;
+    inference_detail::record_metadata_consumption(key);
     const auto* tokens = std::get_if<std::vector<std::string>>(&metadata.value(key));
     if (!tokens || tokens->empty() || tokens->size() > static_cast<size_t>(std::numeric_limits<int>::max())) {
         inference_detail::fail(ResolutionFailureKind::ConflictingMetadata,
@@ -331,6 +358,7 @@ std::vector<int> token_list(const CheckpointMetadata& metadata, std::string_view
             if (!metadata.contains(resolved_key)) return {};
         }
     }
+    inference_detail::record_metadata_consumption(resolved_key);
     const MetadataValue& value = metadata.value(resolved_key);
     if (const auto* integer = std::get_if<std::int64_t>(&value)) {
         if (*integer < std::numeric_limits<int>::min() ||
@@ -357,7 +385,13 @@ std::vector<int> token_list(const CheckpointMetadata& metadata, std::string_view
                                    "token metadata has an incompatible type: " + resolved_key);
 }
 
-void reject_unknown_semantic_metadata(const CheckpointMetadata& metadata) {
+}
+
+void reject_prior_unknown_semantics(const CheckpointMetadata& metadata) {
+    /// Preserve the pre-ledger hard-fail for the original trigger family so
+    /// direct `normalize_model_metadata` callers (including existing tests)
+    /// still fail loudly on unknown `xsa`/`qk_norm`/`rope_pair` keys without
+    /// needing the full ledger (which only runs in `build_inference_input`).
     static const std::unordered_set<std::string> known = {
         "qk_norm", "query_key_norm", "use_qk_norm", "qk_norm_type", "xsa_projection",
         "xsa_projection_minimum_norm_squared", "rope_pairing", "rope_interleaved",
@@ -381,10 +415,20 @@ void reject_unknown_semantic_metadata(const CheckpointMetadata& metadata) {
     }
 }
 
-}
-
 NormalizedModelMetadata normalize_model_metadata(const CheckpointMetadata& metadata) {
-    reject_unknown_semantic_metadata(metadata);
+    reject_prior_unknown_semantics(metadata);
+    /// Catalog selection reads the architecture identity before any rule
+    /// runs (`automatic_architecture.cpp` via `metadata.architecture_type()`
+    /// and `repository_hint`), through direct accessors that bypass the alias
+    /// choke point. Record those keys here so the ledger does not mistake
+    /// identity for unconsumed mathematics. Recording an absent key is a
+    /// no-op for the gate, which only iterates present keys.
+    for (const std::string_view key : {std::string_view("model_type"),
+                                        std::string_view("general.architecture"),
+                                        std::string_view("general.name"),
+                                        std::string_view("general.basename")}) {
+        if (metadata.contains(key)) inference_detail::record_metadata_consumption(key);
+    }
     NormalizedModelMetadata result;
     result.core.hidden_size = aliases<int>(metadata, {"hidden_size", "n_embd", "d_model"},
                                            result.evidence, "hidden_size", "embedding_length");
@@ -443,12 +487,33 @@ NormalizedModelMetadata normalize_model_metadata(const CheckpointMetadata& metad
     result.core.norm_epsilon = aliases<float>(
         metadata, {"norm_eps", "rms_norm_eps", "rms_norm_epsilon", "layer_norm_epsilon"},
         result.evidence, "norm_epsilon", "attention.layer_norm_rms_epsilon");
+    /// `norm_type` states the normalization kind explicitly: every norm celeg
+    /// binds is RMS, so `rmsnorm` merely confirms it, while anything else
+    /// fails loudly instead of resolving (e.g.) a LayerNorm as RMS.
+    for (const std::string_view candidate : {
+             std::string_view("norm_type"),
+             std::string_view("text_config.norm_type")}) {
+        if (!metadata.contains(candidate)) continue;
+        inference_detail::record_metadata_consumption(candidate);
+        const std::string norm = metadata.string(candidate);
+        if (norm != "rmsnorm") {
+            inference_detail::fail(ResolutionFailureKind::UnsupportedSemanticFeature,
+                                   "unsupported normalization type: " + norm);
+        }
+        result.evidence.push_back({EvidenceKind::ExplicitMetadata, std::string(candidate),
+                                   "norm_type = rmsnorm"});
+    }
     result.core.embedding_multiplier = aliases<float>(
         metadata, {"embedding_multiplier"}, result.evidence,
         "embedding_multiplier");
     result.attention.attention_multiplier = aliases<float>(
         metadata, {"attention_multiplier"}, result.evidence,
         "attention_multiplier");
+    /// Suffix KV sharing (`num_kv_shared_layers`): the last N layers consume KV
+    /// from an earlier publisher of their own pattern type. Absent means private KV.
+    result.attention.kv_shared_layers = aliases<int>(
+        metadata, {"num_kv_shared_layers", "shared_kv_suffix_layers"}, result.evidence,
+        "kv_shared_layers");
     result.core.residual_multiplier = aliases<float>(
         metadata, {"residual_multiplier"}, result.evidence,
         "residual_multiplier");
@@ -458,13 +523,34 @@ NormalizedModelMetadata normalize_model_metadata(const CheckpointMetadata& metad
     result.core.logits_divisor = aliases<float>(
         metadata, {"logits_divisor", "logits_scaling"}, result.evidence,
         "logits_divisor");
+    /// `ModelGraph::final_logit_softcap` is implemented on every backend but
+    /// nothing in the automatic resolver ever assigned it. One key read here
+    /// feeds both the numerical policy and the graph below.
+    result.core.final_logit_softcap = aliases<float>(
+        metadata, {"final_logit_softcapping", "final_logit_softcap", "logit_softcapping"},
+        result.evidence, "final_logit_softcap");
     result.core.feed_forward_activation =
         feed_forward_activation(metadata, result.evidence);
     result.short_conv.cache_length = aliases<int>(metadata, {"conv_L_cache"}, result.evidence,
                                                   "shortconv_cache", "shortconv.l_cache");
+    /// Per-pattern thetas (`rope_parameters.<layer_type>.rope_theta`) are resolved
+    /// layer-wise in `normalize_attention_schedule` once the `layer_types` schedule
+    /// is known; they are intentionally absent here so that disagreeing per-pattern
+    /// values fail loudly there instead of being silently first-wins here.
     std::optional<double> rope_theta = aliases<double>(
-        metadata, {"rope_theta", "rope_parameters.rope_theta", "rope_parameters.full_attention.rope_theta", "rope_parameters.sliding_attention.rope_theta", "text_config.rope_parameters.full_attention.rope_theta", "text_config.rope_parameters.sliding_attention.rope_theta"}, result.evidence,
+        metadata, {"rope_theta", "rope_parameters.rope_theta"}, result.evidence,
         "rope_theta", "rope.freq_base");
+    /// A nested `rope_scaling.rope_theta` restates the global theta inside
+    /// the scaling block (Lizzy); it must agree instead of silently winning.
+    const std::optional<double> scaling_theta = scalar<double>(metadata, "rope_scaling.rope_theta");
+    if (scaling_theta.has_value()) {
+        if (!rope_theta.has_value() || *scaling_theta != *rope_theta) {
+            inference_detail::fail(ResolutionFailureKind::ConflictingMetadata,
+                                   "rope_scaling.rope_theta disagrees with rope_theta");
+        }
+        result.evidence.push_back({EvidenceKind::AliasMetadata, "rope_scaling.rope_theta",
+                                   "rope_theta restated inside rope_scaling"});
+    }
     std::optional<float> rotary_fraction = aliases<float>(
         metadata, {"rotary_fraction", "partial_rotary_factor"}, result.evidence,
         "rotary_fraction");
@@ -518,8 +604,9 @@ NormalizedModelMetadata normalize_model_metadata(const CheckpointMetadata& metad
         std::string qk_norm_type_source;
         for (const std::string_view key : {
                  std::string_view("qk_norm_type"),
-                 std::string_view("text_config.qk_norm_type")}) {
+                  std::string_view("text_config.qk_norm_type")}) {
             if (!metadata.contains(key)) continue;
+            inference_detail::record_metadata_consumption(key);
             const MetadataValue& raw = metadata.value(key);
             const auto* value = std::get_if<std::string>(&raw);
             if (value == nullptr) {
@@ -590,6 +677,12 @@ NormalizedModelMetadata normalize_model_metadata(const CheckpointMetadata& metad
     result.gated_delta.linear_conv_kernel = aliases<int>(
         metadata, {"linear_conv_kernel_dim"}, result.evidence,
         "recurrent_linear_conv_kernel");
+    result.gated_delta.direct_projections = aliases<bool>(
+        metadata, {"no_kda_lora"}, result.evidence,
+        "recurrent_direct_projections");
+    result.gated_delta.hybrid_group_size = aliases<int>(
+        metadata, {"layer_group_size"}, result.evidence,
+        "recurrent_hybrid_group_size");
 
     result.latent_attention.query_rank = aliases<int>(
         metadata, {"q_lora_rank"}, result.evidence, "latent_query_rank");
@@ -603,6 +696,27 @@ NormalizedModelMetadata normalize_model_metadata(const CheckpointMetadata& metad
         metadata, {"qk_rope_head_dim"}, result.evidence, "latent_query_rope_dim");
     result.latent_attention.value_head_dim = aliases<int>(
         metadata, {"v_head_dim"}, result.evidence, "latent_value_head_dim");
+    /// `gated_attention_proj_granularity_type` states the MLA output-gate
+    /// geometry the latent rule also infers from the `g_proj` shape; the rule
+    /// confronts the two and fails loudly on disagreement, so reading the
+    /// string here (rather than dropping it in the ledger) is what makes a
+    /// `head_wise` checkpoint verifiable instead of merely resolvable.
+    for (const std::string_view candidate : {
+             std::string_view("gated_attention_proj_granularity_type"),
+             std::string_view("text_config.gated_attention_proj_granularity_type")}) {
+        if (!metadata.contains(candidate)) continue;
+        inference_detail::record_metadata_consumption(candidate);
+        const std::string granularity = metadata.string(candidate);
+        if (granularity != "head_wise" && granularity != "element_wise") {
+            inference_detail::fail(
+                ResolutionFailureKind::UnsupportedSemanticFeature,
+                "unsupported attention gate granularity: " + granularity);
+        }
+        result.latent_attention.output_gate_granularity = granularity;
+        result.evidence.push_back({EvidenceKind::ExplicitMetadata, std::string(candidate),
+                                   "latent_output_gate_granularity"});
+        break;
+    }
     result.moe.experts = aliases<int>(
         metadata, {"num_experts"}, result.evidence, "moe_experts");
     result.moe.experts_per_token = aliases<int>(
@@ -627,23 +741,40 @@ NormalizedModelMetadata normalize_model_metadata(const CheckpointMetadata& metad
         metadata, {"moe_router_enable_expert_bias"}, result.evidence, "moe_expert_bias");
     result.moe.routed_scaling = aliases<float>(
         metadata, {"routed_scaling_factor"}, result.evidence, "moe_routed_scaling");
-    if (metadata.contains("score_function") || metadata.contains("scoring_func")) {
-        const std::string primary = metadata.contains("score_function")
-            ? "score_function" : "scoring_func";
-        const std::string score = metadata.string(primary);
+    for (const std::string_view candidate : {
+             std::string_view("score_function"), std::string_view("scoring_func"),
+             std::string_view("text_config.score_function"),
+             std::string_view("text_config.scoring_func")}) {
+        if (!metadata.contains(candidate)) continue;
+        inference_detail::record_metadata_consumption(candidate);
+        const std::string score = metadata.string(candidate);
         if (score == "sigmoid") {
+            if (result.moe.score_function.has_value() &&
+                *result.moe.score_function != MoeRouterScoreFunction::Sigmoid) {
+                inference_detail::fail(ResolutionFailureKind::ConflictingMetadata,
+                                       "conflicting MoE router score functions");
+            }
             result.moe.score_function = MoeRouterScoreFunction::Sigmoid;
         } else if (score == "softmax") {
+            if (result.moe.score_function.has_value() &&
+                *result.moe.score_function != MoeRouterScoreFunction::Softmax) {
+                inference_detail::fail(ResolutionFailureKind::ConflictingMetadata,
+                                       "conflicting MoE router score functions");
+            }
             result.moe.score_function = MoeRouterScoreFunction::Softmax;
         } else {
             inference_detail::fail(ResolutionFailureKind::UnsupportedSemanticFeature,
                                    "unsupported MoE router score function: " + score);
         }
-        result.evidence.push_back({EvidenceKind::ExplicitMetadata, primary,
+        result.evidence.push_back({EvidenceKind::ExplicitMetadata, std::string(candidate),
                                    "moe_score_function"});
     }
-    if (metadata.contains("topk_method")) {
-        const std::string method = metadata.string("topk_method");
+    for (const std::string_view candidate : {
+             std::string_view("topk_method"),
+             std::string_view("text_config.topk_method")}) {
+        if (!metadata.contains(candidate)) continue;
+        inference_detail::record_metadata_consumption(candidate);
+        const std::string method = metadata.string(candidate);
         if (method == "noaux_tc") {
             result.moe.selection_method = MoeRouterSelectionMethod::NoauxTc;
         } else if (method == "greedy") {
@@ -657,8 +788,9 @@ NormalizedModelMetadata normalize_model_metadata(const CheckpointMetadata& metad
         if (method == "noaux_tc" && !result.moe.group_score_top_k.has_value()) {
             result.moe.group_score_top_k = 2;
         }
-        result.evidence.push_back({EvidenceKind::ExplicitMetadata, "topk_method",
+        result.evidence.push_back({EvidenceKind::ExplicitMetadata, std::string(candidate),
                                    "moe_selection_method"});
+        break;
     }
     result.attention.xsa_projection = aliases<bool>(metadata, {"xsa_projection"}, result.evidence,
                                                     "xsa_projection");
@@ -679,13 +811,33 @@ NormalizedModelMetadata normalize_model_metadata(const CheckpointMetadata& metad
     if (result.core.eos_token_ids.empty()) result.core.eos_token_ids = {0};
     if (!result.core.pad_token_id.has_value()) result.core.pad_token_id = 1;
     if (!result.core.norm_epsilon.has_value()) result.core.norm_epsilon = 1.0e-6f;
-    if (!result.core.embedding_multiplier.has_value()) result.core.embedding_multiplier = 1.0f;
+    /// No default for `embedding_multiplier` here: `global_facts.cpp` needs to
+    /// distinguish an explicit key from absence so the per-layer-input tower
+    /// can imply `sqrt(hidden)` only when no explicit multiplier is present.
     if (!result.core.residual_multiplier.has_value()) result.core.residual_multiplier = 1.0f;
     if (!result.core.logits_multiplier.has_value()) result.core.logits_multiplier = 1.0f;
     if (!result.core.logits_divisor.has_value()) result.core.logits_divisor = 1.0f;
     if (!result.attention.query_key_norm.has_value()) result.attention.query_key_norm = false;
     if (!result.attention.xsa_projection.has_value()) result.attention.xsa_projection = false;
     if (!result.attention.xsa_minimum_norm_squared.has_value()) result.attention.xsa_minimum_norm_squared = 1.0e-6f;
+
+    /// `position_embedding_type` states the global position policy
+    /// explicitly; celeg resolves RoPE everywhere by default, so `rope`
+    /// merely confirms it, while anything else fails loudly instead of
+    /// resolving RoPE against a checkpoint that asked for something else.
+    for (const std::string_view candidate : {
+             std::string_view("position_embedding_type"),
+             std::string_view("text_config.position_embedding_type")}) {
+        if (!metadata.contains(candidate)) continue;
+        inference_detail::record_metadata_consumption(candidate);
+        const std::string policy = metadata.string(candidate);
+        if (policy != "rope") {
+            inference_detail::fail(ResolutionFailureKind::UnsupportedSemanticFeature,
+                                   "unsupported position embedding type: " + policy);
+        }
+        result.evidence.push_back({EvidenceKind::ExplicitMetadata, std::string(candidate),
+                                   "position_embedding_type = rope"});
+    }
 
     if (architecture_never_applies_rope) {
         /// Some GGUF architectures (mostly hybrid recurrent/attention models
@@ -694,25 +846,50 @@ NormalizedModelMetadata normalize_model_metadata(const CheckpointMetadata& metad
         /// builder never actually applies to the attention layers. Applying
         /// RoPE anyway corrupts every attention layer's positional structure,
         /// so the GGUF format boundary overrides any rope metadata present.
-        result.attention.position_encoding = NoPositionEncodingSpec{};
+        result.attention.position_encoding.global = NoPositionEncodingSpec{};
         result.evidence.push_back({EvidenceKind::FormatGuarantee, "architecture",
                                    metadata.architecture_type() + " does not use RoPE"});
     } else {
-        if (!rope_theta.has_value()) {
-            inference_detail::fail(ResolutionFailureKind::MissingRequiredMetadata,
-                                   "checkpoint applies RoPE but does not specify rope_theta");
-        }
         RopePairingKind pairing = RopePairingKind::SplitHalf;
+        std::optional<RopePairingKind> stated_pairing;
         if (metadata.contains("rope_pairing")) {
+            inference_detail::record_metadata_consumption("rope_pairing");
             const std::string pairing_value = metadata.string("rope_pairing");
             if (pairing_value == "adjacent_pairs" || pairing_value == "interleaved") {
-                pairing = RopePairingKind::AdjacentPairs;
+                stated_pairing = RopePairingKind::AdjacentPairs;
             } else if (pairing_value == "split_half") {
-                pairing = RopePairingKind::SplitHalf;
+                stated_pairing = RopePairingKind::SplitHalf;
             } else {
                 inference_detail::fail(ResolutionFailureKind::UnsupportedSemanticFeature,
                                        "unsupported RoPE pairing: " + pairing_value);
             }
+        }
+        /// `rope_interleave` is the HF convention spelling of the same
+        /// pairing fact (`true` = GPT-J-style adjacent pairs, used by the
+        /// shipped Ling MLA path via `apply_rotary_pos_emb_interleave`).
+        if (metadata.contains("rope_interleave")) {
+            inference_detail::record_metadata_consumption("rope_interleave");
+            const auto* flag =
+                std::get_if<bool>(&metadata.value("rope_interleave"));
+            if (flag != nullptr) {
+                const RopePairingKind interleave_pairing =
+                    *flag ? RopePairingKind::AdjacentPairs
+                          : RopePairingKind::SplitHalf;
+                if (stated_pairing.has_value() &&
+                    *stated_pairing != interleave_pairing) {
+                    inference_detail::fail(
+                        ResolutionFailureKind::ConflictingMetadata,
+                        "rope_interleave disagrees with rope_pairing");
+                }
+                stated_pairing = interleave_pairing;
+                result.evidence.push_back({
+                    EvidenceKind::ExplicitMetadata, "rope_interleave",
+                    *flag ? "RoPE pairing = adjacent_pairs (interleaved)"
+                          : "RoPE pairing = split_half"});
+            }
+        }
+        if (stated_pairing.has_value()) {
+            pairing = *stated_pairing;
         } else if (*result.attention.xsa_projection) {
             pairing = RopePairingKind::AdjacentPairs;
             result.evidence.push_back({EvidenceKind::FormatGuarantee, "xsa_projection",
@@ -729,13 +906,20 @@ NormalizedModelMetadata normalize_model_metadata(const CheckpointMetadata& metad
                                        metadata.architecture_type(),
                                        "GGUF architecture stores adjacent-pair Q/K rows"});
         }
-        result.attention.position_encoding = InferredRopePosition{
-            *rope_theta,
-            rotary_fraction.value_or(1.0f),
-            pairing,
-            RopeScalingSpec{},
-            mrope_sections,
-            mrope_interleaved};
+        /// Global theta absent when the checkpoint only declares per-pattern thetas
+        /// (`rope_parameters.<layer_type>.rope_theta`); the per-layer schedule is
+        /// fanned out in `normalize_attention_schedule` once `layer_types` is known.
+        /// Leaving `global` empty here defers the missing-theta failure until every
+        /// layer can be checked via `value_for(layer)`.
+        if (rope_theta.has_value()) {
+            result.attention.position_encoding.global = InferredRopePosition{
+                *rope_theta,
+                rotary_fraction.value_or(1.0f),
+                pairing,
+                RopeScalingSpec{},
+                mrope_sections,
+                mrope_interleaved};
+        }
     }
     return result;
 }

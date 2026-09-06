@@ -25,6 +25,10 @@ struct AttentionBackendCapabilities {
     bool standard_execution = false;
     bool latent_execution = false;
     bool factorized_latent_execution = false;
+    /// Per-head value RMSNorm before the KV store. Backends without an
+    /// implementation must leave this false so models needing it fail by name
+    /// instead of silently ignoring the norm.
+    bool value_norm = false;
 };
 
 inline void validate_attention_backend_capabilities(
@@ -70,6 +74,9 @@ inline void validate_attention_backend_capabilities(
             !capabilities.rope) throw unsupported("RoPE attention position encoding");
         if (std::holds_alternative<MultiAxisRopeSpec>(attention.position) &&
             !capabilities.multi_axis_rope) throw unsupported("multi-axis RoPE attention position encoding");
+        if (attention.has_value_norm() && !capabilities.value_norm) {
+            throw unsupported("per-head value normalization");
+        }
 
         switch (compiled->execution.kind) {
         case AttentionExecutionKind::Standard:

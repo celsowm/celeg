@@ -16,6 +16,7 @@ struct CudaRopeScaling {
     float beta_slow = 0.0f;
     float low_frequency_factor = 1.0f;
     float high_frequency_factor = 1.0f;
+    float rotary_fraction = 1.0f;
     int factor_count = 0;
     float short_factors[128]{};
     float long_factors[128]{};
@@ -59,6 +60,12 @@ inline CudaRopeScaling lower_cuda_rope_scaling(const RopePositionSpec& rope) {
             result.original_context = scaling.original_context;
             result.low_frequency_factor = static_cast<float>(scaling.low_frequency_factor);
             result.high_frequency_factor = static_cast<float>(scaling.high_frequency_factor);
+        } else if constexpr (std::is_same_v<Scaling, ProportionalRopeScaling>) {
+            /// Proportional frequencies derive from head_dim, so the kernel
+            /// needs the rotary fraction to rescale the exponent.
+            result.kind = 6;
+            result.factor = static_cast<float>(scaling.factor);
+            result.rotary_fraction = static_cast<float>(rope.rotary_fraction);
         } else {
             static_assert(always_false_v<Scaling>, "unhandled RoPE scaling variant");
         }

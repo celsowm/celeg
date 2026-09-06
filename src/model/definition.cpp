@@ -82,6 +82,10 @@ void validate_rope_scaling(const RopeScalingSpec& scaling, int rotary_dimension)
                 !std::isfinite(value.high_frequency_factor)) {
                 throw std::invalid_argument("invalid Llama-3 RoPE frequency factors");
             }
+        } else if constexpr (std::is_same_v<Scaling, ProportionalRopeScaling>) {
+            if (!(value.factor > 0.0) || !std::isfinite(value.factor)) {
+                throw std::invalid_argument("RoPE scaling factor must be positive");
+            }
         } else {
             static_assert(always_false_v<Scaling>, "unhandled RoPE scaling variant");
         }

@@ -63,8 +63,14 @@ void check_output(const celeg::DeviceBuffer<__nv_bfloat16>& output,
                                cudaMemcpyDeviceToHost, stream.get()));
     CELEG_CUDA(cudaStreamSynchronize(stream.get()));
     for (size_t i = 0; i < host.size(); ++i) {
+        /// Outputs are bf16, so agreement with the fp32 oracle is limited by
+        /// output quantization (up to a few ulps of `expected`): use a
+        /// magnitude-aware tolerance instead of a fixed absolute one, which
+        /// the large-magnitude lanes exceed by rounding alone.
+        const float tolerance =
+            0.04f + 0.002f * std::fabs(expected[i]);
         CELEG_TEST_CHECK(std::abs(
-            celeg::cuda_test::to_float(host[i]) - expected[i]) < 0.04f);
+            celeg::cuda_test::to_float(host[i]) - expected[i]) < tolerance);
     }
 }
 

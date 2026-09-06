@@ -69,6 +69,11 @@ public:
     void gemv_transpose(const CpuLinearWeight& weight, const float* input,
                         float* output, size_t row_offset = 0,
                         size_t row_count = 0) const;
+    /// Row-sliced GEMV: `output[j] = W[row_offset + j][:] · input` for
+    /// `j < row_count`. The transposed variant above projects column-space
+    /// sums; attention value decompression needs the plain row slice.
+    void gemv_rows(const CpuLinearWeight& weight, const float* input,
+                   float* output, size_t row_offset, size_t row_count) const;
     void gemm(const CpuLinearWeight& weight, const float* input, float* output,
               size_t rows, float beta = 0.0f) const;
     void prepare_gguf_activation(const float* input, size_t rows, size_t cols,

@@ -90,9 +90,10 @@ void CudaCompiledModel::run_mtp_forward_device(const int32_t* token_device) {
     const auto* rope = layout.rope_position();
     if (!rope) throw std::logic_error("MTP attention requires positional encoding");
     const float qk_epsilon = layout.query_norm ? layout.query_norm->epsilon : eps;
-    if (layout.has_query_key_norm()) {
-        launch_attention_qk_norm(
-            layout, q, k, attention->q_norm, attention->k_norm, 1, stream);
+    if (layout.has_query_key_norm() || layout.has_value_norm()) {
+        launch_attention_qkv_norm(
+            layout, q, k, v, attention->q_norm, attention->k_norm,
+            attention->v_norm, 1, stream);
     }
     if (const auto* multi = layout.multi_axis_position()) {
         launch_dynamic_mrope_qk_norm_rope(

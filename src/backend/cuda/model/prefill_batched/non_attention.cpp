@@ -41,7 +41,7 @@ void run_gated_delta(
                 workspace.prefill_gated_delta_qkv_.data(),
                 workspace.prefill_k_.data(),
                 workspace.prefill_v_.data(),
-                workspace.prefill_gated_delta_qkv_.data(),
+                workspace.prefill_gated_delta_qkv_inter_.data(),
                 rows, spec.key_heads * spec.key_head_dim, value_width,
                 model.stream_.get());
         } else {
@@ -67,7 +67,9 @@ void run_gated_delta(
 
     prof.begin(model.stream_.get());
     launch_gated_delta_net(
-        workspace.prefill_gated_delta_qkv_.data(),
+        spec.factorized_projections
+            ? workspace.prefill_gated_delta_qkv_inter_.data()
+            : workspace.prefill_gated_delta_qkv_.data(),
         workspace.prefill_gated_delta_z_.data(),
         workspace.prefill_gated_delta_b_.data(),
         workspace.prefill_gated_delta_a_.data(),

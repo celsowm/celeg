@@ -121,6 +121,7 @@ RopeScalingSpec parse_scaling_kind(std::string_view value) {
     if (value == "yarn") return YarnRopeScaling{};
     if (value == "long" || value == "longrope") return LongRopeScaling{};
     if (value == "llama3_frequency") return Llama3FrequencyScaling{};
+    if (value == "proportional") return ProportionalRopeScaling{};
     throw std::invalid_argument("descriptor has unsupported RoPE scaling kind: " +
                                 std::string(value));
 }

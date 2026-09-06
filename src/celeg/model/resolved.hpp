@@ -87,6 +87,12 @@ struct ModelProvenance {
     CheckpointProfile profile;
     std::string checkpoint_profile_id;
     std::string identity;
+    /// Accepted resolution evidence as human-readable `source: fact` lines
+    /// (alias reads plus `Derived` structural rules), copied from
+    /// `CanonicalModelFacts::evidence` so `--print-config` can show *why* each
+    /// fact was chosen. Stored as strings to avoid a `inference.hpp` include
+    /// cycle (`inference.hpp` already includes this header for `ResolvedModel`).
+    std::vector<std::string> evidence;
 };
 
 struct ResolvedModel {

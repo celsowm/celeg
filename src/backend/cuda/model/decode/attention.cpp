@@ -47,7 +47,7 @@ void CudaCompiledModel::run_token_attention(
     __nv_bfloat16* v = qkv.value;
 
     prepare_cuda_token_attention_qk(
-        *this, attention, q, k, kv.paged(), kv.rope_position);
+        *this, attention, q, k, v, kv.paged(), kv.rope_position);
 
     const AttentionCapability plan = token_attention_plan(attention, owner_layout, kv);
     if (kv.paged()) {

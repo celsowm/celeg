@@ -111,6 +111,8 @@ public:
                     metadata, descriptor_.rope_scaling_low_frequency_factor, 1.0);
                 value.high_frequency_factor = scaling_number_value(
                     metadata, descriptor_.rope_scaling_high_frequency_factor, 1.0);
+            } else if constexpr (std::is_same_v<Scaling, ProportionalRopeScaling>) {
+                value.factor = scaling_number_value(metadata, descriptor_.rope_scaling_factor, 1.0);
             } else {
                 static_assert(always_false_v<Scaling>, "unhandled RoPE scaling variant");
             }

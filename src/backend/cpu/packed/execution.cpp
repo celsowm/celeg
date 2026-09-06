@@ -219,7 +219,7 @@ struct CpuCompiledModel::BatchScratch {
                         apply_cpu_attention_qk(
                             layout, *attention,
                             workspace_.qkv.data() + row * q_projection_width,
-                            nullptr, position, rope_position);
+                            nullptr, nullptr, position, rope_position);
                     });
                     const auto memory_it = shared.external_attention_memory.find(
                         layout.external_memory_slot());
@@ -328,10 +328,11 @@ struct CpuCompiledModel::BatchScratch {
                         }
                         float* q = query_base + row * query_stride;
                         float* k = workspace_.op_output.data() + row * kv_width;
+                        float* v = workspace_.conv_projected.data() + row * kv_width;
                         const int position = sessions[row]->session_.position_value;
                         const std::array<int32_t, 3> rope_position = {
                             position, position, position};
-                        apply_cpu_attention_qk(layout, *attention, q, k,
+                        apply_cpu_attention_qk(layout, *attention, q, k, v,
                                                position, rope_position);
                     });
                     for (size_t row = 0; row < rows; ++row) {

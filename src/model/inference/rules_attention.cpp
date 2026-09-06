@@ -13,6 +13,7 @@ namespace {
 
 AttentionSpec make_attention(
     const NormalizedModelMetadata& metadata,
+    int layer,
     int query_heads,
     int key_value_heads,
     int head_dim,
@@ -39,6 +40,16 @@ AttentionSpec make_attention(
     attention.key_norm = optional_qk_norm(key_norm_granularity);
     attention.pattern = FullCausalPattern{};
     attention.query_scale = 1.0f;
+    /// Per-pattern positional encoding resolves through `value_for(layer)`,
+    /// falling back to `global` when no nested `rope_parameters.<layer_type>`
+    /// block exists, so single-theta checkpoints are unaffected.
+    const std::optional<InferredPositionEncoding> inferred =
+        metadata.attention.position_encoding.value_for(layer);
+    if (!inferred.has_value()) {
+        fail(ResolutionFailureKind::MissingRequiredMetadata,
+             "positional encoding could not be resolved from checkpoint metadata for layer " +
+                 std::to_string(layer));
+    }
     std::visit([&](const auto& position) {
         using T = std::decay_t<decltype(position)>;
         if constexpr (std::is_same_v<T, NoPositionEncodingSpec>) {
@@ -57,11 +68,12 @@ AttentionSpec make_attention(
             }
         } else if constexpr (std::is_same_v<T, UnresolvedPositionEncoding>) {
             fail(ResolutionFailureKind::MissingRequiredMetadata,
-                "positional encoding could not be resolved from checkpoint metadata");
+                 "positional encoding could not be resolved from checkpoint metadata for layer " +
+                     std::to_string(layer));
         } else {
             static_assert(always_false_v<T>, "unhandled inferred position encoding alternative");
         }
-    }, metadata.attention.position_encoding);
+    }, *inferred);
     if (*metadata.attention.xsa_projection) {
         attention.output_transform = OrthogonalizeCurrentValueSpec{
             *metadata.attention.xsa_minimum_norm_squared};
@@ -246,6 +258,7 @@ public:
 
         AttentionSpec attention = make_attention(
             m,
+            layer,
             *query_heads,
             *key_value_heads,
             head_dim,
@@ -401,6 +414,23 @@ public:
         const bool element_wise_gate =
             gate && gate->shape == element_gate_shape;
 
+        /// A stated `gated_attention_proj_granularity_type` must agree with
+        /// the shape-inferred granularity: a checkpoint claiming `head_wise`
+        /// while carrying an element-wise `g_proj` (or vice versa) is a
+        /// configuration/weight mismatch, not a resolvable model.
+        if (m.latent_attention.output_gate_granularity.has_value()) {
+            const std::string& stated = *m.latent_attention.output_gate_granularity;
+            const bool agrees = (stated == "head_wise" && head_wise_gate) ||
+                (stated == "element_wise" && element_wise_gate);
+            if (!agrees) {
+                fail(
+                    ResolutionFailureKind::ConflictingMetadata,
+                    "stated attention gate granularity disagrees with g_proj "
+                    "shape for layer " +
+                        std::to_string(layer));
+            }
+        }
+
         if (!q_a || !q_a_norm || !q_b || !kv_a || !kv_a_norm || !kv_b ||
             !out || !gate || q_rank <= 0 || kv_rank <= 0 ||
             nope <= 0 || rope <= 0 || value_dim <= 0 ||
@@ -429,7 +459,7 @@ public:
         }
 
         AttentionSpec attention =
-            make_attention(m, heads, 1, value_dim, false);
+            make_attention(m, layer, heads, 1, value_dim, false);
         attention.query_heads = heads;
         attention.key_value_heads = 1;
         attention.head_dim = value_dim;

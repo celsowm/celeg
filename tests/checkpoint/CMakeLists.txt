@@ -3,6 +3,7 @@ foreach(test_name IN ITEMS
     checkpoint_format_catalog_test
     gguf_parse_test
     gguf_repository_test
+    http_resume_test
     json_test
     safetensors_repo_test
     safetensors_test

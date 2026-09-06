@@ -95,7 +95,8 @@ CompiledModelProgram CpuModelCompiler::compile(const ResolvedModel& model) const
          .multi_axis_rope = true,
          .standard_execution = true,
          .latent_execution = true,
-         .factorized_latent_execution = true});
+         .factorized_latent_execution = true,
+         .value_norm = true});
     validate_cpu_attention_semantics(program);
     validate_moe_backend_capabilities(program, "CPU", {true, true, false, false});
     return program;

@@ -183,8 +183,11 @@ int main(int argc, char** argv) {
             }
         }
         if (args.print_config) {
-            std::cout << topology.summary() << '\n'
-                      << "chat.template=" << prepared.chat_template->source_origin() << '\n'
+            std::cout << topology.summary() << '\n';
+            for (const std::string& line : prepared.bootstrap.model.provenance.evidence) {
+                std::cout << "evidence=" << line << '\n';
+            }
+            std::cout << "chat.template=" << prepared.chat_template->source_origin() << '\n'
                       << "chat.template_fingerprint=" << prepared.chat_template->fingerprint() << '\n';
             for (const std::string& diagnostic : prepared.chat_template->diagnostics()) {
                 std::cout << "chat.template_diagnostic=" << diagnostic << '\n';

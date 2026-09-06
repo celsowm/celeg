@@ -294,6 +294,10 @@ void CpuCompiledModel::Shared::load_weights() {
                 ? attention_norm_width(*attention.key_norm,
                                        attention.key_value_heads, attention.head_dim)
                 : attention.head_dim;
+            const int value_norm_width = attention.value_norm
+                ? attention_norm_width(*attention.value_norm,
+                                       attention.key_value_heads, attention.head_dim)
+                : attention.head_dim;
             layer.q_norm = attention.query_norm.has_value()
                 ? (attention.query_norm->weightless()
                     ? std::vector<float>(static_cast<size_t>(query_norm_width), 1.0f)
@@ -307,6 +311,13 @@ void CpuCompiledModel::Shared::load_weights() {
                     : load_vector(source, reader.get(), writer.get(),
                         tensor_name(weight_requests, TensorRole::AttentionKeyNorm, index),
                         {key_norm_width}))
+                : std::vector<float>(static_cast<size_t>(attention.head_dim), 1.0f);
+            layer.v_norm = attention.value_norm.has_value()
+                ? (attention.value_norm->weightless()
+                    ? std::vector<float>(static_cast<size_t>(value_norm_width), 1.0f)
+                    : load_vector(source, reader.get(), writer.get(),
+                        tensor_name(weight_requests, TensorRole::AttentionValueNorm, index),
+                        {value_norm_width}))
                 : std::vector<float>(static_cast<size_t>(attention.head_dim), 1.0f);
             if (attention.query_norm && attention.query_norm->weight_kind == NormWeightKind::OnePlusScale) {
                 for (float& value : layer.q_norm) value += 1.0f;

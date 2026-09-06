@@ -15,12 +15,14 @@ void prepare_cuda_attention_qk(const CudaAttentionQkPreparation& preparation) {
     }
 
     const AttentionSpec& layout = *preparation.layout;
-    launch_attention_qk_norm(
+    launch_attention_qkv_norm(
         layout,
         preparation.query,
         preparation.key,
+        preparation.value,
         preparation.query_norm,
         preparation.key_norm,
+        preparation.value_norm,
         1,
         preparation.stream);
 
@@ -105,13 +107,15 @@ void prepare_cuda_prefill_attention_qk(
             ? layout.key_norm->epsilon
             : preparation.fallback_norm_epsilon);
 
-    if (layout.has_query_key_norm()) {
-        launch_attention_qk_norm(
+    if (layout.has_query_key_norm() || layout.has_value_norm()) {
+        launch_attention_qkv_norm(
             layout,
             preparation.query,
             preparation.key,
+            preparation.value,
             preparation.query_norm,
             preparation.key_norm,
+            preparation.value_norm,
             preparation.rows,
             preparation.stream);
     }

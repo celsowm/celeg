@@ -24,7 +24,8 @@ CompiledModelProgram CudaModelCompiler::compile(const ResolvedModel& model) cons
          .multi_axis_rope = true,
          .standard_execution = true,
          .latent_execution = true,
-         .factorized_latent_execution = true});
+         .factorized_latent_execution = true,
+         .value_norm = true});
     validate_cuda_attention_semantics(program);
     validate_moe_backend_capabilities(program, "CUDA", {true, true, false, false});
     return program;

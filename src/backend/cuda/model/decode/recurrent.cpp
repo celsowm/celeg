@@ -31,7 +31,8 @@ void CudaCompiledModel::run_token_gated_delta(GatedDeltaNetLayer& gated_delta,
                resources_.program_.hidden);
         launch_interleave_gated_delta_qkv(
             workspace_.gated_delta_qkv_.data(), workspace_.qkv_output_.data(),
-            workspace_.gated_delta_output_.data(), workspace_.gated_delta_qkv_.data(),
+            workspace_.gated_delta_output_.data(),
+            workspace_.gated_delta_qkv_inter_.data(),
             1, spec.key_heads * spec.key_head_dim, value_width, stream_.get());
     } else {
         linear(workspace_.normed_.data(), *gated_delta.qkv,
@@ -47,7 +48,9 @@ void CudaCompiledModel::run_token_gated_delta(GatedDeltaNetLayer& gated_delta,
     const float epsilon = semantics.mixer_norm.before
         ? semantics.mixer_norm.before->epsilon
         : resources_.program_.final_norm.epsilon;
-    launch_gated_delta_net(workspace_.gated_delta_qkv_.data(),
+    launch_gated_delta_net(spec.factorized_projections
+            ? workspace_.gated_delta_qkv_inter_.data()
+            : workspace_.gated_delta_qkv_.data(),
         workspace_.gated_delta_z_.data(), workspace_.gated_delta_b_.data(),
         workspace_.gated_delta_a_.data(), gated_delta.conv_weight,
         gated_delta.dt_bias, gated_delta.a_log, gated_delta.norm,

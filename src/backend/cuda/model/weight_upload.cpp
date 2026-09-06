@@ -80,8 +80,16 @@ const __nv_bfloat16* WeightLoader::load_weight(
 const __nv_bfloat16* WeightLoader::load_rms_norm_weight(
     const IWeightRepository& repo, const std::string& name,
     std::vector<int64_t> expected, NormWeightKind weight_kind) {
-    const std::string cache_key = name + "#rms_norm_" +
+    /// Weightless norms (`None`) materialise a ones-vector and pass an empty
+    /// tensor name, so the cache key must include the shape -- otherwise two
+    /// head widths (e.g. sliding 256 vs full 512) collide on the same empty
+    /// name and the second width fails with a shape mismatch.
+    std::string cache_key = name + "#rms_norm_" +
         std::to_string(static_cast<int>(weight_kind));
+    if (name.empty()) {
+        cache_key += "#shape";
+        for (int64_t dim : expected) cache_key += "_" + std::to_string(dim);
+    }
     if (const auto cached = weights_->tensors.find(cache_key);
         cached != weights_->tensors.end()) {
         if (cached->second.shape != expected) {

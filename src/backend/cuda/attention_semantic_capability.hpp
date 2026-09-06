@@ -3,6 +3,7 @@
 #include "celeg/model/program.hpp"
 
 #include <stdexcept>
+#include <string>
 
 namespace celeg {
 
@@ -23,6 +24,18 @@ inline bool cuda_constrained_pattern_bias_supported(
 inline void validate_cuda_attention_semantics(
     const CompiledAttentionProgram& compiled) {
     const AttentionSpec& attention = compiled.semantics;
+
+    /// Online/segmented decode kernels accumulate into a per-lane register
+    /// array sized `kMaxHeadDimPerLane` with a 32-thread launch, so head_dim
+    /// above `kMaxHeadDimPerLane * 32` would write out of bounds. Fail by name
+    /// here rather than corrupting memory silently.
+    constexpr int kCudaOnlineDecodeMaxHeadDim = 16 * 32;
+    if (attention.head_dim > kCudaOnlineDecodeMaxHeadDim) {
+        throw std::invalid_argument(
+            "CUDA online/segmented decode supports head_dim up to " +
+            std::to_string(kCudaOnlineDecodeMaxHeadDim) + ", got " +
+            std::to_string(attention.head_dim));
+    }
 
     if (const auto* prefix_lm = std::get_if<PrefixLmPattern>(&attention.pattern);
         prefix_lm && prefix_lm->prefix_length <= 0) {

@@ -365,6 +365,18 @@ public:
         const auto* norm = input.inventory.find(prefix + "o_norm.weight");
         const auto* out = input.inventory.find(prefix + "o_proj.weight");
 
+        /// `no_kda_lora: false` means LoRA-factorized `f_a_proj`/`f_b_proj`
+        /// tensors instead of the direct `f_proj`/`g_proj` grammar probed
+        /// above; no rule binds that dialect, so fail loudly here rather
+        /// than letting a partial grammar match misresolve the layer.
+        if (m.gated_delta.direct_projections.has_value() &&
+            !*m.gated_delta.direct_projections) {
+            fail(
+                ResolutionFailureKind::UnsupportedSemanticFeature,
+                "KDA LoRA-factorized projections are not supported for layer " +
+                    std::to_string(layer));
+        }
+
         const int heads =
             m.gated_delta.key_heads.value_or(*m.attention.query_heads.value_for(layer));
         const int key_dim =

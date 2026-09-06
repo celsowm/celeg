@@ -68,6 +68,10 @@ __device__ __forceinline__ float scaled_rope_frequency_for_pairing(
             frequency /= 1.0f + fminf(1.0f, fmaxf(0.0f, blend)) *
                 (scaling.factor - 1.0f);
         }
+    } else if (scaling.kind == 6) {
+        const float fraction = scaling.rotary_fraction > 0.0f
+            ? scaling.rotary_fraction : 1.0f;
+        frequency = powf(frequency, fraction) / scaling.factor;
     }
     return frequency;
 }

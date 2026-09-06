@@ -68,6 +68,18 @@ inline double rope_frequency(const RopePositionSpec& spec, int pair,
                     : 0.0;
                 result /= 1.0 + std::clamp(blend, 0.0, 1.0) * (scaling.factor - 1.0);
                 return result;
+            } else if constexpr (std::is_same_v<Scaling, ProportionalRopeScaling>) {
+                /// Proportional frequencies derive from the full head width, not
+                /// the rotated prefix: `base ** (2*pair / head_dim)` where
+                /// `head_dim = rotary_dimension / rotary_fraction`. Since the
+                /// input `base_frequency` is `base ** (-2*pair /
+                /// rotary_dimension)`, raising it to `rotary_fraction` yields
+                /// the proportional frequency. With `rotary_fraction == 1.0`
+                /// this collapses to the default path, matching HF.
+                const double fraction = spec.rotary_fraction;
+                const double proportional =
+                    std::pow(result, fraction <= 0.0 ? 1.0 : fraction);
+                return proportional / scaling.factor;
             } else {
                 static_assert(always_false_v<Scaling>, "unhandled RoPE scaling variant");
             }

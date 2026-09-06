@@ -30,6 +30,11 @@ struct CudaWorkspace {
     DeviceBuffer<__nv_bfloat16> mamba_projected_;
     DeviceBuffer<__nv_bfloat16> mamba_inner_;
     DeviceBuffer<__nv_bfloat16> gated_delta_qkv_;
+    /// Scratch target for factorized Q/K/V interleaving: the kernel cannot
+    /// write the fused layout in place because destination elements past the
+    /// source's width overlap later rows of the source (in-place writes race
+    /// with other rows' reads in the same launch).
+    DeviceBuffer<__nv_bfloat16> gated_delta_qkv_inter_;
     DeviceBuffer<__nv_bfloat16> gated_delta_z_;
     DeviceBuffer<__nv_bfloat16> gated_delta_b_;
     DeviceBuffer<__nv_bfloat16> gated_delta_a_;
@@ -77,6 +82,7 @@ struct CudaWorkspace {
     DeviceBuffer<__nv_bfloat16> prefill_v_;
     DeviceBuffer<__nv_bfloat16> prefill_conv_projected_;
     DeviceBuffer<__nv_bfloat16> prefill_gated_delta_qkv_;
+    DeviceBuffer<__nv_bfloat16> prefill_gated_delta_qkv_inter_;
     DeviceBuffer<__nv_bfloat16> prefill_gated_delta_z_;
     DeviceBuffer<__nv_bfloat16> prefill_gated_delta_b_;
     DeviceBuffer<__nv_bfloat16> prefill_gated_delta_a_;

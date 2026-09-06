@@ -1,6 +1,7 @@
 #include "canonical_internal.hpp"
 #include "support.hpp"
 
+#include <cmath>
 #include <regex>
 #include <unordered_set>
 
@@ -32,6 +33,32 @@ void require_positive(const std::optional<int>& value, std::string_view name) {
 bool checkpoint_uses_one_plus_scale_norm(const InferenceInput& input) {
     for (const auto& entry : input.inventory.entries()) {
         if (entry.name.find("linear_attn.in_proj_qkv.weight") != std::string::npos) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/// Whether the checkpoint ships a per-layer-input tower, detected from tensor
+/// grammar (`embed_tokens_per_layer.weight` + `per_layer_model_projection.weight`
+/// + `per_layer_projection_norm.weight` under any known stack prefix), matching
+/// how `bind_per_layer_input` recognizes the same structure. The tower's context
+/// projection is scaled by `1/sqrt(hidden)` (`PerLayerInputPlan::derive`), which
+/// only balances an embedding already scaled by `sqrt(hidden)` -- so the tower
+/// celeg already detects is itself the evidence for the embedding scale. celeg
+/// has already committed to this implicitly by hardcoding the PLE scale trio;
+/// this makes the other half of the same assumption explicit instead of leaving
+/// it inconsistent. Guarded on the tower's presence and only when no explicit
+/// `embedding_multiplier` key is present, so every checkpoint without the tower
+/// (or with an explicit multiplier) is bit-identical. Generalizes to any
+/// checkpoint sharing this grammar, without naming an architecture.
+bool checkpoint_has_per_layer_input_tower(const InferenceInput& input) {
+    const TensorInventory& inventory = input.inventory;
+    for (const std::string& prefix :
+         {std::string("model.language_model."), std::string("model."), std::string("")}) {
+        if (inventory.find(prefix + "embed_tokens_per_layer.weight") != nullptr &&
+            inventory.find(prefix + "per_layer_model_projection.weight") != nullptr &&
+            inventory.find(prefix + "per_layer_projection_norm.weight") != nullptr) {
             return true;
         }
     }
@@ -170,6 +197,7 @@ void initialize_graph(CanonicalInferenceContext& context) {
         numerical_policy.embedding_multiplier;
     graph.logits_multiplier = numerical_policy.logits_multiplier;
     graph.logits_divisor = numerical_policy.logits_divisor;
+    graph.final_logit_softcap = numerical_policy.final_logit_softcap;
     graph.layers.resize(static_cast<size_t>(context.layer_count));
 
     for (int layer = 0; layer < context.layer_count; ++layer) {
@@ -325,14 +353,25 @@ CanonicalInferenceContext initialize_canonical_facts(
         *m.core.pad_token_id};
 
     numerical_policy.norm_eps = *m.core.norm_epsilon;
-    numerical_policy.embedding_multiplier =
-        m.core.embedding_multiplier.value_or(1.0f);
+    if (m.core.embedding_multiplier.has_value()) {
+        numerical_policy.embedding_multiplier = *m.core.embedding_multiplier;
+    } else if (checkpoint_has_per_layer_input_tower(input)) {
+        numerical_policy.embedding_multiplier =
+            std::sqrt(static_cast<float>(*m.core.hidden_size));
+        context.facts.evidence.push_back(
+            {EvidenceKind::Derived, "per_layer_input tower",
+             "embedding_multiplier = sqrt(hidden) derived from per-layer-input tower"});
+    } else {
+        numerical_policy.embedding_multiplier = 1.0f;
+    }
     numerical_policy.residual_multiplier =
         m.core.residual_multiplier.value_or(1.0f);
     numerical_policy.logits_multiplier =
         m.core.logits_multiplier.value_or(1.0f);
     numerical_policy.logits_divisor =
         m.core.logits_divisor.value_or(1.0f);
+    numerical_policy.final_logit_softcap =
+        m.core.final_logit_softcap.value_or(0.0f);
     numerical_policy.norm_weight_kind = checkpoint_uses_one_plus_scale_norm(input)
         ? NormWeightKind::OnePlusScale
         : NormWeightKind::Scale;

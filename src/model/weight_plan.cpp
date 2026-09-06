@@ -114,6 +114,15 @@ void append_attention(ResolvedModel& model, const AttentionSpec& attention,
                                           key_value_width)},
                     physical_layer);
             }
+            if (attention.value_norm.has_value()) {
+                add_norm_request(
+                    model, TensorRole::AttentionValueNorm, layer,
+                    attention.value_norm,
+                    {attention_norm_width(*attention.value_norm,
+                                          attention.head_dim,
+                                          key_value_width)},
+                    physical_layer);
+            }
         }
         append(TensorRole::AttentionOutput, {hidden, query_width});
     }

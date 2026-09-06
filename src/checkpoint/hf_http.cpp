@@ -1,5 +1,18 @@
 #include "hf_http.hpp"
 
+namespace celeg::hf_internal {
+
+std::string range_header_value(size_t offset) {
+    return "bytes=" + std::to_string(offset) + "-";
+}
+
+size_t resume_offset(size_t current_size, size_t expected_size) {
+    if (expected_size != 0 && current_size > expected_size) return 0;
+    return current_size;
+}
+
+}
+
 #if defined(_WIN32)
 
 #include <algorithm>
@@ -117,22 +130,21 @@ void http_download_file(const std::string& path,
                         const std::filesystem::path& output,
                         size_t expected_size,
                         bool quiet) {
-    std::error_code error;
-    size_t total = std::filesystem::exists(output, error)
-        ? static_cast<size_t>(std::filesystem::file_size(output, error)) : 0;
-    if (error) throw std::runtime_error("cannot inspect: " + output.string());
-    if (expected_size != 0 && total > expected_size) {
-        std::filesystem::resize_file(output, 0, error);
-        if (error) throw std::runtime_error("cannot reset: " + output.string());
-        total = 0;
-    }
-
     constexpr int kAttempts = 5;
     constexpr DWORD kChunk = 1024 * 1024;
     constexpr size_t kProgressInterval = 16 * 1024 * 1024;
     std::vector<char> buffer(kChunk);
     std::string last_error;
     for (int attempt = 0; attempt < kAttempts; ++attempt) {
+        /// Re-stat every attempt: a previous attempt may have appended bytes
+        /// before failing, and resuming from a stale offset would re-fetch
+        /// (and duplicate) an already-written range.
+        std::error_code error;
+        const size_t current = std::filesystem::exists(output, error)
+            ? static_cast<size_t>(std::filesystem::file_size(output, error)) : 0;
+        if (error) throw std::runtime_error("cannot inspect: " + output.string());
+        size_t total = resume_offset(current, expected_size);
+
         WinHttpHandle session(WinHttpOpen(
             L"celeg-native-cpp/0.0.20", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
             WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0));
@@ -152,8 +164,8 @@ void http_download_file(const std::string& path,
             WINHTTP_DEFAULT_ACCEPT_TYPES, WINHTTP_FLAG_SECURE));
         if (!request) throw std::runtime_error("WinHttpOpenRequest failed");
         if (total != 0) {
-            const std::wstring range = L"Range: bytes=" +
-                std::to_wstring(total) + L"-\r\n";
+            const std::wstring range =
+                to_wide("Range: " + range_header_value(total)) + L"\r\n";
             if (!WinHttpAddRequestHeaders(request, range.c_str(),
                                           static_cast<DWORD>(range.size()),
                                           WINHTTP_ADDREQ_FLAG_ADD)) {
@@ -173,6 +185,14 @@ void http_download_file(const std::string& path,
             WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
             WINHTTP_HEADER_NAME_BY_INDEX, &status, &status_size,
             WINHTTP_NO_HEADER_INDEX);
+        if (status == 416 && total != 0) {
+            /// Stale range (remote changed under us): discard the partial
+            /// prefix and restart from scratch.
+            std::ofstream reset(output, std::ios::binary | std::ios::trunc);
+            if (!reset) throw std::runtime_error("cannot reset: " + output.string());
+            last_error = "range rejected (HTTP 416); restarting";
+            continue;
+        }
         if (status == 200 && total != 0) {
             std::ofstream reset(output, std::ios::binary | std::ios::trunc);
             if (!reset) throw std::runtime_error("cannot reset: " + output.string());
@@ -338,21 +358,20 @@ void http_download_file(const std::string& path,
                         const std::filesystem::path& output,
                         size_t expected_size,
                         bool quiet) {
-    std::error_code error;
-    size_t total = std::filesystem::exists(output, error)
-                       ? static_cast<size_t>(std::filesystem::file_size(output, error))
-                       : 0;
-    if (error) throw std::runtime_error("cannot inspect: " + output.string());
-    if (expected_size != 0 && total > expected_size) {
-        std::filesystem::resize_file(output, 0, error);
-        if (error) throw std::runtime_error("cannot reset: " + output.string());
-        total = 0;
-    }
-
     constexpr int kAttempts = 5;
     std::string last_error;
 
     for (int attempt = 0; attempt < kAttempts; ++attempt) {
+        /// Re-stat every attempt: a previous attempt may have appended bytes
+        /// before failing, and resuming from a stale offset would re-fetch
+        /// (and duplicate) an already-written range.
+        std::error_code error;
+        const size_t current = std::filesystem::exists(output, error)
+            ? static_cast<size_t>(std::filesystem::file_size(output, error))
+            : 0;
+        if (error) throw std::runtime_error("cannot inspect: " + output.string());
+        const size_t total = resume_offset(current, expected_size);
+
         DownloadWriteState state;
         state.output = output;
         state.total = total;
@@ -369,6 +388,20 @@ void http_download_file(const std::string& path,
         CURL* curl = curl_easy_init();
         if (!curl) throw std::runtime_error("curl_easy_init failed");
 
+        /// Send an explicit `Range` header when resuming so the offset is
+        /// always on the wire, including across CDN redirects.
+        struct curl_slist* headers = nullptr;
+        std::string range_value;
+        if (total != 0) {
+            range_value = "Range: " + range_header_value(total);
+            headers = curl_slist_append(headers, range_value.c_str());
+            if (!headers) {
+                curl_easy_cleanup(curl);
+                throw std::runtime_error("cannot build Range header");
+            }
+            curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+        }
+
         const std::string url = std::string("https://") + kHost + path;
         curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
         curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
@@ -376,33 +409,30 @@ void http_download_file(const std::string& path,
         curl_easy_setopt(curl, CURLOPT_TIMEOUT, 300L);
         curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, download_write_callback);
         curl_easy_setopt(curl, CURLOPT_WRITEDATA, &state);
-        if (total != 0) {
-            curl_easy_setopt(curl, CURLOPT_RESUME_FROM_LARGE,
-                             static_cast<curl_off_t>(total));
-        }
 
         CURLcode code = curl_easy_perform(curl);
         long status = 0;
         curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &status);
         curl_easy_cleanup(curl);
+        if (headers) curl_slist_free_all(headers);
         state.stream.close();
 
         if (code == CURLE_OK &&
-            (status == 200 || (total != 0 && status == 206)) &&
+            status == (total == 0 ? 200L : 206L) &&
             (expected_size == 0 || state.total == expected_size)) {
             if (!quiet && expected_size != 0) std::fprintf(stderr, "\n");
             return;
         }
         if (code != CURLE_OK) {
+            /// Keep the valid byte prefix on disk; the next attempt re-stats
+            /// the file and resumes where this one stopped.
             last_error = "HTTP GET failed: " + std::string(curl_easy_strerror(code));
-            // Retry from scratch if the partial write is suspect.
+        } else if ((status == 416 || status == 200) && total != 0) {
+            /// Stale range, or the server ignored the resume: discard the
+            /// partial prefix and restart from scratch.
             std::filesystem::resize_file(output, 0, error);
-            total = 0;
-        } else if (status == 200 && total != 0) {
-            // Server ignored the range request; restart from scratch.
-            std::filesystem::resize_file(output, 0, error);
-            total = 0;
-            last_error = "server ignored resume; restarting";
+            last_error = status == 416 ? "range rejected (HTTP 416); restarting"
+                                       : "server ignored resume; restarting";
         } else {
             last_error = "HTTP " + std::to_string(status) + " for " + path;
         }

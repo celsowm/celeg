@@ -2,8 +2,29 @@
 #include "attention.hpp"
 
 #include <algorithm>
+#include <cstdlib>
+#include <fstream>
 
 namespace celeg {
+
+namespace {
+
+/// Dumps an intermediate vector for a single layer/position when
+/// CELEG_DEBUG_HIDDEN_DIR is set; used to attribute latent-path divergence.
+void debug_dump_latent_stage(const char* stage, size_t index, int position,
+                             const float* data, std::size_t size) {
+    const char* dir = std::getenv("CELEG_DEBUG_HIDDEN_DIR");
+    if (!dir || std::getenv("CELEG_DEBUG_LATENT_STAGE") == nullptr) return;
+    const std::string want = std::getenv("CELEG_DEBUG_LATENT_STAGE");
+    const std::string tag = std::to_string(index) + "_" + std::to_string(position);
+    if (want != tag) return;
+    std::ofstream out(std::string(dir) + "/latent_" + stage + ".f32",
+                      std::ios::binary);
+    out.write(reinterpret_cast<const char*>(data),
+              static_cast<std::streamsize>(size * sizeof(float)));
+}
+
+}
 
 void execute_cpu_attention_token(
     CpuExecutionContext& execution,
@@ -18,7 +39,7 @@ void execute_cpu_attention_token(
                 const int q_width = layout.query_width();
                 execution.shared.linear.gemv(attention.q, execution.workspace.normed.data(), execution.workspace.qkv.data());
                 float* q = execution.workspace.qkv.data();
-                apply_cpu_attention_qk(layout, attention, q, nullptr,
+                apply_cpu_attention_qk(layout, attention, q, nullptr, nullptr,
                                        execution.session.position_value, rope_position);
                 const auto memory_it = execution.shared.external_attention_memory.find(
                     layout.external_memory_slot());
@@ -70,8 +91,7 @@ void execute_cpu_attention_token(
                     execution.shared.linear.gemv(attention.q, execution.workspace.normed.data(),
                                         execution.workspace.qkv.data());
                 }
-                float* query_rope = rope_width == 0 ? nullptr : execution.workspace.latent_rope.data();
-                if (query_rope && factorized) {
+                float* query_rope = rope_width == 0 ? nullptr : execution.workspace.latent_rope.data();                if (query_rope && factorized) {
                     const int stride = latent.nope_head_dim + latent.rope_head_dim;
                     for (int head = 0; head < layout.query_heads; ++head) {
                         std::copy(execution.workspace.latent_projection.data() +
@@ -113,6 +133,17 @@ void execute_cpu_attention_token(
                             execution.workspace.normed.data(), key_rope);
                     }
                 }
+                debug_dump_latent_stage("qcontent", index,
+                    execution.session.position_value, query_content,
+                    static_cast<size_t>(layout.latent_query_content_width()));
+                debug_dump_latent_stage("kcontent", index,
+                    execution.session.position_value,
+                    execution.workspace.latent_key.data(),
+                    static_cast<size_t>(latent.latent_rank));
+                debug_dump_latent_stage("normed", index,
+                    execution.session.position_value,
+                    execution.workspace.normed.data(),
+                    static_cast<size_t>(execution.shared.program.hidden));
                 apply_cpu_latent_attention_positions(
                     layout, query_rope, key_rope,
                     execution.session.position_value, rope_position);
@@ -124,11 +155,18 @@ void execute_cpu_attention_token(
                 attention_state.run_latent_attention(state, layout, query_content, query_rope,
                                      execution.workspace.op_output.data(), execution.session.position_value + 1,
                                      execution.session.position_value, attention.relative_bias);
+                debug_dump_latent_stage("attn", index,
+                    execution.session.position_value,
+                    execution.workspace.op_output.data(),
+                    static_cast<size_t>(layout.latent_query_content_width()));
                 const float* output_input = execution.workspace.op_output.data();
                 if (factorized) {
                     const int expansion_stride = latent.nope_head_dim + factorized->value_head_dim;
                     for (int head = 0; head < layout.query_heads; ++head) {
-                        execution.shared.linear.gemv_transpose(attention.latent_expansion,
+                        /// Decompression maps the head's absorbed latent output
+                        /// (rank-wide, along kv_b columns) through the head's
+                        /// value rows: a row-sliced GEMV, not a transpose.
+                        execution.shared.linear.gemv_rows(attention.latent_expansion,
                             execution.workspace.op_output.data() +
                                 static_cast<size_t>(head * latent.latent_rank),
                             execution.workspace.latent_projection.data(),
@@ -139,6 +177,10 @@ void execute_cpu_attention_token(
                                     execution.workspace.latent_decompressed.data() +
                                         static_cast<size_t>(head * factorized->value_head_dim));
                     }
+                    debug_dump_latent_stage("decompressed", index,
+                        execution.session.position_value,
+                        execution.workspace.latent_decompressed.data(),
+                        static_cast<size_t>(layout.latent_output_width()));
                     output_input = execution.workspace.latent_decompressed.data();
                     if (layout.output_gate.has_value()) {
                         execution.shared.linear.gemv(
@@ -150,10 +192,18 @@ void execute_cpu_attention_token(
                             static_cast<size_t>(layout.latent_output_width()),
                             layout.output_gate->granularity,
                             layout.query_heads, factorized->value_head_dim);
+                        debug_dump_latent_stage("gated", index,
+                            execution.session.position_value,
+                            execution.workspace.latent_decompressed.data(),
+                            static_cast<size_t>(layout.latent_output_width()));
                     }
                 }
                 execution.shared.linear.gemv(attention.out, output_input,
                                     execution.workspace.hidden.data());
+                debug_dump_latent_stage("mixerout", index,
+                    execution.session.position_value,
+                    execution.workspace.hidden.data(),
+                    static_cast<size_t>(execution.shared.program.hidden));
             } else {
             const int q_width = layout.query_width();
             const int q_projection_width = layout.query_projection_width();
@@ -184,7 +234,7 @@ void execute_cpu_attention_token(
                 execution.shared.linear.gemv(attention.k, execution.workspace.normed.data(), k);
                 execution.shared.linear.gemv(attention.v, execution.workspace.normed.data(), v);
             }
-            apply_cpu_attention_qk(layout, attention, q, k,
+            apply_cpu_attention_qk(layout, attention, q, k, v,
                                    execution.session.position_value, rope_position);
             const int owner = execution.shared.layer_to_kv_owner.at(index);
             CpuCompiledModel::AttentionState& state = attention_state.state(static_cast<size_t>(owner));

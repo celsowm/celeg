@@ -275,11 +275,6 @@ void CompiledAttentionExecution::validate() const {
         throw std::invalid_argument(
             "latent compiled attention has decoupled RoPE without position encoding");
     }
-    if (kind != AttentionExecutionKind::Standard && has_decoupled_rope &&
-        rope_pairing != RopePairingKind::SplitHalf) {
-        throw std::invalid_argument(
-            "latent compiled attention requires split-half RoPE pairing");
-    }
     if (kind == AttentionExecutionKind::FactorizedLatent && !has_key_value) {
         throw std::invalid_argument(
             "factorized latent attention must own key/value projections");

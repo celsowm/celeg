@@ -17,8 +17,10 @@ struct CudaAttentionQkPreparation {
     const AttentionSpec* layout = nullptr;
     __nv_bfloat16* query = nullptr;
     __nv_bfloat16* key = nullptr;
+    __nv_bfloat16* value = nullptr;
     const __nv_bfloat16* query_norm = nullptr;
     const __nv_bfloat16* key_norm = nullptr;
+    const __nv_bfloat16* value_norm = nullptr;
     float norm_epsilon = 0.0f;
     CudaQkPositionMode position_mode = CudaQkPositionMode::HostScalar;
     int host_position = 0;
@@ -34,8 +36,10 @@ struct CudaPrefillAttentionQkPreparation {
     const AttentionSpec* layout = nullptr;
     __nv_bfloat16* query = nullptr;
     __nv_bfloat16* key = nullptr;
+    __nv_bfloat16* value = nullptr;
     const __nv_bfloat16* query_norm = nullptr;
     const __nv_bfloat16* key_norm = nullptr;
+    const __nv_bfloat16* value_norm = nullptr;
     float fallback_norm_epsilon = 0.0f;
     int rows = 0;
     cudaStream_t stream = nullptr;

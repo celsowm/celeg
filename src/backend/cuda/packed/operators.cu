@@ -79,10 +79,11 @@ void project_attention_qkv(PackedOperatorContext& context,
         context.linear(w.normed.data(), *attention.value, w.v.data(), rows,
                        layout.key_value_width(), context.program.hidden);
     }
-    if (layout.has_query_key_norm()) {
-        launch_attention_qk_norm(
+    if (layout.has_query_key_norm() || layout.has_value_norm()) {
+        launch_attention_qkv_norm(
             layout, w.q.data(), attention.key ? w.k.data() : nullptr,
-            attention.q_norm, attention.k_norm, rows, w.stream.get());
+            attention.value ? w.v.data() : nullptr, attention.q_norm,
+            attention.k_norm, attention.v_norm, rows, w.stream.get());
     }
     if (const auto* rope = layout.rope_position()) {
         const float qk_epsilon = layout.query_norm

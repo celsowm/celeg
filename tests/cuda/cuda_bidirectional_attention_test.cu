@@ -1,6 +1,7 @@
 #include "backend/cuda/compiler.hpp"
 #include "kernels/kernels.cuh"
 #include "support/assertions.hpp"
+#include "support/cuda_kernel_assertions.cuh"
 #include "utils.cuh"
 
 #include "celeg/model/position.hpp"
@@ -34,6 +35,22 @@ celeg::ResolvedModel attention_pattern_fixture() {
     layer.feed_forward = celeg::DenseFeedForwardSpec{
         4, celeg::ActivationKind::SwiGLU};
     model.graph.layers.push_back(layer);
+
+    /// `build_model_program` requires every layer to own at least one weight
+    /// request; the fixture has no checkpoint behind it, so declare the roles
+    /// the layer's specs imply directly.
+    for (celeg::TensorRole role : {
+             celeg::TensorRole::AttentionInputNorm,
+             celeg::TensorRole::AttentionQuery,
+             celeg::TensorRole::AttentionKey,
+             celeg::TensorRole::AttentionValue,
+             celeg::TensorRole::AttentionOutput,
+             celeg::TensorRole::FfnInputNorm,
+             celeg::TensorRole::FfnGate,
+             celeg::TensorRole::FfnUp,
+             celeg::TensorRole::FfnDown}) {
+        model.weight_plan.requests.push_back({role, 0, -1, {}});
+    }
     return model;
 }
 
@@ -72,13 +89,15 @@ void check_compiler_contract() {
     celeg::ResolvedModel sparse = model;
     std::get<celeg::AttentionSpec>(sparse.graph.layers[0].mixer).pattern =
         celeg::BlockSparsePattern{16, 2, 1};
-    bool sparse_rejected = false;
-    try {
-        (void)celeg::CudaModelCompiler{}.compile(sparse);
-    } catch (const std::invalid_argument&) {
-        sparse_rejected = true;
-    }
-    CELEG_TEST_CHECK(sparse_rejected);
+    /// Block-sparse is a supported CUDA pattern (dedicated prefill/decode
+    /// kernels), so a well-formed schedule compiles with the pattern
+    /// preserved; only non-positive schedules are rejected.
+    const auto sparse_program = celeg::CudaModelCompiler{}.compile(sparse);
+    const auto* sparse_compiled = std::get_if<celeg::CompiledAttentionProgram>(
+        &sparse_program.layers[0].mixer);
+    CELEG_TEST_CHECK(sparse_compiled != nullptr);
+    CELEG_TEST_CHECK(std::holds_alternative<celeg::BlockSparsePattern>(
+        sparse_compiled->semantics.pattern));
 
     celeg::ResolvedModel biased = model;
     std::get<celeg::AttentionSpec>(biased.graph.layers[0].mixer).bias =

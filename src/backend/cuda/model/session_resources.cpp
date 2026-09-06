@@ -143,6 +143,7 @@ void CudaCompiledModel::allocate_prefill_workspace(int rows) {
     workspace_.prefill_v_.reserve(r * projection_width);
     workspace_.prefill_conv_projected_.reserve(r * 3 * resources_.program_.hidden);
     workspace_.prefill_gated_delta_qkv_.reserve(r * plan.gated_delta_qkv);
+    workspace_.prefill_gated_delta_qkv_inter_.reserve(r * plan.gated_delta_qkv);
     workspace_.prefill_gated_delta_z_.reserve(r * plan.gated_delta_z);
     workspace_.prefill_gated_delta_b_.reserve(r * plan.gated_delta_b);
     workspace_.prefill_gated_delta_a_.reserve(r * plan.gated_delta_a);

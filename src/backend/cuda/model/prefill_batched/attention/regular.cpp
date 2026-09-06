@@ -24,8 +24,10 @@ void run_regular_attention(
         .layout = &layout,
         .query = model.workspace_.prefill_q_.data(),
         .key = attention.key ? model.workspace_.prefill_k_.data() : nullptr,
+        .value = attention.value ? model.workspace_.prefill_v_.data() : nullptr,
         .query_norm = attention.q_norm,
         .key_norm = attention.k_norm,
+        .value_norm = attention.v_norm,
         .fallback_norm_epsilon = model.resources_.program_.final_norm.epsilon,
         .rows = rows,
         .stream = model.stream_.get()});

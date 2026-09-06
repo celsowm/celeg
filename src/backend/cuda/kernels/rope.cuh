@@ -326,6 +326,14 @@ __device__ __forceinline__ float scaled_rope_frequency(
             frequency /= 1.0f + fminf(1.0f, fmaxf(0.0f, blend)) *
                 (scaling.factor - 1.0f);
         }
+    } else if (scaling.kind == 6) {
+        /// Proportional RoPE derives from head_dim: `base ** (-2*pair /
+        /// head_dim)` with `head_dim = rotary_dimension / rotary_fraction`.
+        /// Since `frequency` above is `base ** (-2*pair / rotary_dimension)`,
+        /// raising it to `rotary_fraction` yields the proportional frequency.
+        const float fraction = scaling.rotary_fraction > 0.0f
+            ? scaling.rotary_fraction : 1.0f;
+        frequency = powf(frequency, fraction) / scaling.factor;
     }
     return frequency;
 }

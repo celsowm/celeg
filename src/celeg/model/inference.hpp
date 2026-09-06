@@ -204,6 +204,11 @@ struct CoreModelFacts {
     std::optional<float> residual_multiplier;
     std::optional<float> logits_multiplier;
     std::optional<float> logits_divisor;
+    /// Final-logit softcapping (`final_logit_softcapping`): `tanh(logits /
+    /// cap) * cap` applied on every backend across all paths. Absent means no
+    /// capping. Already plumbed through graph, program and backends; the
+    /// automatic resolver simply never assigned it until now.
+    std::optional<float> final_logit_softcap;
     std::optional<int> bos_token_id;
     std::vector<int> eos_token_ids;
     std::optional<int> pad_token_id;
@@ -223,7 +228,16 @@ struct AttentionFacts {
     LayerScopedValue<AttentionPatternKind> pattern;
     std::optional<int> sliding_window;
     std::optional<float> attention_multiplier;
-    InferredPositionEncoding position_encoding = UnresolvedPositionEncoding{};
+    /// Per-pattern positional encoding: checkpoints with a `layer_types` schedule
+    /// may declare distinct RoPE thetas (and rotary fractions / rope types) under
+    /// `rope_parameters.<layer_type>.*`. When no nested block exists the global
+    /// entry carries the whole model and every existing checkpoint resolves
+    /// bit-identically via `value_for(layer)`.
+    LayerScopedValue<InferredPositionEncoding> position_encoding;
+    /// Suffix KV-sharing schedule (`num_kv_shared_layers`): the last N layers
+    /// reuse KV states from the last non-shared layer of their own pattern type.
+    /// Absent means every layer owns its KV (`PrivateKv`).
+    std::optional<int> kv_shared_layers;
     std::optional<bool> query_key_norm;
     std::optional<bool> xsa_projection;
     std::optional<float> xsa_minimum_norm_squared;
@@ -245,6 +259,11 @@ struct LatentAttentionFacts {
     std::optional<int> query_nope_dim;
     std::optional<int> query_rope_dim;
     std::optional<int> value_head_dim;
+    /// Stated output-gate granularity (`gated_attention_proj_granularity_type`):
+    /// "head_wise" or "element_wise". The latent rule infers the granularity
+    /// from the `g_proj` tensor shape and fails loudly when a stated value
+    /// disagrees; absent means shape inference stands alone.
+    std::optional<std::string> output_gate_granularity;
 };
 
 /// Facts governing short-convolution mixer layers.
@@ -273,6 +292,19 @@ struct GatedDeltaFacts {
     std::optional<int> linear_key_dim;
     std::optional<int> linear_value_dim;
     std::optional<int> linear_conv_kernel;
+    /// KDA projection style (`no_kda_lora`): true means the checkpoint carries
+    /// direct `f_proj`/`g_proj` tensors (the factorized-rule grammar); false
+    /// means LoRA-factorized `f_a_proj`/`f_b_proj`, which no rule binds, so
+    /// the factorized rule fails loudly on false instead of misreading the
+    /// grammar. Absent means grammar probing alone decides.
+    std::optional<bool> direct_projections;
+    /// Hybrid attention schedule (`layer_group_size`): mirrors the reference
+    /// decoder, where every Nth layer (plus the tail block) is full attention
+    /// and the rest are linear attention. Resolved per-layer by tensor
+    /// grammar; after resolution the layer loop verifies each mixer's family
+    /// against this schedule and fails loudly on disagreement. Absent means
+    /// no schedule claim to verify.
+    std::optional<int> hybrid_group_size;
 };
 
 /// Facts governing Mamba-2 SSM mixer layers.

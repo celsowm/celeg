@@ -264,6 +264,17 @@ bool bind_cuda_attention_layer(CudaCompiledModel& model,
                                    TensorRole::AttentionKeyNorm, layer_index),
             {key_norm_width}, layout.key_norm->weight_kind);
     }
+    if (layout.value_norm.has_value() && attention_layer.value) {
+        const int value_norm_width = attention_norm_width(
+            *layout.value_norm, layout.key_value_heads, layout.head_dim);
+        attention_layer.v_norm = resources.weight_loader_->load_rms_norm_weight(
+            repo,
+            layout.value_norm->weightless()
+                ? std::string{}
+                : cuda_tensor_name(resources.model_.weight_plan.requests,
+                                   TensorRole::AttentionValueNorm, layer_index),
+            {value_norm_width}, layout.value_norm->weight_kind);
+    }
 
     initialize_cuda_ordinary_attention_state(
         attention_layer, layout, resources.options().kv_cache_mode,
