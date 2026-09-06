@@ -610,6 +610,11 @@ void PackedDenseFfnExecutor::run(
     }
     const auto* dense = as_dense_ffn(common_layer.feed_forward);
     if (!dense) throw std::logic_error("packed dense layer has no dense FFN binding");
+    if (dense_semantics->activation != ActivationKind::SwiGLU) {
+        throw std::runtime_error(
+            "packed CUDA dense executor only implements SwiGLU; layer " +
+            std::to_string(layer_index) + " needs a different gated activation");
+    }
     if (reference.options().fused_projections) {
         context.linear(w.normed.data(), *dense->w13, w.gate_up.data(), rows,
                        2 * intermediate, context.program.hidden);

@@ -230,6 +230,37 @@ void launch_gated_gelu_tanh(const __nv_bfloat16* gate_up, __nv_bfloat16* out,
     CELEG_KERNEL_DEBUG_SYNC(stream);
 }
 
+/// The fused gate/up projection writes one contiguous [gate | up] block per row
+/// (row stride 2*intermediate), the same layout swiglu_interleaved_kernel
+/// consumes. The block gated_gelu_tanh_kernel above instead assumes all gates
+/// precede all ups, so it pairs each row's gate with the wrong row's activations
+/// whenever rows > 1 -- silent garbage for GeGLU models (Gemma) in batched
+/// prefill. This variant walks the per-row layout explicitly.
+__global__ void gated_gelu_tanh_interleaved_kernel(const __nv_bfloat16* gate_up,
+                                                   __nv_bfloat16* out,
+                                                   int rows, int intermediate) {
+    const size_t total = static_cast<size_t>(rows) * intermediate;
+    const size_t index = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    if (index >= total) return;
+    const int row = static_cast<int>(index / intermediate);
+    const int column = static_cast<int>(index % intermediate);
+    const __nv_bfloat16* source =
+        gate_up + static_cast<size_t>(row) * 2 * intermediate;
+    const float gate = bf16_float(source[column]);
+    const float up = bf16_float(source[intermediate + column]);
+    out[index] = __float2bfloat16(gelu_tanh_scalar(gate) * up);
+}
+
+void launch_gated_gelu_tanh_interleaved(const __nv_bfloat16* gate_up,
+                                        __nv_bfloat16* out, int rows,
+                                        int intermediate, cudaStream_t stream) {
+    const size_t count = static_cast<size_t>(rows) * intermediate;
+    gated_gelu_tanh_interleaved_kernel<<<static_cast<unsigned>((count + 255) / 256),
+                                         256, 0, stream>>>(gate_up, out, rows,
+                                                           intermediate);
+    CELEG_KERNEL_DEBUG_SYNC(stream);
+}
+
 __global__ void multiply_kernel(__nv_bfloat16* x, const __nv_bfloat16* y, int count) {
     const int index = static_cast<int>(blockIdx.x * blockDim.x + threadIdx.x);
     if ((count & 1) == 0 && bf16x2_aligned(x, y)) {
