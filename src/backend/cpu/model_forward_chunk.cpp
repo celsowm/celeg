@@ -604,10 +604,13 @@ void CpuCompiledModel::forward_chunk(std::span<const int32_t> tokens,
             session_.prefill_profile.linear_ms += milliseconds_since(linear_started);
             rmsnorm_rows_inplace(workspace_.chunk_hidden.data(), common.per_layer_input_norm, hidden,
                                  input_plan.norm_epsilon);
+            // layer_scalar attenuates the whole hidden state, residual included:
+            // HF's Gemma4TextDecoderLayer adds the residual first and only then
+            // does `hidden_states *= self.layer_scalar`.
+            residual_rows(workspace_.chunk_hidden.data(), workspace_.chunk_residual.data(), hidden);
             if (common.layer_scalar != 1.0f) {
                 scale(workspace_.chunk_hidden, rows * hidden, common.layer_scalar);
             }
-            residual_rows(workspace_.chunk_hidden.data(), workspace_.chunk_residual.data(), hidden);
         }
         if (std::binary_search(shared->program.norm_after_layers.begin(),
                                shared->program.norm_after_layers.end(),

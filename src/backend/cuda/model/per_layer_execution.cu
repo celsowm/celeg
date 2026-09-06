@@ -21,10 +21,14 @@ void CudaCompiledModel::run_per_layer_input_decode(const LayerCommon& common_lay
     launch_rmsnorm(workspace_.hidden_.data(), common_layer.per_layer_input_norm,
                    workspace_.hidden_.data(), 1, resources_.program_.hidden,
                    plan.norm_epsilon, stream_.get());
-    launch_scale_by_scalar(workspace_.hidden_.data(), common_layer.layer_scalar,
-                           resources_.program_.hidden, stream_.get());
+    // layer_scalar scales the whole post-per-layer-input hidden state, residual
+    // included: HF's Gemma4TextDecoderLayer adds the residual and only then does
+    // `hidden_states *= self.layer_scalar`. Scaling just the per-layer-input
+    // branch left layer 0's output ~18x too large (its scalar is 0.056).
     launch_residual_add(workspace_.hidden_.data(), workspace_.residual_.data(),
                         resources_.program_.hidden, stream_.get());
+    launch_scale_by_scalar(workspace_.hidden_.data(), common_layer.layer_scalar,
+                           resources_.program_.hidden, stream_.get());
 }
 
 void CudaCompiledModel::run_per_layer_input_prefill(const LayerCommon& common_layer,
@@ -55,10 +59,12 @@ void CudaCompiledModel::run_per_layer_input_prefill(const LayerCommon& common_la
     launch_rmsnorm(workspace_.prefill_hidden_.data(), common_layer.per_layer_input_norm,
                    workspace_.prefill_hidden_.data(), rows, resources_.program_.hidden,
                    plan.norm_epsilon, stream_.get());
-    launch_scale_by_scalar(workspace_.prefill_hidden_.data(), common_layer.layer_scalar,
-                           rows * resources_.program_.hidden, stream_.get());
+    // See run_per_layer_input_decode: the residual add precedes the layer_scalar
+    // multiply so the scalar attenuates the entire hidden state.
     launch_residual_add(workspace_.prefill_hidden_.data(), workspace_.prefill_residual_.data(),
                         rows * resources_.program_.hidden, stream_.get());
+    launch_scale_by_scalar(workspace_.prefill_hidden_.data(), common_layer.layer_scalar,
+                           rows * resources_.program_.hidden, stream_.get());
 }
 
 }

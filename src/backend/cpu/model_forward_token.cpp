@@ -194,10 +194,12 @@ void CpuCompiledModel::forward_token(int32_t token, bool compute_logits,
                                 workspace_.hidden.data());
             cpu_rmsnorm_inplace(workspace_.hidden.data(), common.per_layer_input_norm.data(),
                                 shared->program.hidden, shared->program.per_layer_input.norm_epsilon);
+            // layer_scalar attenuates the whole hidden state, residual included
+            // (HF Gemma4TextDecoderLayer: residual add, then `*= layer_scalar`).
+            cpu_residual_add(workspace_.hidden.data(), workspace_.residual.data(), shared->program.hidden);
             if (common.layer_scalar != 1.0f) {
                 for (float& value : workspace_.hidden) value *= common.layer_scalar;
             }
-            cpu_residual_add(workspace_.hidden.data(), workspace_.residual.data(), shared->program.hidden);
         }
         if (std::binary_search(shared->program.norm_after_layers.begin(),
                                shared->program.norm_after_layers.end(),
