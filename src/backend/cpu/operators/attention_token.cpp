@@ -24,6 +24,22 @@ void debug_dump_latent_stage(const char* stage, size_t index, int position,
               static_cast<std::streamsize>(size * sizeof(float)));
 }
 
+/// Dumps direct-attention stages for a single layer when
+/// CELEG_DEBUG_DIRECT_STAGE holds the target layer index (used to attribute
+/// direct-attention divergence the way debug_dump_latent_stage does for
+/// latent layers). Requires CELEG_DEBUG_HIDDEN_DIR as output directory.
+void debug_dump_direct_stage(const char* stage, size_t index,
+                             const float* data, std::size_t size) {
+    const char* dir = std::getenv("CELEG_DEBUG_HIDDEN_DIR");
+    if (!dir || std::getenv("CELEG_DEBUG_DIRECT_STAGE") == nullptr) return;
+    const std::string want = std::getenv("CELEG_DEBUG_DIRECT_STAGE");
+    if (want != std::to_string(index)) return;
+    std::ofstream out(std::string(dir) + "/direct_" + stage + ".f32",
+                      std::ios::binary);
+    out.write(reinterpret_cast<const char*>(data),
+              static_cast<std::streamsize>(size * sizeof(float)));
+}
+
 }
 
 void execute_cpu_attention_token(
@@ -234,8 +250,13 @@ void execute_cpu_attention_token(
                 execution.shared.linear.gemv(attention.k, execution.workspace.normed.data(), k);
                 execution.shared.linear.gemv(attention.v, execution.workspace.normed.data(), v);
             }
+            debug_dump_direct_stage("normed", index, execution.workspace.normed.data(),
+                                    static_cast<size_t>(execution.shared.program.hidden));
             apply_cpu_attention_qk(layout, attention, q, k, v,
                                    execution.session.position_value, rope_position);
+            debug_dump_direct_stage("qroped", index, q, static_cast<size_t>(q_width));
+            debug_dump_direct_stage("kroped", index, k, static_cast<size_t>(kv_width));
+            debug_dump_direct_stage("vafter", index, v, static_cast<size_t>(kv_width));
             const int owner = execution.shared.layer_to_kv_owner.at(index);
             CpuCompiledModel::AttentionState& state = attention_state.state(static_cast<size_t>(owner));
             if (!attention.k.segments.empty()) {
@@ -243,6 +264,8 @@ void execute_cpu_attention_token(
             }
             attention_state.run_attention(state, layout, q, execution.workspace.op_output.data(),
                           execution.session.position_value + 1, attention.relative_bias);
+            debug_dump_direct_stage("attnout", index, execution.workspace.op_output.data(),
+                                    static_cast<size_t>(q_width));
             const float* current_value = v;
             if (std::holds_alternative<OrthogonalizeCurrentValueSpec>(
                     layout.output_transform) && attention.k.segments.empty()) {
@@ -267,6 +290,8 @@ void execute_cpu_attention_token(
                     layout.query_heads, layout.head_dim);
             }
             execution.shared.linear.gemv(attention.out, execution.workspace.op_output.data(), execution.workspace.hidden.data());
+            debug_dump_direct_stage("oproj", index, execution.workspace.hidden.data(),
+                                    static_cast<size_t>(execution.shared.program.hidden));
             }
 }
 

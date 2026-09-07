@@ -43,6 +43,7 @@ A falha do `cuda_kernels_test` é isolada ao caso numérico NVFP4/W4A4. Ela não
 | `Nanbeige 3B` Q4_K_M | OK, errado/não inglês | FAIL, falta `tokenizer.ggml.merges` |
 | `Nemotron 4B` Q4_K_M | OK, correto/parcial | OK, errado/parcial |
 | `Ling-3.0-tiny` Safetensors (KDA+MLA hybrid) | OK, correct | OK, correct |
+| `google/gemma-4-E4B` Safetensors (turn-delimited template inferred from tokenizer; per-layer-input tower, dual-theta rotary, suffix KV-sharing) | OK, wrong (CPU Q4 group-32 pack drifts on this checkpoint's tower weights; bf16 mode would be required for parity) | OK, parity with HF greedy (decode step-by-step logits cos ≥ 0.99; chat + raw modes verified against the HF reference) |
 | `LiquidAI/LFM2.5-8B-A1B` Safetensors | OK, correto; 17.145 tok/s no decode | OK, correto com MoE offload; 0.508 tok/s no prefill e 1.539 tok/s no decode |
 | `flwrlabs/Lizzy-7B-GGUF` Q4_K_M | OK, correto; 6.188 tok/s no decode | OK, vazio |
 | `flwrlabs/Lizzy-7B` Safetensors | OK, correto; 3.479 tok/s no decode | OK, saída truncada/incorreta (`The`) |

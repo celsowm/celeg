@@ -8,6 +8,8 @@ void CudaCompiledModel::run_per_layer_input_decode(const LayerCommon& common_lay
     const PerLayerInputPlan& plan = resources_.program_.per_layer_input;
     if (!plan.enabled) return;
     const int ple = plan.input_size;
+    linear(workspace_.hidden_.data(), *common_layer.per_layer_input_gate,
+           workspace_.per_layer_gate_.data(), 1, ple, resources_.program_.hidden);
     launch_gelu_tanh(workspace_.per_layer_gate_.data(), workspace_.per_layer_gate_.data(),
                      ple, stream_.get());
     const __nv_bfloat16* context = workspace_.per_layer_context_.data() +

@@ -42,12 +42,32 @@ bool inferred_delimited_evidence(const ITokenizer& tokenizer) {
 
 std::string inferred_delimited_source() {
     return "{{ bos_token }}{% for message in messages %}"
-           "<|im_start|>{{ message.role }}\\n{{ message.content }}"
+           "<|im_start|>{{ message.role }}\n{{ message.content }}"
            "{% for call in message.tool_calls %}"
            "<|tool_call_start|>[{{ call.function.name }}"
            "({{ call.function.arguments }})]<|tool_call_end|>"
-           "{% endfor %}<|im_end|>\\n{% endfor %}"
-           "{% if add_generation_prompt %}<|im_start|>assistant\\n{% endif %}";
+           "{% endfor %}<|im_end|>\n{% endfor %}"
+           "{% if add_generation_prompt %}<|im_start|>assistant\n{% endif %}";
+}
+
+/// Turn-delimited tokenizers ship `<|turn>`/`<turn|>` as special tokens and
+/// render roles as `user`/`model` after the delimiter. Nothing
+/// model-specific: any checkpoint whose tokenizer proves those two markers
+/// gets this interaction family inferred.
+bool inferred_turn_evidence(const ITokenizer& tokenizer) {
+    return tokenizer.token_id("<|turn>").has_value() &&
+           tokenizer.token_id("<turn|>").has_value();
+}
+
+std::string inferred_turn_source() {
+    return "{{ bos_token }}{% for message in messages %}"
+           "{% if message['role'] == 'user' %}"
+           "<|turn>user\n{{ message.content }}<turn|>\n"
+           "{% endif %}"
+           "{% if message['role'] == 'assistant' %}"
+           "<|turn>model\n{{ message.content }}<turn|>\n"
+           "{% endif %}{% endfor %}"
+           "{% if add_generation_prompt %}<|turn>model\n{% endif %}";
 }
 
 }
@@ -84,16 +104,22 @@ ResolvedInteraction resolve_interaction(
     result.source_origin_ = origin;
 
     if (source.empty()) {
-        if (!inferred_delimited_evidence(tokenizer)) {
+        if (inferred_delimited_evidence(tokenizer)) {
+            source = inferred_delimited_source();
+            result.diagnostics_.push_back(
+                "inferred role-delimited interaction from tokenizer evidence: "
+                "<|startoftext|>, <|im_start|>, <|im_end|>, assistant");
+        } else if (inferred_turn_evidence(tokenizer)) {
+            source = inferred_turn_source();
+            result.diagnostics_.push_back(
+                "inferred turn-delimited interaction from tokenizer evidence: "
+                "<|turn>, <turn|>");
+        } else {
             throw std::invalid_argument(
                 "no chat template metadata and tokenizer does not structurally "
                 "prove BOS, role delimiters, turn terminator, and assistant "
                 "generation prefix; supply --chat-template-file");
         }
-        source = inferred_delimited_source();
-        result.diagnostics_.push_back(
-            "inferred role-delimited interaction from tokenizer evidence: "
-            "<|startoftext|>, <|im_start|>, <|im_end|>, assistant");
     }
 
     if (source.find("__") != std::string::npos ||

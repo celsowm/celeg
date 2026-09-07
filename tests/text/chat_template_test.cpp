@@ -64,6 +64,43 @@ int main() {
     const std::vector<celeg::ChatMessage> inferred_messages{{celeg::ChatRole::User, "Hello"}};
     CELEG_TEST_CHECK(inferred.format(inferred_messages).find("<|im_start|>assistant") != std::string::npos);
 
+    /// Turn-delimited tokenizers (`<|turn>`/`<turn|>` markers, `user`/`model`
+    /// roles) get their interaction inferred from the same tokenizer-evidence
+    /// path as the `<|im_start|>` family -- no checkpoint template needed.
+    {
+        class TurnEvidenceTokenizer final : public celeg::ITokenizer {
+        public:
+            TurnEvidenceTokenizer() : ids_{{"<|turn>", 1}, {"<turn|>", 2}} {}
+            std::vector<std::int32_t> encode(std::string_view, bool) const override { return {}; }
+            std::string decode(const std::vector<std::int32_t>& tokens, bool) const override {
+                return tokens.size() == 1 && tokens[0] == 1 ? "<|turn|>" : "";
+            }
+            std::string decode_token(std::int32_t, bool) const override { return {}; }
+            std::optional<std::int32_t> token_id(std::string_view text) const override {
+                const auto found = ids_.find(std::string(text));
+                return found == ids_.end() ? std::nullopt : std::optional{found->second};
+            }
+            std::int32_t bos_id() const override { return 1; }
+            std::int32_t eos_id() const override { return 2; }
+            std::int32_t pad_id() const override { return 0; }
+            int vocab_size() const override { return 3; }
+        private:
+            std::unordered_map<std::string, std::int32_t> ids_;
+        };
+        const TurnEvidenceTokenizer turn_tokenizer;
+        celeg::CheckpointMetadata turn_no_source;
+        const celeg::ResolvedInteraction turn_inferred =
+            celeg::resolve_interaction(turn_no_source, turn_tokenizer);
+        CELEG_TEST_CHECK(turn_inferred.source_origin() == "tokenizer-inference");
+        CELEG_TEST_CHECK(!turn_inferred.diagnostics().empty());
+        const std::vector<celeg::ChatMessage> turn_messages{
+            {celeg::ChatRole::User, "Hello"}};
+        const std::string rendered =
+            turn_inferred.format(turn_messages);
+        CELEG_TEST_CHECK(rendered.find("<|turn>user\nHello<turn|>") != std::string::npos);
+        CELEG_TEST_CHECK(rendered.find("<|turn>model\n") != std::string::npos);
+    }
+
     // The {% generation %} block must render only when a generation prompt is
     // requested, mirroring add_generation_prompt semantics, with no model-specific
     // branching.
