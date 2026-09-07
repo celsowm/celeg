@@ -87,7 +87,9 @@ std::vector<std::string> query_norm_candidates(int layer) {
         "blk." + index + ".attn_q_norm.weight",
         "model.layers." + index + ".self_attn.q_layernorm.weight",
         "model.layers." + index + ".self_attn.q_norm.weight",
+        "model.language_model.layers." + index + ".self_attn.q_layernorm.weight",
         "model.language_model.layers." + index + ".self_attn.q_norm.weight",
+        "layers." + index + ".self_attn.q_layernorm.weight",
         "layers." + index + ".self_attn.q_norm.weight",
     };
 }
@@ -98,7 +100,9 @@ std::vector<std::string> key_norm_candidates(int layer) {
         "blk." + index + ".attn_k_norm.weight",
         "model.layers." + index + ".self_attn.k_layernorm.weight",
         "model.layers." + index + ".self_attn.k_norm.weight",
+        "model.language_model.layers." + index + ".self_attn.k_layernorm.weight",
         "model.language_model.layers." + index + ".self_attn.k_norm.weight",
+        "layers." + index + ".self_attn.k_layernorm.weight",
         "layers." + index + ".self_attn.k_norm.weight",
     };
 }
