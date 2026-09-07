@@ -124,6 +124,20 @@ int main() {
     CELEG_TEST_CHECK(shorthand_resolved.format({}).empty());
     CELEG_TEST_CHECK(shorthand_resolved.format(inferred_messages) == ",");
 
+    /// The transformers template environment parses with trim_blocks and
+    /// lstrip_blocks on: python-jinja renders indented comments and blocks
+    /// with their leading whitespace and trailing newline treated as markup.
+    /// celeg must match, or indented templates (Lizzy, Ling) render stray
+    /// spaces/newlines.
+    {
+        celeg::CheckpointMetadata whitespace;
+        whitespace.values["chat_template"] = std::string(
+            "aa\n    {# comment #}\nxx\n{% if true %}\nyy\n{% endif %}\nzz");
+        const celeg::ResolvedInteraction resolved =
+            celeg::resolve_interaction(whitespace, tokenizer);
+        CELEG_TEST_CHECK(resolved.format({}) == "aa\nxx\nyy\nzz");
+    }
+
     celeg::CheckpointMetadata macro_metadata;
     macro_metadata.values["chat_template"] = std::string(
         "{% macro emit(value, suffix='!') %}{{ value }}{{ suffix }}{% endmacro %}"

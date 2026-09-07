@@ -42,6 +42,8 @@ MAX_TOKENS_BY_MODEL = {
     "flwrlabs/Lizzy-7B": 300,
     "flwrlabs/Lizzy-7B-GGUF": 300,
     "inclusionAI/Ling-3.0-tiny": 300,
+    "Nanbeige/Nanbeige4.2-3B": 300,
+    "bartowski/Nanbeige_Nanbeige4.2-3B-GGUF": 300,
 }
 TEMP = 0.0
 TOP_K = 1
@@ -106,10 +108,12 @@ def run_model(run_cmd, repo, backend, extra_args=None):
             # The diagnostic banner (chat.template=, source=, pack_path=, ...)
             # is printed to stderr; the generated completion is printed to
             # stdout. combined interleaves them by stream, not by time, so
-            # the generated text must be read from stdout alone.
-            lines = stdout.strip().split("\n")
-            generated = lines[-1] if lines else ""
-            generated = generated.strip()
+            # the generated text must be read from stdout alone. Thinking
+            # models emit a structured preamble, then a blank line, then the
+            # final answer ("\n\n response\n\nThe capital of France is Paris"),
+            # so the whole stdout is the completion -- classifying only the
+            # last line misses the answer every time.
+            generated = stdout.strip()
             coherent, correct = classify_output(generated)
             return (True, generated, elapsed, None, coherent, correct)
         else:

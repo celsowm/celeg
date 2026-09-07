@@ -41,12 +41,23 @@ private:
 
             const bool trim_left =
                 source_.substr(opening, 3) == "{{-" ||
-                source_.substr(opening, 3) == "{%-";
+                source_.substr(opening, 3) == "{%-" ||
+                source_.substr(opening, 3) == "{#-";
             if (opening > position_) {
                 append_text(nodes, source_.substr(position_, opening - position_));
             }
             if (trim_left) {
                 trim_trailing_text(nodes);
+            }
+            /// Jinja2 with lstrip_blocks (the environment transformers
+            /// render templates with) strips leading whitespace from a line
+            /// that opens a `{%`/`{#` tag. Templates authored for that
+            /// environment rely on it (indented blocks/comments), so mirror
+            /// it unconditionally here: if everything between the last
+            /// newline and this tag is whitespace, drop it.
+            if (source_.substr(opening, 2) == "{%" ||
+                source_.substr(opening, 2) == "{#") {
+                lstrip_line_before_tag(nodes);
             }
 
             if (source_.substr(opening, 2) == "{{") {
@@ -73,6 +84,11 @@ private:
                     fail("unterminated Jinja comment");
                 }
                 position_ = close + 2;
+                /// trim_blocks eats the newline after a comment, too
+                /// (jinja2 applies trim_blocks to comments).
+                trim_block_newline();
+                trim_following_whitespace(
+                    close > opening + 2 && source_[close - 1] == '-');
                 continue;
             }
 
@@ -92,6 +108,10 @@ private:
             position_ = close + 2;
             trim_following_whitespace(
                 close > opening + 2 && source_[close - 1] == '-');
+            /// Jinja2 trim_blocks: the newline immediately after `{%...%}`
+            /// is markup. Runs after the explicit `-%}` rule (which eats all
+            /// whitespace anyway) so both spellings stay correct.
+            trim_block_newline();
 
             if (at_terminator(terminators, tag)) {
                 pending_ = std::pair{tag, line};
@@ -313,6 +333,42 @@ private:
         while (position_ < source_.size() &&
                std::isspace(static_cast<unsigned char>(source_[position_]))) {
             ++position_;
+        }
+    }
+
+    /// Jinja2 `trim_blocks=True`: a single newline immediately following a
+    /// `{%...%}` or `{#...#}` tag is part of the markup, not the output.
+    /// Called after consuming such a tag; skips one line break when present.
+    void trim_block_newline() {
+        if (position_ + 1 < source_.size() && source_[position_] == '\r' &&
+            source_[position_ + 1] == '\n') {
+            position_ += 2;
+        } else if (position_ < source_.size() && source_[position_] == '\n') {
+            ++position_;
+        }
+    }
+
+    /// Jinja2 `lstrip_blocks=True`: when a `{%`/`{#` opens after nothing but
+    /// whitespace since the last newline, that line-leading whitespace is
+    /// markup, not output. Mirrors the transformers template environment.
+    static void lstrip_line_before_tag(std::vector<TemplateNode>& nodes) {
+        if (nodes.empty() || nodes.back().kind != TemplateNode::Kind::Text) {
+            return;
+        }
+        std::string& text = nodes.back().text;
+        const std::size_t last_newline = text.find_last_of('\n');
+        if (last_newline == std::string::npos) {
+            return;
+        }
+        const std::string_view tail(text.data() + last_newline + 1,
+                                    text.size() - last_newline - 1);
+        if (tail.empty() ||
+            tail.find_first_not_of(" \t") != std::string_view::npos) {
+            return;
+        }
+        text.erase(last_newline + 1);
+        if (text.empty()) {
+            nodes.pop_back();
         }
     }
 
