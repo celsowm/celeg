@@ -19,11 +19,19 @@ Safetensors checkpoint directory, or a local GGUF file.
 | SmolLM3-3B | Yes | Yes | Yes | Yes | No |
 | Nemotron 3 Nano 4B | Yes | Q4_K_M | Yes | Yes | No |
 | Muse Glimmer 30B | Yes | UD-IQ2_XXS* | Yes | Yes | No |
+| Ling KDA+MLA | Yes | No | Yes | Yes | No |
+| Lizzy-7B | Yes | Yes | Yes | Yes | No |
+| LFM2.5-VL-450M | Yes | No | Yes | Yes | No |
+| Nanbeige-3B | Yes | Yes | Yes | Yes | No |
+| Gemma-4 E4B | Yes | No | Yes (bf16) | Yes | E4B-it text-only † |
 
 * Muse Glimmer is Tier A native text support and includes a registered Tier B
 image provider for the official Safetensors packaging. The CUDA loader also
 supports managed host-preferred weight residency for low-VRAM smoke checks;
 enable it with `CELEG_CUDA_MANAGED_WEIGHTS=1`.
+
+† Gemma-4 E4B is a base checkpoint; the instruct `gemma-4-E4B-it` text-only
+Metal path is in tree but not validated on this machine.
 
 MiniCPM5-1B uses the standard Llama tensor layout with GQA (16 query heads,
 2 KV heads), 131072-token context metadata, and both EOS markers from the
@@ -106,10 +114,11 @@ optional; the CPU backend can be built without it.
 
 For Metal builds, use an Apple Silicon Mac with the macOS SDK and an
 Objective-C++ compiler. The native Metal path covers the cached LFM2.5-350M
-convolution/attention model, native Q4_K/Q6_K GGUF kernels, one-token
-demand-loaded inference for the cached LFM2.5-8B-A1B MoE checkpoint, and
-text-only inference for cached Gemma-4 E4B-it through the generic Jinja
-interpreter.
+convolution/attention model, native Q4_K/Q6_K GGUF kernels, and one-token
+demand-loaded inference for the cached LFM2.5-8B-A1B MoE checkpoint. Text-only
+inference for the cached Gemma-4 E4B-it instruct checkpoint (through the
+generic Jinja interpreter) is present in tree but is not part of the automated
+CPU/CUDA sweep and has not been validated on this machine.
 
 The repository is developed and tested on Windows and Linux. On Windows,
 executables have an `.exe` suffix.
@@ -191,9 +200,11 @@ celeg-metal-run --repo LiquidAI/LFM2.5-8B-A1B \
   --context 64 --prompt "Hello" --max-new-tokens 1
 ```
 
-Gemma-4 E4B-it can be smoke-tested through the cached repository as a text-only
-Metal run. Its upstream template is supported by CELEG's generic Jinja
-interpreter:
+Gemma-4 E4B-it (the *instruct* variant, distinct from the base
+`google/gemma-4-E4B` exercised by the sweep) can be smoke-tested through the
+cached repository as a text-only Metal run. Its upstream template is supported
+by CELEG's generic Jinja interpreter. This path is not covered by the automated
+CPU/CUDA sweep and has not been validated on this machine:
 
 ```text
 celeg-metal-run --repo google/gemma-4-E4B-it \

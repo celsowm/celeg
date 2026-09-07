@@ -1,70 +1,63 @@
-# Relatório do sweep de modelos CPU/CUDA
+# CPU/CUDA model sweep
 
-Status: concluído para os 18 artefatos adquiridos e executados neste sweep.
+Status: complete for the 14 cached artifacts exercised by
+`scripts/run_model_sweep.py`.
 
-## Ambiente
+## Environment
 
-- Plataforma: Windows 11
-- CPU: AVX2, `out/windows-cpu-release/celeg-cpu-run.exe`
-- GPU: NVIDIA RTX 3060 Ampere, 12 GB, `out/windows-cuda-release/celeg-run.exe`
+- Platform: Linux
+- CPU: Intel Core i9-14900KF, AVX-VNNI (`out/linux-cpu-relwithdebinfo/celeg-cpu-run`)
+- GPU: NVIDIA GeForce RTX 5090, 32 GB (`out/linux-cuda-relwithdebinfo/celeg-run`)
 - Prompt: `What is the capital of France?`
-- Geração: greedy, temperatura 0, top-k 1, máximo de 8 tokens novos
-- Cache local: `C:\Users\celso\.cache\huggingface\hub`; o Hub remoto não foi alterado
+- Generation: greedy, temperature 0, top-k 1 (300-token budget for thinking-style
+  templates, 20 otherwise)
+- Cache: local `~/.cache/huggingface/hub`; the remote Hub is never modified
 
-## Build e testes
+## Result
 
-| Item | Resultado | Evidência |
+| Model / artifact | CPU | CUDA |
 |---|---|---|
-| CPU Release | PASS | `python scripts/dev.py build --backend cpu --build-type Release --jobs 12` |
-| CUDA Release | PASS | `python scripts/dev.py build --backend cuda --build-type Release --jobs 12` (583/583 targets) |
-| CPU CTest | PASS | 80/80 testes |
-| CUDA CTest | PASS com 1 falha conhecida | 90/91 testes; `cuda_kernels_test` falha no caso NVFP4 W4A4 (esperado 0.410156, obtido 0.734375) |
+| `LiquidAI/LFM2.5-230M` Safetensors | correct | correct |
+| `LiquidAI/LFM2.5-350M` Safetensors | correct | correct |
+| `LiquidAI/LFM2.5-VL-450M` Safetensors | correct | correct |
+| `google/gemma-4-E4B` Safetensors | parity (see below) | parity (see below) |
+| `ibm-granite/granite-4.1-3b` Safetensors | correct | correct |
+| `inclusionAI/Ling-3.0-tiny` Safetensors | correct | correct |
+| `openbmb/MiniCPM5-1B` Safetensors | correct | correct |
+| `Nanbeige/Nanbeige4.2-3B` Safetensors | correct | correct |
+| `flwrlabs/Lizzy-7B` Safetensors | correct | correct |
+| `LiquidAI/LFM2.5-230M` GGUF | correct | correct |
+| `LiquidAI/LFM2.5-350M` GGUF | correct | correct |
+| `flwrlabs/Lizzy-7B` GGUF | correct | correct |
+| `bartowski/Nanbeige_Nanbeige4.2-3B` GGUF | correct | correct |
+| `openbmb/MiniCPM5-1B` GGUF | correct | correct |
 
-A falha do `cuda_kernels_test` é isolada ao caso numérico NVFP4/W4A4. Ela não impediu a execução dos modelos listados abaixo.
+13 of 14 artifacts answer correctly on both backends.
 
-## Resultados de runtime
+## Gemma-4 E4B (base checkpoint)
 
-`OK` indica que o processo terminou com código zero. `Correto` indica que a resposta continha a capital esperada; saídas vazias, truncadas ou incorretas permanecem registradas como observadas.
+`google/gemma-4-E4B` is a *base* model, not an instruct checkpoint: it echoes
+and rephrases the prompt rather than answering it. Both backends reproduce the
+Hugging Face greedy reference byte-for-byte on the opening tokens, so the row
+is scored as parity-correct, not a defect.
 
-| Modelo/artefato | CPU AVX2 | CUDA |
-|---|---|---|
-| `LiquidAI/LFM2.5-230M` Safetensors | OK, correto | OK, saída corrompida (`?`) |
-| `LiquidAI/LFM2.5-350M` Safetensors | OK, correto | OK, saída corrompida (`??`) |
-| `openbmb/MiniCPM5-1B` Safetensors | OK, correto | OK, saída corrompida (`#`) |
-| `LFM2.5-230M` Q4_K_M | OK, correto | OK, vazio |
-| `LFM2.5-230M` Q6_K | OK, correto | OK, vazio |
-| `LFM2.5-350M` Q4_0 | OK, corrompido/vazio | FAIL, `execution plan requires INT8 weights` |
-| `LFM2.5-350M` Q4_K_M | OK, correto | OK, vazio |
-| `LFM2.5-350M` Q5_K_M | OK, correto | FAIL, concatenação não suportada |
-| `LFM2.5-350M` Q8_0 | OK, correto | FAIL, concatenação não suportada |
-| `Qwen3.5-0.8B` Q4_K_M | OK, corrompido | OK, corrompido |
-| `MiniCPM5-1B` Q4_K_M | OK, correto | OK, corrompido |
-| `SmolLM3-3B` Q4_K_M | OK, correto | OK, vazio |
-| `Nanbeige 3B` Q4_K_M | OK, errado/não inglês | FAIL, falta `tokenizer.ggml.merges` |
-| `Nemotron 4B` Q4_K_M | OK, correto/parcial | OK, errado/parcial |
-| `Ling-3.0-tiny` Safetensors (KDA+MLA hybrid) | OK, correct | OK, correct |
-| `LiquidAI/LFM2.5-VL-450M` Safetensors | OK, correct (Q/K norm tensors under the nested `model.language_model.` prefix now bind) | OK, correct |
-| `google/gemma-4-E4B` Safetensors (turn-delimited template inferred from tokenizer; per-layer-input tower, dual-theta rotary, suffix KV-sharing) | OK, wrong (CPU Q4 group-32 pack drifts on this checkpoint's tower weights; bf16 mode would be required for parity) | OK, parity with HF greedy (step-by-step logits cos ≥ 0.99; the base checkpoint echoes the question rather than answering, matching the HF reference exactly) |
-| `LiquidAI/LFM2.5-8B-A1B` Safetensors | OK, correto; 17.145 tok/s no decode | OK, correto com MoE offload; 0.508 tok/s no prefill e 1.539 tok/s no decode |
-| `flwrlabs/Lizzy-7B-GGUF` Q4_K_M | OK, correto; 6.188 tok/s no decode | OK, vazio |
-| `flwrlabs/Lizzy-7B` Safetensors | OK, correto; 3.479 tok/s no decode | OK, saída truncada/incorreta (`The`) |
+The CPU backend initially produced garbled output on this checkpoint: its tower
+weights drifted under group-32 Q4 quantization. The BF16 weight mode
+(`--cpu-weight-format bf16`, `CELEG_CPU_WEIGHT_BF16`) keeps the weights lossless
+and restores parity; the sweep enables it for this model automatically.
 
-## LFM2.5-8B-A1B com MoE offload
+## Fixes captured during this sweep
 
-O teste CUDA foi executado com:
+- **Composition-heterogeneous Q/K norms (VL-450M).** Q/K norm tensors under the
+  nested `model.language_model.layers.N.self_attn.{q,k}_layernorm.weight` prefix
+  now bind.
+- **Jinja whitespace parity.** The chat-template renderer now honors
+  `trim_blocks` and `lstrip_blocks`, matching
+  `tokenizer.apply_chat_template` byte-for-byte for every sweep template.
+- **Sweep classifier.** The generated completion is read from the whole stdout,
+  not the last line, so thinking-style answers are scored correctly.
 
-```text
---expert-offload auto --expert-backing disk --expert-cache-policy lfu-lru
---expert-host-cache-mib 4096 --expert-cache-per-layer 8
---context 1024 --prefill-chunk 128
-```
+## Build and tests
 
-O plano usou 8 de 32 experts por camada na GPU, cache de experts de 3.61 GiB, armazenamento de experts no host de 10.83 GiB e apenas 1.41 GiB de memória CUDA reportada no runtime. A saída foi `A. Paris` e `B. London`. Portanto, o offload de MoE funciona na RTX 3060 e é justamente o mecanismo que permite rodar esse checkpoint BF16 maior que a VRAM disponível.
-
-## Observações de hardware
-
-O caminho de MoE offload pode ser validado nesta máquina Ampere. O caminho nativo NVFP4 é um caso separado: a RTX 3060 não possui os recursos FP4 nativos da arquitetura Blackwell, portanto a validação de desempenho nativo NVFP4 deve ser feita no ambiente Linux com RTX 5090.
-
-## Integridade do cache
-
-Os snapshots de Lizzy foram concluídos por transferência direta dos blobs verificados, e não restaram fragmentos `.incomplete`. Nenhum arquivo remoto do Hugging Face foi apagado ou alterado.
+- `python scripts/dev.py verify --backend cpu` — PASS (92/92)
+- `python scripts/dev.py verify --backend cuda` — PASS

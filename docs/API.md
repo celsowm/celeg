@@ -67,7 +67,8 @@ the backend payload with `celeg_metal_backend_options_init`. The Metal options
 include the KV page size, request limits, and prefix-cache capacity. The
 currently validated cached fixtures are LFM2.5-350M Safetensors, its Q4_K_M
 GGUF variant, and a one-token LFM2.5-8B-A1B MoE smoke with demand-loaded
-experts, and text-only Gemma-4 E4B-it inference.
+experts. Text-only Gemma-4 E4B-it (the instruct variant) inference is present
+in tree but is not validated on this machine.
 
 ```c
 celeg_metal_backend_options metal;

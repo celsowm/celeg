@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Added lossless BF16 CPU weight mode (`CpuWeightFormat::Bf16`,
+  `CELEG_CPU_WEIGHT_BF16`, `--cpu-weight-format bf16`). Keeps linear weights
+  as raw bf16 instead of groupwise Q4, fixing Gemma-4 E4B's garbled CPU output.
+- Matched the transformers Jinja template environment (trim_blocks and
+  lstrip_blocks), making chat templates render byte-identically to
+  `tokenizer.apply_chat_template` for every swept checkpoint.
+- Fixed composition-heterogeneous Q/K norm binding under nested
+  `model.language_model.` prefixes (LFM2.5-VL-450M).
 - Added OpenAI-compatible tool definitions, tool-call DTOs, nullable assistant
   content, capability-aware request validation, `tool_calls` finish reasons,
   and structured escaped error responses.
