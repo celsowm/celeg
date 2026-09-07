@@ -9,6 +9,10 @@ int main() {
         celeg::CpuKvCacheMode::Bf16)) == "bf16");
     CELEG_TEST_CHECK(celeg::parse_cpu_kv_cache_mode("fp32") == celeg::CpuKvCacheMode::Fp32);
     CELEG_TEST_CHECK(celeg::parse_cpu_kv_cache_mode("bf16") == celeg::CpuKvCacheMode::Bf16);
+    CELEG_TEST_CHECK(std::string(celeg::cpu_weight_format_name(
+        celeg::CpuWeightFormat::Q4Group32)) == "q4-group32");
+    CELEG_TEST_CHECK(std::string(celeg::cpu_weight_format_name(
+        celeg::CpuWeightFormat::Bf16)) == "bf16");
     celeg::CpuModelOptions defaults;
     CELEG_TEST_CHECK(defaults.kv_page_tokens == 32);
     CELEG_TEST_CHECK(defaults.prefill_chunk_tokens == 256);

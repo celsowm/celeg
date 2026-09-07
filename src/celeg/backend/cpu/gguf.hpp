@@ -29,7 +29,21 @@ struct CpuInt8Matrix {
     void validate() const;
 };
 
-using CpuLinearMatrix = std::variant<Q4GroupMatrix, GgmlMatrixView, CpuInt8Matrix>;
+struct CpuBf16Matrix {
+    uint32_t rows = 0;
+    uint32_t cols = 0;
+    std::shared_ptr<std::vector<uint16_t>> values =
+        std::make_shared<std::vector<uint16_t>>();
+
+    size_t memory_bytes() const {
+        return values->size() * sizeof(uint16_t);
+    }
+    const uint16_t* data() const { return values->data(); }
+    void validate() const;
+};
+
+using CpuLinearMatrix =
+    std::variant<Q4GroupMatrix, GgmlMatrixView, CpuInt8Matrix, CpuBf16Matrix>;
 
 struct CpuLinearWeight {
     uint32_t rows = 0;
@@ -39,6 +53,7 @@ struct CpuLinearWeight {
     static CpuLinearWeight from_q4(Q4GroupMatrix matrix);
     static CpuLinearWeight from_ggml(GgmlMatrixView matrix);
     static CpuLinearWeight from_int8(CpuInt8Matrix matrix);
+    static CpuLinearWeight from_bf16(CpuBf16Matrix matrix);
     size_t memory_bytes() const;
     bool gguf_native() const;
     void validate() const;

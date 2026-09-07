@@ -100,7 +100,8 @@ CpuCompiledModel::Shared::Shared(const std::string& path, int context,
 }
 
 void CpuCompiledModel::Shared::prepare_pack_path() {
-    if (checkpoint.native_checkpoint || checkpoint.compressed_checkpoint ||
+    if (options.weight_format == CpuWeightFormat::Bf16 ||
+        checkpoint.native_checkpoint || checkpoint.compressed_checkpoint ||
         !options.use_pack_cache) {
         return;
     }
@@ -127,11 +128,11 @@ CpuLinearWeight CpuCompiledModel::Shared::load_matrix(
         if (checkpoint.compressed_checkpoint) {
             if (const auto cached = compressed_linear_cache.find(name);
                 cached != compressed_linear_cache.end()) return cached->second;
-            CpuLinearWeight loaded = CpuWeightCodec(source, reader, writer, group_size).matrix(name, expected);
+            CpuLinearWeight loaded = CpuWeightCodec(source, reader, writer, options.weight_format).matrix(name, expected);
             auto [it, inserted] = compressed_linear_cache.emplace(name, std::move(loaded));
             return it->second;
         }
-        return CpuWeightCodec(source, reader, writer, group_size).matrix(name, expected);
+        return CpuWeightCodec(source, reader, writer, options.weight_format).matrix(name, expected);
     } catch (const std::exception& error) {
         throw std::runtime_error("CPU load_matrix '" + name + "': " + error.what());
     }
@@ -158,7 +159,7 @@ CpuLinearWeight CpuCompiledModel::Shared::load_concat(
         auto [it, inserted] = compressed_linear_cache.emplace(synthetic, std::move(result));
         return it->second;
     }
-    return CpuWeightCodec(source, reader, writer, group_size).concat(synthetic, parts);
+    return CpuWeightCodec(source, reader, writer, options.weight_format).concat(synthetic, parts);
     } catch (const std::exception& error) {
         throw std::runtime_error("CPU load_concat '" + synthetic + "': " + error.what());
     }
@@ -167,7 +168,7 @@ CpuLinearWeight CpuCompiledModel::Shared::load_concat(
 std::vector<float> CpuCompiledModel::Shared::load_vector(
     IWeightRepository* source, CpuPackReader* reader, CpuPackWriter* writer,
     const std::string& name, const std::vector<int64_t>& expected) {
-    return CpuWeightCodec(source, reader, writer, group_size).vector(name, expected);
+    return CpuWeightCodec(source, reader, writer, options.weight_format).vector(name, expected);
 }
 
 size_t CpuCompiledModel::Shared::weights_memory_bytes() const {

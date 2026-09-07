@@ -43,6 +43,15 @@ CpuKvCacheMode parse_cpu_kv_cache_mode(const std::string& text) {
     throw std::invalid_argument("CPU KV cache mode must be fp32 or bf16");
 }
 
+const char* cpu_weight_format_name(CpuWeightFormat format) {
+    switch (format) {
+        case CpuWeightFormat::Q4Group32: return "q4-group32";
+        case CpuWeightFormat::Q4Group64: return "q4-group64";
+        case CpuWeightFormat::Bf16: return "bf16";
+    }
+    return "unknown";
+}
+
 CpuModel::CpuModel(const std::string& path, int context,
                    CpuModelOptions options, GenerationConfig generation,
                    std::shared_ptr<const RuntimeContext> runtime)
@@ -204,8 +213,11 @@ std::string CpuModel::session_backend_description() const {
         << " weights="
         << (state_->shared->checkpoint.native_checkpoint
                 ? "gguf-native(q4_k,q6_k)"
-                : "q4-group")
-        << (state_->shared->checkpoint.native_checkpoint
+                : (state_->shared->options.weight_format == CpuWeightFormat::Bf16
+                       ? "bf16"
+                       : "q4-group"))
+        << (state_->shared->checkpoint.native_checkpoint ||
+                    state_->shared->options.weight_format == CpuWeightFormat::Bf16
                 ? "" : ("-" + std::to_string(state_->shared->group_size)))
         << " kv=" << cpu_kv_cache_mode_name(state_->shared->options.kv_cache_mode)
         << " kv-page=" << state_->shared->options.kv_page_tokens
@@ -217,7 +229,8 @@ std::string CpuModel::session_backend_description() const {
         << " attention-page-tile=" << state_->shared->options.attention_page_tile
         << " pinned-workers=" << state_->shared->pool.pinned_workers()
         << " pack="
-        << (state_->shared->checkpoint.native_checkpoint
+        << (state_->shared->checkpoint.native_checkpoint ||
+                    state_->shared->checkpoint.pack_file.empty()
                 ? "none"
                 : (state_->shared->checkpoint.loaded_pack ? "hit" : "built"))
         << " hardware-best="

@@ -13,6 +13,7 @@ void generation(celeg_generation_options& options) {
 
 void cpu_model_config(celeg_cpu_model_config& options) {
     options.q4_group_size = 32;
+    options.weight_format = CELEG_CPU_WEIGHT_Q4_GROUP32;
     options.use_pack_cache = 1;
     options.kv_cache_mode = CELEG_CPU_KV_CACHE_BF16;
     options.kv_page_tokens = 32;

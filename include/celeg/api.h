@@ -56,6 +56,12 @@ typedef enum celeg_cpu_kv_cache_value {
     CELEG_CPU_KV_CACHE_BF16 = 1
 } celeg_cpu_kv_cache_value;
 
+typedef enum celeg_cpu_weight_format_value {
+    CELEG_CPU_WEIGHT_Q4_GROUP32 = 0,
+    CELEG_CPU_WEIGHT_Q4_GROUP64 = 1,
+    CELEG_CPU_WEIGHT_BF16 = 2
+} celeg_cpu_weight_format_value;
+
 typedef enum celeg_cpu_numa_value {
     CELEG_CPU_NUMA_DISABLED = 0,
     CELEG_CPU_NUMA_LOCAL = 1,
@@ -126,6 +132,7 @@ typedef struct celeg_cpu_model_config {
     int32_t threads;
     int32_t isa;
     int32_t q4_group_size;
+    int32_t weight_format;
     int32_t use_pack_cache;
     const char* pack_cache_directory;
     int32_t affinity;

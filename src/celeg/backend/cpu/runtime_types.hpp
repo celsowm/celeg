@@ -7,6 +7,7 @@ namespace celeg {
 enum class CpuWeightFormat : uint8_t {
     Q4Group32,
     Q4Group64,
+    Bf16,
 };
 
 enum class CpuKvCacheMode : uint8_t {

@@ -97,6 +97,10 @@ private:
                    float* output, float beta) const;
     void gemm_int8(const CpuInt8Matrix& matrix, const float* input, float* output,
                    size_t rows, float beta, size_t output_stride, size_t output_base) const;
+    void gemv_bf16(const CpuBf16Matrix& matrix, const float* input, float* output,
+                   float beta) const;
+    void gemm_bf16(const CpuBf16Matrix& matrix, const float* input, float* output,
+                   size_t rows, float beta, size_t output_stride, size_t output_base) const;
 
     CpuIsa isa_;
     CpuThreadPool* pool_;

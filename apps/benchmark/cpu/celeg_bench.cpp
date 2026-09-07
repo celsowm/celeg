@@ -29,6 +29,7 @@ struct Args {
     int ubatch_size = 256;
     int group_size = 32;
     bool group_size_explicit = false;
+    std::string weight_format = "q4";
     int context = 0;
     uint64_t seed = 1;
     std::string output = "json";
@@ -54,6 +55,7 @@ Args parse_args(int argc, char** argv) {
             args.group_size = std::stoi(value());
             args.group_size_explicit = true;
         }
+        else if (key == "--cpu-weight-format") args.weight_format = value();
         else if (key == "--cpu-isa") args.isa = value();
         else if (key == "--context") args.context = std::stoi(value());
         else if (key == "--seed") args.seed = std::stoull(value());
@@ -69,6 +71,7 @@ Args parse_args(int argc, char** argv) {
                 << "  -b, --batch-size N   prefill chunk size (default 256)\n"
                 << "  -ub, --ubatch-size N physical chunk size (must equal batch)\n"
                 << "  --cpu-q4-group 32|64 weight quantization group size\n"
+                << "  --cpu-weight-format q4|bf16 weight storage (default q4)\n"
                 << "  --cpu-isa auto|scalar|avx2|avx-vnni|avx512-vnni|neon\n"
                 << "  --context N          override context size\n"
                 << "  -o, --output json|md output format (default json)\n";
@@ -79,7 +82,8 @@ Args parse_args(int argc, char** argv) {
     if (args.n_prompt < 0 || args.n_gen < 0 || args.reps <= 0 || args.warmup < 0 ||
         args.threads < 0 || args.batch_size <= 0 || args.ubatch_size <= 0 ||
         args.batch_size != args.ubatch_size ||
-        (args.group_size != 32 && args.group_size != 64)) {
+        (args.group_size != 32 && args.group_size != 64) ||
+        (args.weight_format != "q4" && args.weight_format != "bf16")) {
         throw std::runtime_error("invalid numeric argument");
     }
     if (args.context <= 0) args.context = args.n_prompt + args.n_gen + 16;
@@ -164,8 +168,11 @@ int main(int argc, char** argv) {
 
         celeg::CpuModelOptions options;
         options.isa = celeg::parse_cpu_isa(args.isa);
-        options.weight_format = args.group_size == 64
-            ? celeg::CpuWeightFormat::Q4Group64 : celeg::CpuWeightFormat::Q4Group32;
+        options.weight_format = args.weight_format == "bf16"
+            ? celeg::CpuWeightFormat::Bf16
+            : (args.group_size == 64
+                ? celeg::CpuWeightFormat::Q4Group64
+                : celeg::CpuWeightFormat::Q4Group32);
         options.threads = static_cast<size_t>(args.threads);
         options.prefill_chunk_tokens = static_cast<size_t>(args.ubatch_size);
         celeg::GenerationConfig generation;

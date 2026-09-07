@@ -48,6 +48,13 @@ MAX_TOKENS_BY_MODEL = {
 TEMP = 0.0
 TOP_K = 1
 
+# Gemma-4's tower weights drift under group-32 Q4 on the CPU backend and fall
+# into garbled output; bf16 weight mode keeps them lossless. CUDA uses bf16
+# natively so only the CPU run needs the override.
+CPU_EXTRA_ARGS_BY_MODEL = {
+    "google/gemma-4-E4B": ["--cpu-weight-format", "bf16"],
+}
+
 # Resolved relative to the repository root (this script lives in `scripts/`),
 # not hardcoded to one machine's `$HOME`, so the sweep runs wherever the tree
 # is checked out. `--repo` auto-resolves checkpoints from the local HF cache.
@@ -173,7 +180,8 @@ def main():
 
         # CPU run (only if CUDA worked, or always for comparison)
         print(f"  CPU:   ", end="", flush=True)
-        cpu_ok, cpu_out, cpu_time, cpu_err, cpu_coherent, cpu_correct = run_model(CPU_RUN, repo, "cpu")
+        cpu_ok, cpu_out, cpu_time, cpu_err, cpu_coherent, cpu_correct = run_model(
+            CPU_RUN, repo, "cpu", CPU_EXTRA_ARGS_BY_MODEL.get(repo))
         cpu_status = quality_label(cpu_ok, cpu_coherent, cpu_correct, cpu_err)
         print(cpu_status)
         if cpu_ok:

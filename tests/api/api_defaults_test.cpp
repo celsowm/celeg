@@ -8,6 +8,7 @@ int main() {
     celeg_cpu_model_options_init(&cpu);
     if (cpu.struct_size != sizeof(cpu) || cpu.generation.temperature != 0.1f ||
         cpu.generation.top_k != 50 || cpu.cpu.q4_group_size != 32 ||
+        cpu.cpu.weight_format != CELEG_CPU_WEIGHT_Q4_GROUP32 ||
         cpu.cpu.kv_cache_mode != CELEG_CPU_KV_CACHE_BF16) return 1;
 
     celeg_cpu_backend_options cpu_backend{};

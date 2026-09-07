@@ -44,21 +44,24 @@ void quantize_gguf_rows(CpuThreadPool& pool, CpuIsa isa, const float* input,
 
 }
 
-enum class LinearStorageKind { Q4, Int8, Gguf };
+enum class LinearStorageKind { Q4, Int8, Gguf, Bf16 };
 
 LinearStorageKind classify_weight(const CpuLinearWeight& weight) {
     bool any_q4 = false;
     bool any_int8 = false;
     bool any_gguf = false;
+    bool any_bf16 = false;
     for (const CpuLinearMatrix& segment : weight.segments) {
         if (std::holds_alternative<Q4GroupMatrix>(segment)) any_q4 = true;
         else if (std::holds_alternative<CpuInt8Matrix>(segment)) any_int8 = true;
+        else if (std::holds_alternative<CpuBf16Matrix>(segment)) any_bf16 = true;
         else any_gguf = true;
     }
-    if (any_q4 && !any_int8 && !any_gguf) return LinearStorageKind::Q4;
-    if (any_int8 && !any_q4 && !any_gguf) return LinearStorageKind::Int8;
-    if (any_gguf && !any_q4 && !any_int8) return LinearStorageKind::Gguf;
-    throw std::logic_error("mixed CPU linear storage (Q4/INT8/GGUF) is unsupported");
+    if (any_q4 && !any_int8 && !any_gguf && !any_bf16) return LinearStorageKind::Q4;
+    if (any_int8 && !any_q4 && !any_gguf && !any_bf16) return LinearStorageKind::Int8;
+    if (any_gguf && !any_q4 && !any_int8 && !any_bf16) return LinearStorageKind::Gguf;
+    if (any_bf16 && !any_q4 && !any_int8 && !any_gguf) return LinearStorageKind::Bf16;
+    throw std::logic_error("mixed CPU linear storage (Q4/INT8/GGUF/BF16) is unsupported");
 }
 
 size_t segment_rows(const CpuLinearMatrix& segment) {
@@ -225,6 +228,14 @@ void CpuLinearEngine::gemv(const CpuLinearWeight& weight, const float* input,
         }
         return;
     }
+    if (kind == LinearStorageKind::Bf16) {
+        size_t offset = 0;
+        for (const CpuLinearMatrix& segment : weight.segments) {
+            gemv_bf16(std::get<CpuBf16Matrix>(segment), input, output + offset, beta);
+            offset += segment_rows(segment);
+        }
+        return;
+    }
     const std::vector<CpuQ8KBlock> activation =
         cpu_quantize_q8k(input, weight.cols, isa_);
     size_t offset = 0;
@@ -267,6 +278,11 @@ void CpuLinearEngine::gemv_transpose(const CpuLinearWeight& weight,
                             row[c] = static_cast<float>(matrix.data()[r * weight.cols + c]) *
                                 matrix.scales->at(r);
                         }
+                    } else if constexpr (std::is_same_v<Matrix, CpuBf16Matrix>) {
+                        for (size_t c = 0; c < weight.cols; ++c) {
+                            row[c] = bf16_bits_to_float(
+                                matrix.data()[r * weight.cols + c]);
+                        }
                     } else {
                         ggml_decode_row(matrix, r, row.data());
                     }
@@ -306,6 +322,11 @@ void CpuLinearEngine::gemv_rows(const CpuLinearWeight& weight,
                             row[c] = static_cast<float>(
                                          matrix.data()[local * weight.cols + c]) *
                                 matrix.scales->at(local);
+                        }
+                    } else if constexpr (std::is_same_v<Matrix, CpuBf16Matrix>) {
+                        for (size_t c = 0; c < static_cast<size_t>(weight.cols); ++c) {
+                            row[c] = bf16_bits_to_float(
+                                matrix.data()[local * weight.cols + c]);
                         }
                     } else {
                         ggml_decode_row(matrix, local, row.data());
@@ -357,6 +378,15 @@ void CpuLinearEngine::gemm(const CpuLinearWeight& weight, const float* input,
         }
         return;
     }
+    if (kind == LinearStorageKind::Bf16) {
+        size_t offset = 0;
+        for (const CpuLinearMatrix& segment : weight.segments) {
+            gemm_bf16(std::get<CpuBf16Matrix>(segment), input, output, rows, beta,
+                      weight.rows, offset);
+            offset += segment_rows(segment);
+        }
+        return;
+    }
     std::vector<CpuQ8KBlock> activation;
     prepare_gguf_activation(input, rows, weight.cols, activation);
     gemm_gguf(activation, weight, output, rows, beta);
@@ -374,6 +404,23 @@ void CpuLinearEngine::gemv_int8(const CpuInt8Matrix& matrix, const float* input,
                 value += static_cast<float>(weights[col]) * input[col];
             }
             value *= matrix.scales->at(row);
+            float& destination = output[row];
+            destination = beta == 0.0f ? value : value + beta * destination;
+        }
+    });
+}
+
+void CpuLinearEngine::gemv_bf16(const CpuBf16Matrix& matrix, const float* input,
+                                float* output, float beta) const {
+    const size_t grain = std::max<size_t>(
+        1, matrix.rows / std::max<size_t>(1, pool_->size() * 8));
+    pool_->parallel_for(0, matrix.rows, grain, [&](size_t begin, size_t end) {
+        for (size_t row = begin; row < end; ++row) {
+            float value = 0.0f;
+            const uint16_t* weights = matrix.data() + row * matrix.cols;
+            for (size_t col = 0; col < matrix.cols; ++col) {
+                value += bf16_bits_to_float(weights[col]) * input[col];
+            }
             float& destination = output[row];
             destination = beta == 0.0f ? value : value + beta * destination;
         }
@@ -413,6 +460,29 @@ void CpuLinearEngine::gemm_int8(const CpuInt8Matrix& matrix, const float* input,
                 }
                 const float previous = destination[out];
                 destination[out] = matrix.scales->at(out) * value;
+                if (beta != 0.0f) destination[out] += beta * previous;
+            }
+        }
+    });
+}
+
+void CpuLinearEngine::gemm_bf16(const CpuBf16Matrix& matrix, const float* input,
+                                float* output, size_t rows, float beta,
+                                size_t output_stride, size_t output_base) const {
+    const size_t grain = std::max<size_t>(
+        1, rows / std::max<size_t>(1, pool_->size() * 4));
+    pool_->parallel_for(0, rows, grain, [&](size_t begin, size_t end) {
+        for (size_t row = begin; row < end; ++row) {
+            float* destination = output + row * output_stride + output_base;
+            const float* activation = input + row * matrix.cols;
+            for (size_t out = 0; out < matrix.rows; ++out) {
+                float value = 0.0f;
+                const uint16_t* weights = matrix.data() + out * matrix.cols;
+                for (size_t col = 0; col < matrix.cols; ++col) {
+                    value += bf16_bits_to_float(weights[col]) * activation[col];
+                }
+                const float previous = destination[out];
+                destination[out] = value;
                 if (beta != 0.0f) destination[out] += beta * previous;
             }
         }
@@ -580,6 +650,11 @@ void CpuLinearEngine::embedding(const CpuLinearWeight& table, int32_t token,
             const int8_t* weights = int8->data() + row * int8->cols;
             for (size_t col = 0; col < int8->cols; ++col) {
                 output[col] = static_cast<float>(weights[col]) * int8->scales->at(row);
+            }
+        } else if (const auto* bf16 = std::get_if<CpuBf16Matrix>(&segment)) {
+            const uint16_t* weights = bf16->data() + row * bf16->cols;
+            for (size_t col = 0; col < bf16->cols; ++col) {
+                output[col] = bf16_bits_to_float(weights[col]);
             }
         } else {
             ggml_decode_row(

@@ -33,8 +33,30 @@ GgmlMatrixView gguf_matrix(const HostTensorView& tensor,
 }
 
 CpuWeightCodec::CpuWeightCodec(IWeightRepository* source, CpuPackReader* reader,
-                               CpuPackWriter* writer, size_t group_size)
-    : source_(source), reader_(reader), writer_(writer), group_size_(group_size) {}
+                               CpuPackWriter* writer, CpuWeightFormat format)
+    : source_(source), reader_(reader), writer_(writer),
+      group_size_(format == CpuWeightFormat::Q4Group64 ? 64 : 32),
+      bf16_(format == CpuWeightFormat::Bf16) {}
+
+CpuLinearWeight CpuWeightCodec::dense_result(std::vector<float> values,
+                                             uint32_t rows, uint32_t cols,
+                                             const std::string& name) const {
+    if (bf16_) {
+        CpuBf16Matrix matrix;
+        matrix.rows = rows;
+        matrix.cols = cols;
+        matrix.values->resize(static_cast<size_t>(rows) * cols);
+        for (size_t i = 0; i < values.size(); ++i) {
+            (*matrix.values)[i] = float_to_bf16_bits(values[i]);
+        }
+        return CpuLinearWeight::from_bf16(std::move(matrix));
+    }
+    Q4GroupMatrix packed = quantize_float_groupwise_q4(
+        values.data(), static_cast<size_t>(rows), static_cast<size_t>(cols),
+        group_size_);
+    if (writer_) writer_->add_q4_matrix(name, packed);
+    return CpuLinearWeight::from_q4(std::move(packed));
+}
 
 CpuLinearWeight CpuWeightCodec::matrix(
     const std::string& name, const std::vector<int64_t>& expected) const {
@@ -42,6 +64,17 @@ CpuLinearWeight CpuWeightCodec::matrix(
     if (!source_) throw std::logic_error("CPU weight source is missing");
     if (has_packed_int8_matrix(*source_, name)) {
         const PackedInt8Matrix packed = load_packed_int8_matrix(*source_, name, expected);
+        if (bf16_) {
+            std::vector<float> values(static_cast<size_t>(packed.rows) * packed.cols);
+            for (size_t row = 0; row < static_cast<size_t>(packed.rows); ++row) {
+                for (size_t col = 0; col < static_cast<size_t>(packed.cols); ++col) {
+                    values[row * packed.cols + col] =
+                        static_cast<float>(packed.values[row * packed.cols + col]) *
+                        packed.scales[row];
+                }
+            }
+            return dense_result(std::move(values), packed.rows, packed.cols, name);
+        }
         CpuInt8Matrix matrix;
         matrix.rows = static_cast<uint32_t>(packed.rows);
         matrix.cols = static_cast<uint32_t>(packed.cols);
@@ -51,12 +84,9 @@ CpuLinearWeight CpuWeightCodec::matrix(
     }
     if (has_packed_int4_matrix(*source_, name)) {
         const PackedInt4Matrix packed = load_packed_int4_matrix(*source_, name, expected);
-        const std::vector<float> values = dequantize_packed_int4(packed);
-        Q4GroupMatrix repacked = quantize_float_groupwise_q4(
-            values.data(), static_cast<size_t>(packed.rows),
-            static_cast<size_t>(packed.cols), group_size_);
-        if (writer_) writer_->add_q4_matrix(name, repacked);
-        return CpuLinearWeight::from_q4(std::move(repacked));
+        std::vector<float> values = dequantize_packed_int4(packed);
+        return dense_result(std::move(values), static_cast<uint32_t>(packed.rows),
+                            static_cast<uint32_t>(packed.cols), name);
     }
     const HostTensorView tensor = source_->tensor(name);
     if (tensor.shape != expected || expected.size() != 2) {
@@ -73,42 +103,25 @@ CpuLinearWeight CpuWeightCodec::matrix(
         /// else (non-256 width, or a type without a native kernel) is
         /// dequantized and repacked into groupwise Q4, which keeps mixed-quant
         /// GGUF files (e.g. a Q4_0 file that sprinkles in Q4_1 tensors)
-        /// loadable without special casing.
-        if (!gguf_type_is_native_dot(matrix.type) || (matrix.cols % 256) != 0) {
-            const std::vector<float> values = decode_tensor_f32(
+        /// loadable without special casing. BF16 weight mode always decodes so
+        /// the values are stored losslessly.
+        if (bf16_ || !gguf_type_is_native_dot(matrix.type) || (matrix.cols % 256) != 0) {
+            std::vector<float> values = decode_tensor_f32(
                 tensor, expected, name);
-            return CpuLinearWeight::from_q4(quantize_float_groupwise_q4(
-                values.data(), matrix.rows, matrix.cols, group_size_));
+            return dense_result(std::move(values), matrix.rows, matrix.cols, name);
         }
         return CpuLinearWeight::from_ggml(matrix);
     }
-    /// F16 and F32 both widen to float first; the neutral tensor codec decodes
-    /// either representation before quantization.
-    if (tensor.dtype == TensorDType::F32 || tensor.dtype == TensorDType::F16) {
-        const std::vector<float> values = decode_tensor_f32(tensor, expected, name);
-        Q4GroupMatrix packed = quantize_float_groupwise_q4(
-            values.data(), static_cast<size_t>(expected[0]),
-            static_cast<size_t>(expected[1]), group_size_);
-        try {
-            if (writer_) writer_->add_q4_matrix(name, packed);
-            return CpuLinearWeight::from_q4(std::move(packed));
-        } catch (const std::exception& error) {
-            throw std::runtime_error("invalid CPU linear weight '" + name + "': " + error.what());
-        }
+    /// F16, F32 and BF16 all widen to float first; the neutral tensor codec
+    /// decodes either representation before re-packing.
+    if (tensor.dtype == TensorDType::F32 || tensor.dtype == TensorDType::F16 ||
+        tensor.dtype == TensorDType::BF16) {
+        std::vector<float> values = decode_tensor_f32(tensor, expected, name);
+        return dense_result(std::move(values), static_cast<uint32_t>(expected[0]),
+                            static_cast<uint32_t>(expected[1]), name);
     }
-    if (tensor.dtype != TensorDType::BF16) {
-        throw std::runtime_error("CPU linear tensor must be BF16, F16, F32 or a "
-                                 "supported GGUF quantization: " + name);
-    }
-    Q4GroupMatrix packed = quantize_bf16_groupwise_q4(
-        tensor.data, static_cast<size_t>(expected[0]),
-        static_cast<size_t>(expected[1]), group_size_);
-    try {
-        if (writer_) writer_->add_q4_matrix(name, packed);
-        return CpuLinearWeight::from_q4(std::move(packed));
-    } catch (const std::exception& error) {
-        throw std::runtime_error("invalid CPU linear weight '" + name + "': " + error.what());
-    }
+    throw std::runtime_error("CPU linear tensor must be BF16, F16, F32 or a "
+                             "supported GGUF quantization: " + name);
 }
 
 CpuLinearWeight CpuWeightCodec::concat(
@@ -116,7 +129,7 @@ CpuLinearWeight CpuWeightCodec::concat(
     const std::vector<std::pair<std::string, std::vector<int64_t>>>& parts) const {
     if (reader_) return CpuLinearWeight::from_q4(reader_->read_q4_matrix(synthetic));
     if (!source_ || parts.empty()) throw std::logic_error("invalid CPU concat source");
-    if (std::all_of(parts.begin(), parts.end(), [&](const auto& part) {
+    if (!bf16_ && std::all_of(parts.begin(), parts.end(), [&](const auto& part) {
             return has_packed_int8_matrix(*source_, part.first);
         })) {
         const int64_t cols = parts.front().second.at(1);
@@ -136,39 +149,31 @@ CpuLinearWeight CpuWeightCodec::concat(
         result.validate();
         return result;
     }
-    if (std::all_of(parts.begin(), parts.end(), [&](const auto& part) {
-            return has_packed_int4_matrix(*source_, part.first);
-        })) {
-        const int64_t cols = parts.front().second.at(1);
-        size_t total_rows = 0;
-        std::vector<float> joined;
-        for (const auto& [name, expected] : parts) {
-            const PackedInt4Matrix packed = load_packed_int4_matrix(*source_, name, expected);
-            if (packed.cols != cols) throw std::runtime_error("packed INT4 concat width mismatch");
-            const std::vector<float> values = dequantize_packed_int4(packed);
-            joined.insert(joined.end(), values.begin(), values.end());
-            total_rows += static_cast<size_t>(packed.rows);
-        }
-        Q4GroupMatrix repacked = quantize_float_groupwise_q4(
-            joined.data(), total_rows, static_cast<size_t>(cols), group_size_);
-        if (writer_) writer_->add_q4_matrix(synthetic, repacked);
-        return CpuLinearWeight::from_q4(std::move(repacked));
-    }
     const int64_t cols = parts.front().second[1];
+    // Gather the tensors. Native GGUF shortcuts only apply in Q4 mode; BF16
+    // mode and packed-int4 parts decode to float and join through dense_result.
     size_t total_rows = 0;
+    bool all_quantized = true;
     std::vector<HostTensorView> tensors;
     tensors.reserve(parts.size());
-    bool quantized = true;
     for (const auto& [name, expected] : parts) {
+        if (has_packed_int4_matrix(*source_, name)) {
+            const PackedInt4Matrix packed = load_packed_int4_matrix(*source_, name, expected);
+            if (packed.cols != cols) throw std::runtime_error("packed INT4 concat width mismatch");
+            total_rows += static_cast<size_t>(packed.rows);
+            all_quantized = false;
+            tensors.push_back(HostTensorView{});
+            continue;
+        }
         const HostTensorView tensor = source_->tensor(name);
         if (tensor.shape != expected || expected.size() != 2 || expected[1] != cols) {
             throw std::runtime_error("unexpected CPU concat tensor: " + name);
         }
         total_rows += static_cast<size_t>(expected[0]);
-        quantized = quantized && tensor.dtype == TensorDType::Quantized;
+        all_quantized = all_quantized && tensor.dtype == TensorDType::Quantized;
         tensors.push_back(tensor);
     }
-    if (quantized) {
+    if (!bf16_ && all_quantized) {
         bool needs_repack = false;
         std::vector<GgmlMatrixView> matrices;
         matrices.reserve(tensors.size());
@@ -178,51 +183,42 @@ CpuLinearWeight CpuWeightCodec::concat(
                 !gguf_type_is_native_dot(matrices.back().type) ||
                 (matrices.back().cols % 256) != 0;
         }
-        if (needs_repack) {
-            std::vector<float> joined(total_rows * static_cast<size_t>(cols));
-            size_t row_offset = 0;
-            for (size_t i = 0; i < matrices.size(); ++i) {
-                const GgmlMatrixView& matrix = matrices[i];
-                const std::vector<float> values = decode_tensor_f32(
-                    tensors[i], parts[i].second, parts[i].first);
-                std::copy(values.begin(), values.end(), joined.begin() +
-                    static_cast<ptrdiff_t>(row_offset * static_cast<size_t>(cols)));
-                row_offset += matrix.rows;
+        if (!needs_repack) {
+            CpuLinearWeight result;
+            result.rows = static_cast<uint32_t>(total_rows);
+            result.cols = static_cast<uint32_t>(cols);
+            for (const GgmlMatrixView& matrix : matrices) {
+                result.segments.emplace_back(matrix);
             }
-            return CpuLinearWeight::from_q4(quantize_float_groupwise_q4(
-                joined.data(), total_rows, static_cast<size_t>(cols), group_size_));
+            result.validate();
+            return result;
         }
-        CpuLinearWeight result;
-        result.rows = static_cast<uint32_t>(total_rows);
-        result.cols = static_cast<uint32_t>(cols);
-        for (const GgmlMatrixView& matrix : matrices) {
-            result.segments.emplace_back(matrix);
-        }
-        result.validate();
-        return result;
-    }
-    if (std::any_of(tensors.begin(), tensors.end(), [](const HostTensorView& tensor) {
-            return tensor.dtype == TensorDType::Quantized;
-        })) {
-        throw std::runtime_error("CPU GGUF concat cannot mix quantized and dense tensors: " + synthetic);
     }
     std::vector<float> joined(total_rows * static_cast<size_t>(cols));
     size_t row_offset = 0;
     for (size_t i = 0; i < parts.size(); ++i) {
         const auto& [name, expected] = parts[i];
-        if (tensors[i].dtype != TensorDType::BF16 && tensors[i].dtype != TensorDType::F32 &&
-            tensors[i].dtype != TensorDType::F16) {
-            throw std::runtime_error("CPU concat tensor must be BF16, F16 or F32: " + name);
+        std::vector<float> values;
+        if (has_packed_int4_matrix(*source_, name)) {
+            values = dequantize_packed_int4(
+                load_packed_int4_matrix(*source_, name, expected));
+        } else {
+            const HostTensorView& tensor = source_->tensor(name);
+            if (tensor.dtype != TensorDType::BF16 &&
+                tensor.dtype != TensorDType::F32 &&
+                tensor.dtype != TensorDType::F16 &&
+                tensor.dtype != TensorDType::Quantized) {
+                throw std::runtime_error("CPU concat tensor must be BF16, F16, F32 or "
+                                         "quantized: " + name);
+            }
+            values = decode_tensor_f32(tensor, expected, name);
         }
-        const std::vector<float> values = decode_tensor_f32(tensors[i], expected, name);
         std::copy(values.begin(), values.end(), joined.begin() +
             static_cast<ptrdiff_t>(row_offset * static_cast<size_t>(cols)));
         row_offset += static_cast<size_t>(expected[0]);
     }
-    Q4GroupMatrix packed = quantize_float_groupwise_q4(
-        joined.data(), total_rows, static_cast<size_t>(cols), group_size_);
-    if (writer_) writer_->add_q4_matrix(synthetic, packed);
-    return CpuLinearWeight::from_q4(std::move(packed));
+    return dense_result(std::move(joined), static_cast<uint32_t>(total_rows),
+                        static_cast<uint32_t>(cols), synthetic);
 }
 
 std::vector<CpuLinearWeight> CpuWeightCodec::packed_matrices(
@@ -243,6 +239,17 @@ std::vector<CpuLinearWeight> CpuWeightCodec::packed_matrices(
     result.reserve(static_cast<size_t>(entries));
     for (int64_t entry = 0; entry < entries; ++entry) {
         const float* matrix = values.data() + static_cast<size_t>(entry) * rows * cols;
+        if (bf16_) {
+            CpuBf16Matrix packed;
+            packed.rows = static_cast<uint32_t>(rows);
+            packed.cols = static_cast<uint32_t>(cols);
+            packed.values->resize(rows * cols);
+            for (size_t i = 0; i < rows * cols; ++i) {
+                (*packed.values)[i] = float_to_bf16_bits(matrix[i]);
+            }
+            result.push_back(CpuLinearWeight::from_bf16(std::move(packed)));
+            continue;
+        }
         Q4GroupMatrix packed = quantize_float_groupwise_q4(matrix, rows, cols, group_size_);
         result.push_back(CpuLinearWeight::from_q4(std::move(packed)));
     }

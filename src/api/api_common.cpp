@@ -81,8 +81,18 @@ CpuModelOptions cpu_options(const celeg_cpu_model_config& input) {
     CpuModelOptions result;
     result.isa = cpu_isa(input.isa);
     result.threads = input.threads > 0 ? static_cast<size_t>(input.threads) : 0;
-    result.weight_format = input.q4_group_size == 64
-        ? CpuWeightFormat::Q4Group64 : CpuWeightFormat::Q4Group32;
+    switch (input.weight_format) {
+        case CELEG_CPU_WEIGHT_Q4_GROUP64:
+            result.weight_format = CpuWeightFormat::Q4Group64;
+            break;
+        case CELEG_CPU_WEIGHT_BF16:
+            result.weight_format = CpuWeightFormat::Bf16;
+            break;
+        case CELEG_CPU_WEIGHT_Q4_GROUP32:
+        default:
+            result.weight_format = CpuWeightFormat::Q4Group32;
+            break;
+    }
     result.use_pack_cache = input.use_pack_cache != 0;
     if (input.pack_cache_directory) result.pack_cache_directory = input.pack_cache_directory;
     result.affinity = cpu_affinity(input.affinity);

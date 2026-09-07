@@ -1,4 +1,5 @@
 #include "celeg/backend/cpu/kernels.hpp"
+#include "celeg/quantization/scalars.hpp"
 #include "support/assertions.hpp"
 
 #include <cmath>
@@ -97,5 +98,39 @@ int main() {
     best_engine.gemm(q4, batch_input.data(), accumulated.data(), batch, 0.5f);
     for (size_t i = 0; i < accumulated.size(); ++i) {
         CELEG_TEST_CHECK(std::abs(accumulated[i] - 1.5f * batch_output[i]) < 1e-4f);
+    }
+
+    celeg::CpuBf16Matrix bf16;
+    bf16.rows = static_cast<uint32_t>(rows);
+    bf16.cols = static_cast<uint32_t>(cols);
+    bf16.values->resize(rows * cols);
+    for (size_t i = 0; i < bf16.values->size(); ++i) {
+        (*bf16.values)[i] = celeg::float_to_bf16_bits(weights[i]);
+    }
+    const celeg::CpuLinearWeight bf16_weight = celeg::CpuLinearWeight::from_bf16(
+        std::move(bf16));
+    std::vector<float> bf16_output(rows);
+    best_engine.gemv(bf16_weight, input.data(), bf16_output.data());
+    for (size_t row = 0; row < rows; ++row) {
+        float reference = 0.0f;
+        for (size_t col = 0; col < cols; ++col) {
+            reference += celeg::bf16_bits_to_float(
+                celeg::float_to_bf16_bits(weights[row * cols + col])) * input[col];
+        }
+        CELEG_TEST_CHECK(std::abs(bf16_output[row] - reference) < 1e-4f);
+    }
+
+    std::vector<float> bf16_batch(batch * rows);
+    best_engine.gemm(bf16_weight, batch_input.data(), bf16_batch.data(), batch);
+    for (size_t b = 0; b < batch; ++b) {
+        for (size_t row = 0; row < rows; ++row) {
+            float reference = 0.0f;
+            for (size_t col = 0; col < cols; ++col) {
+                reference += celeg::bf16_bits_to_float(
+                    celeg::float_to_bf16_bits(weights[row * cols + col])) *
+                    batch_input[b * cols + col];
+            }
+            CELEG_TEST_CHECK(std::abs(bf16_batch[b * rows + row] - reference) < 1e-4f);
+        }
     }
 }

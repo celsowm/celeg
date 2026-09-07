@@ -36,6 +36,7 @@ struct Args {
     int threads = 0;
     int group_size = 32;
     bool group_size_explicit = false;
+    std::string weight_format = "q4";
     int kv_page_tokens = 32;
     int prefill_chunk_tokens = 256;
     int prefill_chunk_threshold = 16;
@@ -82,6 +83,7 @@ Args parse_args(int argc, char** argv) {
             args.group_size = std::stoi(value());
             args.group_size_explicit = true;
         }
+        else if (key == "--cpu-weight-format") args.weight_format = value();
         else if (key == "--cpu-kv-page-tokens") args.kv_page_tokens = std::stoi(value());
         else if (key == "--cpu-prefill-chunk") args.prefill_chunk_tokens = std::stoi(value());
         else if (key == "--cpu-prefill-threshold") args.prefill_chunk_threshold = std::stoi(value());
@@ -105,6 +107,7 @@ Args parse_args(int argc, char** argv) {
                 << "  --cpu-isa auto|scalar|avx2|avx-vnni|avx512-vnni|neon\n"
                 << "    (AMX/I8MM/SME2 remain diagnostic-only in v0.0.21)\n"
                 << "  --cpu-q4-group 32|64 --threads N\n"
+                << "  --cpu-weight-format q4|bf16 (bf16 keeps weights lossless)\n"
                 << "  --cpu-affinity none|compact|scatter\n"
                 << "  --cpu-kv-cache fp32|bf16 --cpu-kv-page-tokens N\n"
                 << "  --cpu-prefill-chunk N --cpu-prefill-threshold N\n"
@@ -134,7 +137,8 @@ Args parse_args(int argc, char** argv) {
         args.prefill_chunk_threshold <= 0 ||
         args.attention_parallel_threshold <= 0 || args.attention_page_tile <= 0 ||
         args.expert_cache_mib < 0 ||
-        (args.group_size != 32 && args.group_size != 64)) {
+        (args.group_size != 32 && args.group_size != 64) ||
+        (args.weight_format != "q4" && args.weight_format != "bf16")) {
         throw std::runtime_error("invalid CPU numeric argument");
     }
     if (args.expert_backing != "memory" && args.expert_backing != "disk") {
@@ -200,8 +204,11 @@ int main(int argc, char** argv) {
         }
         celeg::CpuModelOptions options;
         options.isa = celeg::parse_cpu_isa(args.isa);
-        options.weight_format = args.group_size == 64
-            ? celeg::CpuWeightFormat::Q4Group64 : celeg::CpuWeightFormat::Q4Group32;
+        options.weight_format = args.weight_format == "bf16"
+            ? celeg::CpuWeightFormat::Bf16
+            : (args.group_size == 64
+                ? celeg::CpuWeightFormat::Q4Group64
+                : celeg::CpuWeightFormat::Q4Group32);
         options.threads = static_cast<size_t>(args.threads);
         options.affinity = celeg::parse_cpu_affinity(args.affinity);
         options.kv_cache_mode = celeg::parse_cpu_kv_cache_mode(args.kv_cache);

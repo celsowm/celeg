@@ -548,12 +548,12 @@ void CpuCompiledModel::Shared::load_weights() {
                         moe.has_shared_gate = true;
                     }
                 }
-                moe.expert_w13 = CpuWeightCodec(source, reader.get(), writer.get(), group_size)
+                moe.expert_w13 = CpuWeightCodec(source, reader.get(), writer.get(), options.weight_format)
                     .packed_matrices(
                         tensor_name(weight_requests, TensorRole::MoePackedGateUp, index),
                         {moe_semantics.router.expert_count,
                          2 * moe_semantics.routed.mlp.intermediate_size, program.hidden});
-                moe.expert_w2 = CpuWeightCodec(source, reader.get(), writer.get(), group_size)
+                moe.expert_w2 = CpuWeightCodec(source, reader.get(), writer.get(), options.weight_format)
                     .packed_matrices(
                         tensor_name(weight_requests, TensorRole::MoePackedDown, index),
                         {moe_semantics.router.expert_count, program.hidden,

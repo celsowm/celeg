@@ -42,6 +42,22 @@ CpuLinearWeight CpuLinearWeight::from_int8(CpuInt8Matrix matrix) {
     return result;
 }
 
+void CpuBf16Matrix::validate() const {
+    if (rows == 0 || cols == 0 || !values ||
+        values->size() != static_cast<size_t>(rows) * cols) {
+        throw std::runtime_error("invalid CPU BF16 matrix");
+    }
+}
+
+CpuLinearWeight CpuLinearWeight::from_bf16(CpuBf16Matrix matrix) {
+    matrix.validate();
+    CpuLinearWeight result;
+    result.rows = matrix.rows;
+    result.cols = matrix.cols;
+    result.segments.emplace_back(std::move(matrix));
+    return result;
+}
+
 size_t CpuLinearWeight::memory_bytes() const {
     size_t total = 0;
     for (const CpuLinearMatrix& segment : segments) {
