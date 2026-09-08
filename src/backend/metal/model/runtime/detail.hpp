@@ -50,6 +50,21 @@ struct MetalModel::Impl {
         const char* tuned = nullptr;
     };
 
+    friend void mixer_encode_token(
+        ::celeg::MetalLayer& layer,
+        const CompiledLayerProgram& program_layer,
+        id<MTLComputeCommandEncoder> encoder,
+        Impl& impl,
+        const std::array<int32_t, 3>* rope_position);
+    friend void mixer_encode_batch(
+        ::celeg::MetalLayer& layer,
+        const CompiledLayerProgram& program_layer,
+        id<MTLComputeCommandEncoder> encoder,
+        uint32_t rows,
+        uint32_t base_position,
+        Impl& impl);
+    friend bool mixer_supports_batch(const CompiledLayerProgram& layer) noexcept;
+
     std::string model_path;
     int max_context = 0;
     MetalModelOptions options;

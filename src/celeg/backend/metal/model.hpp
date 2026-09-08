@@ -77,6 +77,8 @@ public:
     MetalSessionSnapshot export_session_snapshot() const;
     void restore_session_snapshot(MetalSessionSnapshot snapshot);
 
+public:
+    struct Impl;
 private:
     friend class MetalInferenceSession;
     void reset_session();
@@ -92,7 +94,6 @@ private:
     int session_position() const;
     bool session_ready_for_decode() const;
 
-    struct Impl;
     std::unique_ptr<Impl> impl_;
 };
 

@@ -1,4 +1,5 @@
 #include "detail.hpp"
+#include "mixer_registry.hpp"
 
 #include <cstring>
 #include <stdexcept>
@@ -37,23 +38,7 @@ void MetalModel::Impl::encode_token(id<MTLCommandBuffer>& command_buffer,
             }
             normed_ready = false;
 
-            switch (layer.mixer_kind) {
-                case Layer::MixerKind::ShortConvolution:
-                    encode_short_convolution(encoder, layer);
-                    break;
-                case Layer::MixerKind::GatedDelta:
-                    encode_gated_delta_layer(encoder, layer);
-                    break;
-                case Layer::MixerKind::Mamba2:
-                    encode_mamba2_layer(encoder, layer);
-                    break;
-                case Layer::MixerKind::Attention:
-                    encode_attention(
-                        encoder, layer,
-                        std::get<CompiledAttentionProgram>(program_layer.mixer),
-                        rope_position);
-                    break;
-            }
+            mixer_encode_token(layer, program_layer, encoder, *this, rope_position);
 
             const uint32_t count = hidden_width;
             const float mixer_multiplier = 1.0f;
@@ -122,30 +107,7 @@ void MetalModel::Impl::run_token(int32_t token,
 bool MetalModel::Impl::supports_prefill_batch() const {
     if (program.per_layer_input.enabled) return false;
     for (const CompiledLayerProgram& layer : program.layers) {
-        if (std::holds_alternative<GatedDeltaNetSpec>(layer.mixer) ||
-            std::holds_alternative<Mamba2Spec>(layer.mixer) ||
-            std::holds_alternative<MlpBlockSpec>(layer.mixer)) {
-            return false;
-        }
-        if (const auto* attention = std::get_if<CompiledAttentionProgram>(&layer.mixer)) {
-            const bool supported_pattern =
-                std::holds_alternative<FullCausalPattern>(attention->semantics.pattern) ||
-                std::holds_alternative<SlidingWindowPattern>(attention->semantics.pattern);
-            const bool supported_bias =
-                std::holds_alternative<NoAttentionBiasSpec>(attention->semantics.bias) ||
-                std::holds_alternative<AlibiBiasSpec>(attention->semantics.bias) ||
-                std::holds_alternative<RelativePositionBiasSpec>(attention->semantics.bias);
-            const bool supported_output_transform =
-                std::holds_alternative<NoAttentionOutputTransformSpec>(
-                    attention->semantics.output_transform) ||
-                std::holds_alternative<OrthogonalizeCurrentValueSpec>(
-                    attention->semantics.output_transform);
-            if (!std::holds_alternative<OrdinaryKvStateSpec>(attention->semantics.state) ||
-                !supported_pattern || !supported_bias || !supported_output_transform) {
-                return false;
-            }
-        }
-        if (std::holds_alternative<MoeLayerProgram>(layer.feed_forward)) return false;
+        if (!mixer_supports_batch(layer)) return false;
     }
     return true;
 }
@@ -242,21 +204,10 @@ void MetalModel::Impl::encode_prefill_batch(
         // Preserve the current hidden state as the residual without copying it.
         // The mixer writes a complete replacement into the other scratch buffer.
         std::swap(batch_hidden, batch_residual);
-        switch (layer.mixer_kind) {
-            case Layer::MixerKind::ShortConvolution:
-                encode_matmul(encoder, layer.mixer_in, batch_normed, batch_projected, rows);
-                encode_short_convolution_batch(encoder, layer, rows, base_position);
-                break;
-            case Layer::MixerKind::Attention:
-                encode_attention_batch(
-                    encoder, layer,
-                    std::get<CompiledAttentionProgram>(program_layer.mixer),
-                    rows, base_position);
-                break;
-            case Layer::MixerKind::GatedDelta:
-            case Layer::MixerKind::Mamba2:
-                throw std::logic_error("recurrent Metal mixer reached batched prefill");
+        if (layer.mixer_kind == Layer::MixerKind::ShortConvolution) {
+            encode_matmul(encoder, layer.mixer_in, batch_normed, batch_projected, rows);
         }
+        mixer_encode_batch(layer, program_layer, encoder, rows, base_position, *this);
 
         constexpr float mixer_multiplier = 1.0f;
         const bool last_layer = layer_index + 1 == layers.size();
