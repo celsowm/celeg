@@ -1,4 +1,5 @@
 #include "attention.hpp"
+#include "celeg/backend/cpu/rope.hpp"
 #include "celeg/model/position.hpp"
 #include "celeg/model/weights/quantization.hpp"
 
