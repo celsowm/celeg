@@ -57,7 +57,7 @@ void execute_cpu_attention_token(
                 const int q_width = layout.query_width();
                 execution.shared.linear.gemv(attention.q, execution.workspace.normed.data(), execution.workspace.qkv.data());
                 float* q = execution.workspace.qkv.data();
-                apply_cpu_attention_qk(layout, attention, q, nullptr, nullptr,
+                apply_cpu_attention_qk(layout, attention, math, q, nullptr, nullptr,
                                        execution.session.position_value, rope_position);
                 const auto memory_it = execution.shared.external_attention_memory.find(
                     layout.external_memory_slot());
@@ -254,7 +254,7 @@ void execute_cpu_attention_token(
             }
             debug_dump_direct_stage("normed", index, execution.workspace.normed.data(),
                                     static_cast<size_t>(execution.shared.program.hidden));
-            apply_cpu_attention_qk(layout, attention, q, k, v,
+            apply_cpu_attention_qk(layout, attention, math, q, k, v,
                                    execution.session.position_value, rope_position);
             debug_dump_direct_stage("qroped", index, q, static_cast<size_t>(q_width));
             debug_dump_direct_stage("kroped", index, k, static_cast<size_t>(kv_width));
