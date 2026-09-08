@@ -14,6 +14,7 @@ set(CELEG_METAL_MODEL_SOURCES
     src/backend/metal/model/runtime/moe.mm
     src/backend/metal/model/runtime/pipelines.mm
     src/backend/metal/model/runtime/profiling.cpp
+    src/backend/metal/model/runtime/quant_registry.mm
     src/backend/metal/model/runtime/recurrent.mm
     src/backend/metal/model/runtime/resources.mm
     src/backend/metal/model/runtime/runtime.mm
