@@ -221,7 +221,7 @@ struct CpuCompiledModel::BatchScratch {
                         const std::array<int32_t, 3> rope_position = {
                             position, position, position};
                         apply_cpu_attention_qk(
-                            layout, *attention,
+                            layout, *attention, math,
                             workspace_.qkv.data() + row * q_projection_width,
                             nullptr, nullptr, position, rope_position);
                     });
@@ -336,7 +336,7 @@ struct CpuCompiledModel::BatchScratch {
                         const int position = sessions[row]->session_.position_value;
                         const std::array<int32_t, 3> rope_position = {
                             position, position, position};
-                        apply_cpu_attention_qk(layout, *attention, q, k, v,
+                        apply_cpu_attention_qk(layout, *attention, math, q, k, v,
                                                position, rope_position);
                     });
                     for (size_t row = 0; row < rows; ++row) {
