@@ -3,6 +3,7 @@
 #include "support/assertions.hpp"
 
 #include <cmath>
+#include <stdexcept>
 #include <vector>
 
 namespace {
@@ -29,6 +30,17 @@ void check_close(const std::vector<float>& actual,
 }
 
 int main() {
+    {
+        celeg::CpuThreadPool pool(1);
+        bool rejected_auto = false;
+        try {
+            celeg::CpuLinearEngine engine(celeg::CpuIsa::Auto, pool);
+        } catch (const std::invalid_argument&) {
+            rejected_auto = true;
+        }
+        CELEG_TEST_CHECK(rejected_auto);
+    }
+
     constexpr size_t rows = 37;
     constexpr size_t cols = 128;
     std::vector<float> weights(rows * cols);
