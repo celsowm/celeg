@@ -15,14 +15,11 @@
 
 namespace celeg {
 
-CpuLinearEngine::CpuLinearEngine(CpuIsa isa, CpuThreadPool& pool)
-    : isa_(isa), pool_(&pool) {
-    if (isa == CpuIsa::Auto) {
-        throw std::invalid_argument("CpuLinearEngine requires a resolved CPU ISA");
-    }
-    const CpuKernelBackend& backend = cpu_kernel_backend(isa);
-    if (!backend.compiled) {
-        throw std::invalid_argument("CpuLinearEngine ISA is not compiled into this binary");
+CpuLinearEngine::CpuLinearEngine(const CpuKernelBackend& backend,
+                                 CpuThreadPool& pool)
+    : isa_(backend.isa), pool_(&pool) {
+    if (backend.isa == CpuIsa::Auto || !backend.compiled) {
+        throw std::invalid_argument("CpuLinearEngine requires a resolved CPU kernel backend");
     }
     dot_ = backend.kernels.q4_dot;
     q8_dot_ = backend.kernels.q4_q8_dot;
