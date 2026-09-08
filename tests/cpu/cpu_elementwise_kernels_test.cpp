@@ -5,9 +5,28 @@
 #include "support/assertions.hpp"
 
 #include <cmath>
+#include <stdexcept>
 #include <vector>
 
 int main() {
+    bool auto_accessor_rejected = false;
+    try {
+        (void)celeg::cpu_math_engine(celeg::CpuIsa::Auto);
+    } catch (const std::invalid_argument&) {
+        auto_accessor_rejected = true;
+    }
+    CELEG_TEST_CHECK(auto_accessor_rejected);
+
+    bool auto_constructor_rejected = false;
+    try {
+        const celeg::CpuMathEngine auto_math(
+            celeg::cpu_kernel_backend(celeg::CpuIsa::Auto));
+        (void)auto_math;
+    } catch (const std::invalid_argument&) {
+        auto_constructor_rejected = true;
+    }
+    CELEG_TEST_CHECK(auto_constructor_rejected);
+
     std::vector<float> weight(8, 1.0f);
     std::vector<float> output(8);
     const float input[8] = {1, 2, 3, 4, 5, 6, 7, 8};
