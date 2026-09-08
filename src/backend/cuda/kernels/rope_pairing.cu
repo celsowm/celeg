@@ -1,10 +1,13 @@
 #include "kernels/rope_pairing.hpp"
+#include "reductions.cuh"
 #include "utils.cuh"
 
 #include <stdexcept>
 
 namespace celeg {
 namespace {
+
+using cuda_reductions::warp_sum;
 
 __device__ __forceinline__ float yarn_correction_dimension(
     float rotations, int rotary_dimension, float theta, int original_context) {
@@ -76,13 +79,6 @@ __device__ __forceinline__ float scaled_rope_frequency_for_pairing(
     return frequency;
 }
 
-__device__ __forceinline__ float warp_sum(float value) {
-    for (int offset = 16; offset > 0; offset >>= 1) {
-        value += __shfl_down_sync(0xffffffffu, value, offset);
-    }
-    return value;
-}
-
 __global__ void paired_qk_norm_rope_kernel(
     __nv_bfloat16* data,
     const __nv_bfloat16* norm_weight,
@@ -145,7 +141,7 @@ __global__ void paired_qk_norm_rope_kernel(
         const float a = __bfloat162float(vector[first]) * inverse_norm * norm_first;
         const float b = __bfloat162float(vector[second]) * inverse_norm * norm_second;
         const float frequency = scaled_rope_frequency_for_pairing(
-            theta, pair, head_dim, position, scaling);
+            theta, pair, 2 * rotary_pairs, position, scaling);
         const float angle = static_cast<float>(position) * frequency;
         const float cosine = cosf(angle);
         const float sine = sinf(angle);
