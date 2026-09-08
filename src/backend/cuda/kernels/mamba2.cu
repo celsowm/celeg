@@ -98,9 +98,7 @@ __global__ void mamba2_prefill_kernel(
             state[n] = __float2bfloat16(s);
             output += s * bf16_float(c[n]);
         }
-        for (int offset = 16; offset > 0; offset >>= 1) {
-            output += __shfl_down_sync(0xffffffff, output, offset);
-        }
+        output = warp_sum(output);
         if (lane == 0) {
             inner[static_cast<size_t>(row) * intermediate + channel] =
                 __float2bfloat16(output + bf16_float(d[head]) * conv);
