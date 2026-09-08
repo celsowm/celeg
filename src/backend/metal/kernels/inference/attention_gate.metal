@@ -2,6 +2,30 @@
 
 using namespace metal;
 
+inline size_t celeg_attention_gate_index(
+    uint row,
+    uint column,
+    uint head_dim,
+    uint head_wise,
+    uint packed,
+    uint gate_row_stride) {
+    const size_t row_base = static_cast<size_t>(row) * gate_row_stride;
+    if (packed != 0) {
+        const uint head = column / head_dim;
+        const uint dimension = column % head_dim;
+        return row_base + static_cast<size_t>(head) * (2 * head_dim) +
+            head_dim + dimension;
+    }
+    if (head_wise != 0) {
+        return row_base + column / head_dim;
+    }
+    return row_base + column;
+}
+
+inline float celeg_sigmoid(float value) {
+    return 1.0f / (1.0f + exp(-value));
+}
+
 kernel void celeg_extract_attention_query_batch(
     device const float* packed [[buffer(0)]],
     device float* query [[buffer(1)]],
@@ -29,17 +53,9 @@ kernel void celeg_attention_output_gate(
     constant uint& packed [[buffer(5)]],
     uint index [[thread_position_in_grid]]) {
     if (index >= width) return;
-    size_t gate_index = index;
-    if (packed != 0) {
-        const uint head = index / head_dim;
-        const uint dimension = index % head_dim;
-        gate_index = static_cast<size_t>(head) * (2 * head_dim) +
-            head_dim + dimension;
-    } else if (head_wise != 0) {
-        gate_index = index / head_dim;
-    }
-    const float scale = 1.0f / (1.0f + exp(-gate[gate_index]));
-    output[index] *= scale;
+    const size_t gate_index = celeg_attention_gate_index(
+        0, index, head_dim, head_wise, packed, 0);
+    output[index] *= celeg_sigmoid(gate[gate_index]);
 }
 
 kernel void celeg_attention_output_gate_batch(
@@ -56,15 +72,7 @@ kernel void celeg_attention_output_gate_batch(
     if (index >= count) return;
     const uint row = index / width;
     const uint column = index % width;
-    size_t gate_index = static_cast<size_t>(row) * gate_row_stride + column;
-    if (packed != 0) {
-        const uint head = column / head_dim;
-        const uint dimension = column % head_dim;
-        gate_index = static_cast<size_t>(row) * gate_row_stride +
-            static_cast<size_t>(head) * (2 * head_dim) + head_dim + dimension;
-    } else if (head_wise != 0) {
-        gate_index = static_cast<size_t>(row) * gate_row_stride + column / head_dim;
-    }
-    const float scale = 1.0f / (1.0f + exp(-gate[gate_index]));
-    output[index] *= scale;
+    const size_t gate_index = celeg_attention_gate_index(
+        row, column, head_dim, head_wise, packed, gate_row_stride);
+    output[index] *= celeg_sigmoid(gate[gate_index]);
 }
