@@ -40,6 +40,9 @@ private:
     QkNormRopeFunction qk_norm_rope_ = nullptr;
 };
 
+/// Returns the immutable math engine bound to an already-resolved CPU ISA.
+const CpuMathEngine& cpu_math_engine(CpuIsa isa);
+
 namespace detail {
 
 using CpuQkNormRopeFunction = void (*)(float*, const float*, int, int, int,
