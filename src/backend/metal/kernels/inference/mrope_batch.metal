@@ -2,6 +2,32 @@
 
 using namespace metal;
 
+inline void celeg_apply_mrope_batch_head(
+    device float* values,
+    size_t base,
+    uint head_dim,
+    device const int* position,
+    float theta,
+    float scale) {
+    const uint pairs = head_dim / 2;
+    for (uint pair = 0; pair < pairs; ++pair) {
+        const uint axis = pair % 3;
+        const float frequency = pow(
+            theta,
+            -2.0f * static_cast<float>(pair) /
+                static_cast<float>(head_dim));
+        const float angle = static_cast<float>(position[axis]) * frequency;
+        const float c = cos(angle);
+        const float s = sin(angle);
+        const size_t first = base + pair;
+        const size_t second = base + pairs + pair;
+        const float x = values[first];
+        const float y = values[second];
+        values[first] = (x * c - y * s) * scale;
+        values[second] = (y * c + x * s) * scale;
+    }
+}
+
 kernel void celeg_qk_mrope_position_batch(
     device float* query [[buffer(0)]],
     device float* key [[buffer(1)]],
@@ -25,37 +51,12 @@ kernel void celeg_qk_mrope_position_batch(
 
     if (head < query_heads) {
         const size_t base = (static_cast<size_t>(token) * query_heads + head) * head_dim;
-        for (uint pair = 0; pair < pairs; ++pair) {
-            const uint axis = pair % 3;
-            const float frequency = pow(theta, -2.0f * static_cast<float>(pair) /
-                                              static_cast<float>(head_dim));
-            const float angle = static_cast<float>(position[axis]) * frequency;
-            const float c = cos(angle);
-            const float s = sin(angle);
-            const size_t first = base + pair;
-            const size_t second = base + pairs + pair;
-            const float x = query[first];
-            const float y = query[second];
-            query[first] = (x * c - y * s) * query_scale;
-            query[second] = (y * c + x * s) * query_scale;
-        }
+        celeg_apply_mrope_batch_head(
+            query, base, head_dim, position, theta, query_scale);
     }
 
     if (head < key_heads) {
         const size_t base = (static_cast<size_t>(token) * key_heads + head) * head_dim;
-        for (uint pair = 0; pair < pairs; ++pair) {
-            const uint axis = pair % 3;
-            const float frequency = pow(theta, -2.0f * static_cast<float>(pair) /
-                                              static_cast<float>(head_dim));
-            const float angle = static_cast<float>(position[axis]) * frequency;
-            const float c = cos(angle);
-            const float s = sin(angle);
-            const size_t first = base + pair;
-            const size_t second = base + pairs + pair;
-            const float x = key[first];
-            const float y = key[second];
-            key[first] = x * c - y * s;
-            key[second] = y * c + x * s;
-        }
+        celeg_apply_mrope_batch_head(key, base, head_dim, position, theta, 1.0f);
     }
 }
