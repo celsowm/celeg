@@ -4,7 +4,7 @@
 #include "kernels/kernels.cuh"
 #include "backend/cuda/gemm_dispatcher.hpp"
 #include "weight_layout.hpp"
-#include "celeg/backend/cpu/gated_delta.hpp"
+#include "celeg/backend/cpu/kernels.hpp"
 #include "celeg/model/reference.hpp"
 #include "backend/cuda/paged_kv.hpp"
 #include "cuda/sampling_tests.hpp"
@@ -228,7 +228,7 @@ int main() {
         std::vector<__nv_bfloat16> hq(qkv.size()), hz(z.size()), hb(b.size()), ha(a.size()), hc(conv.size()), hdt(dt.size()), hal(alog.size()), hn(norm.size());
         for (size_t i=0;i<hq.size();++i) hq[i]=to_bf16(qkv[i]); for(size_t i=0;i<hz.size();++i) hz[i]=to_bf16(z[i]); for(size_t i=0;i<hb.size();++i){hb[i]=to_bf16(b[i]);ha[i]=to_bf16(a[i]);} for(size_t i=0;i<hc.size();++i)hc[i]=to_bf16(conv[i]); for(int i=0;i<value_heads;++i){hdt[i]=to_bf16(dt[i]);hal[i]=to_bf16(alog[i]);} for(int i=0;i<dim;++i)hn[i]=to_bf16(norm[i]);
         celeg::DeviceBuffer<__nv_bfloat16> dq(qkv.size()), dz(z.size()), db(b.size()), da(a.size()), dc(conv.size()), ddt(dt.size()), dal(alog.size()), dn(norm.size()), dcs(qkv_width*kernel), drs(value_heads*dim*dim), dout(rows*value_width);
-        CELEG_CUDA(cudaMemcpy(dq.data(),hq.data(),dq.bytes(),cudaMemcpyHostToDevice)); CELEG_CUDA(cudaMemcpy(dz.data(),hz.data(),dz.bytes(),cudaMemcpyHostToDevice)); CELEG_CUDA(cudaMemcpy(db.data(),hb.data(),db.bytes(),cudaMemcpyHostToDevice)); CELEG_CUDA(cudaMemcpy(da.data(),ha.data(),da.bytes(),cudaMemcpyHostToDevice)); CELEG_CUDA(cudaMemcpy(dc.data(),hc.data(),dc.bytes(),cudaMemcpyHostToDevice)); CELEG_CUDA(cudaMemcpy(ddt.data(),hdt.data(),ddt.bytes(),cudaMemcpyHostToDevice)); CELEG_CUDA(cudaMemcpy(dal.data(),hal.data(),dal.bytes(),cudaMemcpyDeviceToHost)); CELEG_CUDA(cudaMemcpy(dn.data(),hn.data(),dn.bytes(),cudaMemcpyHostToDevice));
+        CELEG_CUDA(cudaMemcpy(dq.data(),hq.data(),dq.bytes(),cudaMemcpyHostToDevice)); CELEG_CUDA(cudaMemcpy(dz.data(),hz.data(),dz.bytes(),cudaMemcpyHostToDevice)); CELEG_CUDA(cudaMemcpy(db.data(),hb.data(),db.bytes(),cudaMemcpyHostToDevice)); CELEG_CUDA(cudaMemcpy(da.data(),ha.data(),da.bytes(),cudaMemcpyHostToDevice)); CELEG_CUDA(cudaMemcpy(dc.data(),hc.data(),dc.bytes(),cudaMemcpyHostToDevice)); CELEG_CUDA(cudaMemcpy(ddt.data(),hdt.data(),ddt.bytes(),cudaMemcpyHostToDevice)); CELEG_CUDA(cudaMemcpy(dal.data(),hal.data(),dal.bytes(),cudaMemcpyHostToDevice)); CELEG_CUDA(cudaMemcpy(dn.data(),hn.data(),dn.bytes(),cudaMemcpyHostToDevice));
         celeg::launch_gated_delta_net(dq.data(), dz.data(), db.data(), da.data(),
             dc.data(), ddt.data(), dal.data(), dn.data(), dcs.data(), drs.data(),
             dout.data(), rows, kernel, dim, dim, key_heads, value_heads, 1e-6f, false,
@@ -741,6 +741,12 @@ int main() {
         CELEG_CUDA(cudaMemcpyAsync(a.data(), reference.data(), reference.bytes(),
                                  cudaMemcpyDeviceToHost, stream.get()));
         CELEG_CUDA(cudaStreamSynchronize(stream.get()));
+        // The segment count is a device property, so the result has to be
+        // independent of it: fewer segments than tokens, exactly as many, and
+        // more (which leaves a tail of segments the partial kernel skips).
+        // min_segments == segments forces the widest split the allocation
+        // allows; min_segments == 1 lets kDecodeTokensPerSegment decide, which
+        // for this tiny sequence collapses to a single segment.
         for (int segments : {1, 2, 3, 5, max_segments})
         for (int min_segments : {1, segments}) {
             CELEG_CUDA(cudaMemsetAsync(partial_max.data(), 0, partial_max.bytes(),
@@ -770,6 +776,7 @@ int main() {
             }
         }
     }
+
 
     {
         constexpr int rows = 2;
@@ -928,6 +935,7 @@ int main() {
                         expected[static_cast<size_t>(i)], 0.02f);
         }
     }
+
 
     {
         constexpr int page_tokens = 2;
@@ -1108,8 +1116,10 @@ int main() {
         seen_b.zero_async(stream.get());
         hseen.data()[0] = seen_a.data();
         hseen.data()[1] = seen_b.data();
-        CELEG_CUDA(cudaMemcpy(dtokens.data(), tokens.data(), dtokens.bytes(), cudaMemcpyHostToDevice));
-        CELEG_CUDA(cudaMemcpy(dseen.data(), hseen.data(), dseen.bytes(), cudaMemcpyHostToDevice));
+        CELEG_CUDA(cudaMemcpy(dtokens.data(), tokens.data(), dtokens.bytes(),
+                            cudaMemcpyHostToDevice));
+        CELEG_CUDA(cudaMemcpy(dseen.data(), hseen.data(), dseen.bytes(),
+                            cudaMemcpyHostToDevice));
         celeg::launch_mark_seen_batch_ptrs(dtokens.data(), dseen.data(), 2, 8,
                                          stream.get());
         std::vector<uint8_t> a(8), b(8);
