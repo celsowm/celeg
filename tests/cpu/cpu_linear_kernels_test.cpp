@@ -1,4 +1,5 @@
-#include "celeg/backend/cpu/kernels.hpp"
+#include "celeg/backend/cpu/linear.hpp"
+#include "celeg/backend/cpu/quantized_dot.hpp"
 #include "celeg/quantization/scalars.hpp"
 #include "support/assertions.hpp"
 
