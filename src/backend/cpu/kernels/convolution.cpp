@@ -1,5 +1,6 @@
-#include "celeg/backend/cpu/kernels.hpp"
+#include "celeg/backend/cpu/convolution.hpp"
 
+#include <algorithm>
 #include <stdexcept>
 
 namespace celeg {
