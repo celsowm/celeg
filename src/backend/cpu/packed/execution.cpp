@@ -2,7 +2,10 @@
 #include "../operators/attention.hpp"
 #include "../operators/moe.hpp"
 #include "celeg/runtime/sampler.hpp"
-#include "celeg/backend/cpu/kernels.hpp"
+#include "celeg/backend/cpu/convolution.hpp"
+#include "celeg/backend/cpu/elementwise.hpp"
+#include "celeg/backend/cpu/gated_delta.hpp"
+#include "celeg/backend/cpu/normalization.hpp"
 #include "celeg/backend/cpu/model.hpp"
 
 #include <algorithm>
