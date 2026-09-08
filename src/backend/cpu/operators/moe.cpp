@@ -1,5 +1,6 @@
 #include "moe.hpp"
 #include "common.hpp"
+#include "celeg/backend/cpu/elementwise.hpp"
 
 #include <algorithm>
 #include <chrono>
