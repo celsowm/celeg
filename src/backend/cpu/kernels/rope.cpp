@@ -1,7 +1,6 @@
 #include "math.hpp"
 
 #include "celeg/backend/cpu/rope.hpp"
-#include "celeg/backend/cpu/isa.hpp"
 #include "celeg/model/position.hpp"
 
 #include <array>
@@ -21,13 +20,6 @@
 
 namespace celeg {
 namespace {
-
-#if CELEG_CPU_X86
-static const bool g_has_avx2_fma = []() {
-    auto caps = detect_cpu_capabilities();
-    return caps.avx2 && caps.fma;
-}();
-#endif
 
 std::pair<int, int> rope_pair_indices(int pair, int pair_count,
                                      RopePairingKind pairing) {
@@ -152,7 +144,7 @@ CpuQkNormRopeFunction select_cpu_qk_norm_rope_kernel(CpuIsa isa) {
      (defined(__x86_64__) || defined(__i386__))) || \
     (defined(_MSC_VER) && CELEG_CPU_X86)
     if (isa == CpuIsa::Avx2 || isa == CpuIsa::AvxVnni ||
-        isa == CpuIsa::Avx512Vnni) {
+        isa == CpuIsa::Avx512Vnni || isa == CpuIsa::AmxInt8) {
         return cpu_qk_norm_rope_avx2_dispatch;
     }
 #else
@@ -172,19 +164,6 @@ void CpuMathEngine::qk_norm_rope(float* data, const float* norm_weight,
 void cpu_qk_norm_rope(float* data, const float* norm_weight,
                       int heads, int head_dim, int position,
                       const RopePositionSpec& rope, float eps) {
-#if (defined(__GNUC__) || defined(__clang__)) && (defined(__x86_64__) || defined(__i386__))
-    if (g_has_avx2_fma) {
-        cpu_qk_norm_rope_avx2_dispatch(
-            data, norm_weight, heads, head_dim, position, rope, eps);
-        return;
-    }
-#elif defined(_MSC_VER) && CELEG_CPU_X86
-    if (g_has_avx2_fma) {
-        cpu_qk_norm_rope_avx2_dispatch(
-            data, norm_weight, heads, head_dim, position, rope, eps);
-        return;
-    }
-#endif
     cpu_qk_norm_rope_scalar_dispatch(
         data, norm_weight, heads, head_dim, position, rope, eps);
 }
