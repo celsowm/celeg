@@ -1,9 +1,11 @@
+#include "math.hpp"
+
 #include "celeg/backend/cpu/rope.hpp"
 #include "celeg/backend/cpu/isa.hpp"
 #include "celeg/model/position.hpp"
 
-#include <cmath>
 #include <array>
+#include <cmath>
 #include <stdexcept>
 #include <vector>
 
@@ -35,6 +37,51 @@ std::pair<int, int> rope_pair_indices(int pair, int pair_count,
     return {pair, pair_count + pair};
 }
 
+void validate_qk_norm_rope_arguments(float* data, const float* norm_weight,
+                                     int heads, int head_dim, int position) {
+    if (!data || !norm_weight || heads <= 0 || head_dim <= 0 ||
+        (head_dim % 2) != 0 || position < 0) {
+        throw std::invalid_argument("invalid QK norm/RoPE arguments");
+    }
+}
+
+void build_rope_tables(const RopePositionSpec& rope, int rotary_dim, int position,
+                       std::vector<float>& cos_vals,
+                       std::vector<float>& sin_vals) {
+    const int half = rotary_dim / 2;
+    cos_vals.resize(static_cast<size_t>(half));
+    sin_vals.resize(static_cast<size_t>(half));
+    for (int d = 0; d < half; ++d) {
+        const float frequency = static_cast<float>(rope_frequency(
+            rope, d, rotary_dim, position));
+        const float angle = static_cast<float>(position) * frequency;
+        cos_vals[static_cast<size_t>(d)] = std::cos(angle);
+        sin_vals[static_cast<size_t>(d)] = std::sin(angle);
+    }
+}
+
+void apply_qk_norm_rope_scalar(float* data, const float* norm_weight,
+                               const float* cos_vals, const float* sin_vals,
+                               int heads, int head_dim, int rotary_dim,
+                               RopePairingKind pairing, float eps) {
+    const int half = rotary_dim / 2;
+    for (int head = 0; head < heads; ++head) {
+        float* vector = data + static_cast<size_t>(head) * head_dim;
+        double sum = 0.0;
+        for (int d = 0; d < head_dim; ++d) {
+            sum += static_cast<double>(vector[d]) * vector[d];
+        }
+        const float inv = 1.0f / std::sqrt(static_cast<float>(sum / head_dim) + eps);
+        for (int pair = 0; pair < half; ++pair) {
+            const auto [first, second] = rope_pair_indices(pair, half, pairing);
+            const float a = vector[first] * inv * norm_weight[first];
+            const float b = vector[second] * inv * norm_weight[second];
+            vector[first] = a * cos_vals[pair] - b * sin_vals[pair];
+            vector[second] = b * cos_vals[pair] + a * sin_vals[pair];
+        }
+    }
+}
+
 #if (defined(__GNUC__) || defined(__clang__)) && (defined(__x86_64__) || defined(__i386__))
 __attribute__((target("avx2,fma")))
 void cpu_qk_norm_rope_avx2(float* data, const float* norm_weight,
@@ -56,58 +103,90 @@ void cpu_qk_norm_rope_avx2(float* data, const float* norm_weight,
 }
 #endif
 
+void cpu_qk_norm_rope_scalar_dispatch(float* data, const float* norm_weight,
+                                      int heads, int head_dim, int position,
+                                      const RopePositionSpec& rope, float eps) {
+    validate_qk_norm_rope_arguments(data, norm_weight, heads, head_dim, position);
+    const int rotary_dim = static_cast<int>(static_cast<float>(head_dim) * rope.rotary_fraction);
+    thread_local std::vector<float> cos_vals;
+    thread_local std::vector<float> sin_vals;
+    build_rope_tables(rope, rotary_dim, position, cos_vals, sin_vals);
+    apply_qk_norm_rope_scalar(data, norm_weight, cos_vals.data(), sin_vals.data(),
+                              heads, head_dim, rotary_dim, rope.pairing, eps);
+}
+
+#if ((defined(__GNUC__) || defined(__clang__)) && \
+     (defined(__x86_64__) || defined(__i386__))) || \
+    (defined(_MSC_VER) && CELEG_CPU_X86)
+void cpu_qk_norm_rope_avx2_dispatch(float* data, const float* norm_weight,
+                                    int heads, int head_dim, int position,
+                                    const RopePositionSpec& rope, float eps) {
+    validate_qk_norm_rope_arguments(data, norm_weight, heads, head_dim, position);
+    const int rotary_dim = static_cast<int>(static_cast<float>(head_dim) * rope.rotary_fraction);
+    thread_local std::vector<float> cos_vals;
+    thread_local std::vector<float> sin_vals;
+    build_rope_tables(rope, rotary_dim, position, cos_vals, sin_vals);
+    if (rope.pairing == RopePairingKind::SplitHalf &&
+        rope.rotary_fraction == 1.0 &&
+        std::holds_alternative<NoRopeScaling>(rope.scaling)) {
+#if (defined(__GNUC__) || defined(__clang__)) && (defined(__x86_64__) || defined(__i386__))
+        cpu_qk_norm_rope_avx2(data, norm_weight, cos_vals.data(), sin_vals.data(),
+                              heads, head_dim, eps);
+#else
+        detail::cpu_qk_norm_rope_avx2_msvc(
+            data, norm_weight, cos_vals.data(), sin_vals.data(), heads, head_dim, eps);
+#endif
+        return;
+    }
+    apply_qk_norm_rope_scalar(data, norm_weight, cos_vals.data(), sin_vals.data(),
+                              heads, head_dim, rotary_dim, rope.pairing, eps);
+}
+#endif
+
+}
+
+namespace detail {
+
+CpuQkNormRopeFunction select_cpu_qk_norm_rope_kernel(CpuIsa isa) {
+#if ((defined(__GNUC__) || defined(__clang__)) && \
+     (defined(__x86_64__) || defined(__i386__))) || \
+    (defined(_MSC_VER) && CELEG_CPU_X86)
+    if (isa == CpuIsa::Avx2 || isa == CpuIsa::AvxVnni ||
+        isa == CpuIsa::Avx512Vnni) {
+        return cpu_qk_norm_rope_avx2_dispatch;
+    }
+#else
+    (void)isa;
+#endif
+    return cpu_qk_norm_rope_scalar_dispatch;
+}
+
+}
+
+void CpuMathEngine::qk_norm_rope(float* data, const float* norm_weight,
+                                 int heads, int head_dim, int position,
+                                 const RopePositionSpec& rope, float eps) const {
+    qk_norm_rope_(data, norm_weight, heads, head_dim, position, rope, eps);
 }
 
 void cpu_qk_norm_rope(float* data, const float* norm_weight,
                       int heads, int head_dim, int position,
                       const RopePositionSpec& rope, float eps) {
-    if (!data || !norm_weight || heads <= 0 || head_dim <= 0 ||
-        (head_dim % 2) != 0 || position < 0) {
-        throw std::invalid_argument("invalid QK norm/RoPE arguments");
-    }
-    const int rotary_dim = static_cast<int>(static_cast<float>(head_dim) * rope.rotary_fraction);
-    const int half = rotary_dim / 2;
-    thread_local std::vector<float> cos_vals;
-    thread_local std::vector<float> sin_vals;
-    cos_vals.resize(static_cast<size_t>(half));
-    sin_vals.resize(static_cast<size_t>(half));
-    for (int d = 0; d < half; ++d) {
-        const float frequency = static_cast<float>(rope_frequency(
-            rope, d, rotary_dim, position));
-        const float angle = static_cast<float>(position) * frequency;
-        cos_vals[d] = std::cos(angle);
-        sin_vals[d] = std::sin(angle);
-    }
 #if (defined(__GNUC__) || defined(__clang__)) && (defined(__x86_64__) || defined(__i386__))
     if (g_has_avx2_fma) {
-        if (rope.pairing == RopePairingKind::SplitHalf &&
-            rope.rotary_fraction == 1.0 && std::holds_alternative<NoRopeScaling>(rope.scaling)) {
-            cpu_qk_norm_rope_avx2(data, norm_weight, cos_vals.data(), sin_vals.data(), heads, head_dim, eps);
-            return;
-        }
+        cpu_qk_norm_rope_avx2_dispatch(
+            data, norm_weight, heads, head_dim, position, rope, eps);
+        return;
     }
 #elif defined(_MSC_VER) && CELEG_CPU_X86
     if (g_has_avx2_fma) {
-        if (rope.pairing == RopePairingKind::SplitHalf &&
-            rope.rotary_fraction == 1.0 && std::holds_alternative<NoRopeScaling>(rope.scaling)) {
-            detail::cpu_qk_norm_rope_avx2_msvc(data, norm_weight, cos_vals.data(), sin_vals.data(), heads, head_dim, eps);
-            return;
-        }
+        cpu_qk_norm_rope_avx2_dispatch(
+            data, norm_weight, heads, head_dim, position, rope, eps);
+        return;
     }
 #endif
-    for (int head = 0; head < heads; ++head) {
-        float* vector = data + static_cast<size_t>(head) * head_dim;
-        double sum = 0.0;
-        for (int d = 0; d < head_dim; ++d) sum += static_cast<double>(vector[d]) * vector[d];
-        const float inv = 1.0f / std::sqrt(static_cast<float>(sum / head_dim) + eps);
-        for (int pair = 0; pair < half; ++pair) {
-            const auto [first, second] = rope_pair_indices(pair, half, rope.pairing);
-            const float a = vector[first] * inv * norm_weight[first];
-            const float b = vector[second] * inv * norm_weight[second];
-            vector[first] = a * cos_vals[pair] - b * sin_vals[pair];
-            vector[second] = b * cos_vals[pair] + a * sin_vals[pair];
-        }
-    }
+    cpu_qk_norm_rope_scalar_dispatch(
+        data, norm_weight, heads, head_dim, position, rope, eps);
 }
 
 void cpu_qk_norm_only(float* data, const float* norm_weight,
@@ -188,7 +267,7 @@ void cpu_qk_norm_rope_mrope(float* data, const float* norm_weight,
                             int heads, int head_dim,
                             const std::array<int32_t, 3>& positions,
                             const std::array<int, 3>& sections,
-                    bool interleaved, const RopePositionSpec& rope, float eps) {
+                            bool interleaved, const RopePositionSpec& rope, float eps) {
     if (!data || !norm_weight || heads <= 0) {
         throw std::invalid_argument("invalid MRoPE QK arguments");
     }
