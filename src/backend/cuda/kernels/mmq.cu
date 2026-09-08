@@ -2,6 +2,7 @@
 #include "kernel_common.cuh"
 #include "celeg/checkpoint/gguf_blocks.hpp"
 
+#include <cuda_fp16.h>
 #include <cstring>
 #include <cstdlib>
 #include <mma.h>
@@ -11,19 +12,18 @@
 namespace celeg {
 namespace {
 
-struct BlockQ4K {
-    __half d;
-    __half dmin;
-    uint8_t scales[12];
-    uint8_t qs[128];
-};
-
+using celeg::gguf_blocks::BlockQ4K;
+using celeg::gguf_blocks::BlockQ6K;
 using celeg::gguf_blocks::q4k_scale_min;
 
 constexpr int kSuperBlock = 256;
 constexpr int kSubBlocksPerSuperBlock = kSuperBlock / kMmqQ8_1BlockSize;
 constexpr int kMmqPrefillTileRows = 8;
 constexpr int kMmqTensorCoreTile = 16;
+
+__device__ __forceinline__ float fp16_bits_to_float(uint16_t bits) {
+    return __half2float(__ushort_as_half(bits));
+}
 
 bool mmq_tensor_core_supported() {
     int device = 0;
@@ -112,8 +112,8 @@ __global__ void q4k_mmq_kernel(const int8_t* __restrict__ q8,
                 reinterpret_cast<const BlockQ4K*>(row_blocks) + superblock;
             uint8_t sc = 0, mn = 0;
             q4k_scale_min(within, blk->scales, sc, mn);
-            const float d_w = __half2float(blk->d);
-            const float dmin_w = __half2float(blk->dmin);
+            const float d_w = fp16_bits_to_float(blk->d);
+            const float dmin_w = fp16_bits_to_float(blk->dmin);
             const uint8_t* qs = blk->qs + (within >> 1) * 32;
             const bool high = (within & 1) != 0;
             const int8_t* a_ptr = a_q8 + sub * kMmqQ8_1BlockSize;
@@ -144,14 +144,6 @@ __global__ void q4k_mmq_kernel(const int8_t* __restrict__ q8,
         }
     }
 }
-
-
-struct BlockQ6K {
-    uint8_t ql[128];
-    uint8_t qh[64];
-    int8_t scales[16];
-    __half d;
-};
 
 constexpr int kQ6KSuperBlock = 256;
 constexpr int kQ6KSubBlocksPerSuperBlock = kQ6KSuperBlock / kMmqQ8_1BlockSize;
@@ -189,7 +181,7 @@ __global__ void q6k_mmq_kernel(const int8_t* __restrict__ q8,
             const int grp = within & 3;
             const int is_lo = half * 8 + grp * 2;
             const int is_hi = is_lo + 1;
-            const float d = __half2float(blk->d);
+            const float d = fp16_bits_to_float(blk->d);
             const float sc_lo = static_cast<float>(blk->scales[is_lo]);
             const float sc_hi = static_cast<float>(blk->scales[is_hi]);
 
@@ -307,8 +299,8 @@ __global__ void q4k_mmq_prefill_kernel(
                 }
             }
         }
-        const float weight_scale = __half2float(blk->d) * static_cast<float>(sc);
-        const float weight_min = __half2float(blk->dmin) * static_cast<float>(mn);
+        const float weight_scale = fp16_bits_to_float(blk->d) * static_cast<float>(sc);
+        const float weight_min = fp16_bits_to_float(blk->dmin) * static_cast<float>(mn);
 #pragma unroll
         for (int r = 0; r < TileRows; ++r) {
             if (activation_base + r < m) {
@@ -399,9 +391,9 @@ __global__ void q4k_mmq_tensor_core_kernel(
                 const size_t activation_offset =
                     static_cast<size_t>(activation_base + row) * (k / kMmqQ8_1BlockSize) + sub;
                 accumulated[index / 32] += q8_scales[activation_offset] *
-                    (__half2float(block->d) * static_cast<float>(scale) *
+                    (fp16_bits_to_float(block->d) * static_cast<float>(scale) *
                          static_cast<float>(dot_lo_tile[warp][index] + dot_hi_tile[warp][index]) -
-                     __half2float(block->dmin) * static_cast<float>(minimum) *
+                     fp16_bits_to_float(block->dmin) * static_cast<float>(minimum) *
                          q8_sums[activation_offset]);
             }
         }
@@ -515,7 +507,7 @@ __global__ void q6k_mmq_tensor_core_kernel(
                     sum_lo += activation_tile[row * kMmqQ8_1BlockSize + cidx];
                     sum_hi += activation_tile[row * kMmqQ8_1BlockSize + 16 + cidx];
                 }
-                const float scale = q8_scales[activation_offset] * __half2float(block->d);
+                const float scale = q8_scales[activation_offset] * fp16_bits_to_float(block->d);
                 accumulated[index / 32] += scale *
                     (static_cast<float>(block->scales[scale_lo_index]) *
                          (static_cast<float>(dot_lo_tile[warp][index]) - 32.0f * static_cast<float>(sum_lo)) +
@@ -559,7 +551,7 @@ __global__ void q6k_mmq_prefill_kernel(
         const BlockQ6K* blk = reinterpret_cast<const BlockQ6K*>(row_blocks) + superblock;
         const int half = within >> 2;
         const int group = within & 3;
-        const float d = __half2float(blk->d);
+        const float d = fp16_bits_to_float(blk->d);
         const float scale_lo = static_cast<float>(blk->scales[half * 8 + group * 2]);
         const float scale_hi = static_cast<float>(blk->scales[half * 8 + group * 2 + 1]);
         int dots_lo[TileRows] = {};
