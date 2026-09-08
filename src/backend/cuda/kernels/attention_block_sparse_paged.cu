@@ -80,8 +80,7 @@ __global__ void gqa_decode_block_sparse_paged_kernel(
             local += bf16_float(q[d]) * bf16_float(key_pool[offset]);
         }
         const float dot = block_sum(local, warp_sums, &dot_total);
-        if (lane == 0) maximum = fmaxf(
-            maximum, rounded_bf16_float(rounded_bf16_float(dot) * scale));
+        if (lane == 0) maximum = fmaxf(maximum, strict_attention_score(dot, scale));
         __syncthreads();
     }
 
@@ -102,7 +101,7 @@ __global__ void gqa_decode_block_sparse_paged_kernel(
         }
         const float dot = block_sum(local, warp_sums, &dot_total);
         if (lane == 0) denominator += expf(
-            rounded_bf16_float(rounded_bf16_float(dot) * scale) - maximum);
+            strict_attention_score(dot, scale) - maximum);
         __syncthreads();
     }
 
@@ -122,8 +121,7 @@ __global__ void gqa_decode_block_sparse_paged_kernel(
         }
         const float dot = block_sum(local, warp_sums, &dot_total);
         if (lane == 0) probability = rounded_bf16_float(expf(
-            rounded_bf16_float(rounded_bf16_float(dot) * scale) - maximum) /
-            denominator);
+            strict_attention_score(dot, scale) - maximum) / denominator);
         __syncthreads();
         if (lane < head_dim) {
             const size_t offset = paged_vector_offset(
@@ -176,8 +174,7 @@ __global__ void gqa_decode_block_sparse_int8_paged_kernel(
             page_tokens, page_vector_elements, layer_vector_offset,
             page_scale_elements, layer_scale_offset, kv_heads, head_dim,
             warp_sums, &dot_total);
-        if (lane == 0) maximum = fmaxf(
-            maximum, rounded_bf16_float(rounded_bf16_float(dot) * scale));
+        if (lane == 0) maximum = fmaxf(maximum, strict_attention_score(dot, scale));
         __syncthreads();
     }
     if (lane == 0) denominator = 0.0f;
@@ -194,7 +191,7 @@ __global__ void gqa_decode_block_sparse_int8_paged_kernel(
             page_scale_elements, layer_scale_offset, kv_heads, head_dim,
             warp_sums, &dot_total);
         if (lane == 0) denominator += expf(
-            rounded_bf16_float(rounded_bf16_float(dot) * scale) - maximum);
+            strict_attention_score(dot, scale) - maximum);
         __syncthreads();
     }
     float accumulator = 0.0f;
@@ -210,8 +207,7 @@ __global__ void gqa_decode_block_sparse_int8_paged_kernel(
             page_scale_elements, layer_scale_offset, kv_heads, head_dim,
             warp_sums, &dot_total);
         if (lane == 0) probability = rounded_bf16_float(expf(
-            rounded_bf16_float(rounded_bf16_float(dot) * scale) - maximum) /
-            denominator);
+            strict_attention_score(dot, scale) - maximum) / denominator);
         __syncthreads();
         if (lane < head_dim) {
             const size_t scale_offset = paged_scale_offset(
