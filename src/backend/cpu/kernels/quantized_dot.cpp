@@ -1,5 +1,6 @@
 #include "celeg/backend/cpu/quantized_dot.hpp"
 #include "celeg/model/weights/quantization.hpp"
+#include "q4_decode.hpp"
 
 #include <algorithm>
 #include <cstring>
@@ -22,12 +23,6 @@
 
 namespace celeg {
 namespace {
-
-inline int decode_q4(const uint8_t* packed, size_t col) {
-    const uint8_t byte = packed[col >> 1];
-    const uint8_t nibble = (col & 1U) == 0 ? byte & 0x0fU : byte >> 4;
-    return nibble >= 8U ? static_cast<int>(nibble) - 16 : static_cast<int>(nibble);
-}
 
 #if (defined(__GNUC__) || defined(__clang__)) && (defined(__x86_64__) || defined(__i386__))
 __attribute__((target("avx2,fma")))
@@ -83,7 +78,7 @@ float q4_dot_avx2(const uint8_t* packed_row,
 
         total = _mm256_fmadd_ps(group_total, scale, total);
         for (; col < group_end; ++col) {
-            scalar_tail += static_cast<float>(decode_q4(packed_row, col)) * scale_val * activation[col];
+            scalar_tail += static_cast<float>(detail::decode_q4_signed_nibble(packed_row, col)) * scale_val * activation[col];
         }
     }
 
@@ -95,7 +90,7 @@ float q4_dot_avx2(const uint8_t* packed_row,
     float result = _mm_cvtss_f32(sum) + scalar_tail;
     for (; col < cols; ++col) {
         const size_t group = col / group_size;
-        result += static_cast<float>(decode_q4(packed_row, col)) *
+        result += static_cast<float>(detail::decode_q4_signed_nibble(packed_row, col)) *
                   bf16_bits_to_float(scales_bf16[group]) * activation[col];
     }
     return result;
@@ -138,7 +133,7 @@ float q4_q8_dot_avx_vnni(const uint8_t* packed_row,
             dot += vnni_dot_32(packed_row + (col >> 1), activation_q8 + col);
         }
         for (; col < end; ++col) {
-            dot += (decode_q4(packed_row, col) + 8) * static_cast<int32_t>(activation_q8[col]);
+            dot += (detail::decode_q4_signed_nibble(packed_row, col) + 8) * static_cast<int32_t>(activation_q8[col]);
         }
         dot -= 8 * activation_sums[group];
         result += static_cast<float>(dot) * bf16_bits_to_float(weight_scales_bf16[group]) * activation_scales[group];
@@ -182,7 +177,7 @@ float q4_q8_dot_avx2(const uint8_t* packed_row,
         }
         int32_t scalar_activation_sum = 0;
         for (size_t col = simd_end; col < end; ++col) {
-            dot += decode_q4(packed_row, col) * static_cast<int32_t>(activation_q8[col]);
+            dot += detail::decode_q4_signed_nibble(packed_row, col) * static_cast<int32_t>(activation_q8[col]);
             scalar_activation_sum += activation_q8[col];
         }
         if (simd_end != begin) dot -= 8 * (activation_sums[group] - scalar_activation_sum);
@@ -214,13 +209,13 @@ float q4_dot_neon(const uint8_t* packed_row, const uint16_t* scales_bf16,
     for (; col + 4 <= cols; col += 4) {
         const size_t group = col / group_size;
         const float scale = bf16_bits_to_float(scales_bf16[group]);
-        for (size_t lane = 0; lane < 4; ++lane) decoded[lane] = static_cast<float>(decode_q4(packed_row, col + lane)) * scale;
+        for (size_t lane = 0; lane < 4; ++lane) decoded[lane] = static_cast<float>(detail::decode_q4_signed_nibble(packed_row, col + lane)) * scale;
         total = vfmaq_f32(total, vld1q_f32(decoded), vld1q_f32(activation + col));
     }
     float result = vaddvq_f32(total);
     for (; col < cols; ++col) {
         const size_t group = col / group_size;
-        result += static_cast<float>(decode_q4(packed_row, col)) * bf16_bits_to_float(scales_bf16[group]) * activation[col];
+        result += static_cast<float>(detail::decode_q4_signed_nibble(packed_row, col)) * bf16_bits_to_float(scales_bf16[group]) * activation[col];
     }
     return result;
 }
@@ -237,7 +232,7 @@ float q4_dot_scalar(const uint8_t* packed_row, const uint16_t* scales_bf16,
     float sum = 0.0f;
     for (size_t col = 0; col < cols; ++col) {
         const size_t group = col / group_size;
-        sum += static_cast<float>(decode_q4(packed_row, col)) * bf16_bits_to_float(scales_bf16[group]) * activation[col];
+        sum += static_cast<float>(detail::decode_q4_signed_nibble(packed_row, col)) * bf16_bits_to_float(scales_bf16[group]) * activation[col];
     }
     return sum;
 }
@@ -266,7 +261,7 @@ float q4_q8_dot_scalar(const uint8_t* packed_row, const uint16_t* weight_scales_
         const size_t begin = group * group_size;
         const size_t end = std::min(cols, begin + group_size);
         int32_t dot = 0;
-        for (size_t col = begin; col < end; ++col) dot += decode_q4(packed_row, col) * static_cast<int32_t>(activation_q8[col]);
+        for (size_t col = begin; col < end; ++col) dot += detail::decode_q4_signed_nibble(packed_row, col) * static_cast<int32_t>(activation_q8[col]);
         result += static_cast<float>(dot) * bf16_bits_to_float(weight_scales_bf16[group]) * activation_scales[group];
     }
     return result;
