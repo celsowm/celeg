@@ -1,6 +1,6 @@
 #pragma once
 
-#include "celeg/backend/cpu/kernels.hpp"
+#include "celeg/backend/cpu/linear.hpp"
 #include "celeg/backend/cpu/kv_topology.hpp"
 #include "celeg/backend/cpu/model.hpp"
 #include "celeg/backend/cpu/paged_kv.hpp"

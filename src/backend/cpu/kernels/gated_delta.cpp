@@ -1,4 +1,5 @@
-#include "celeg/backend/cpu/kernels.hpp"
+#include "celeg/backend/cpu/gated_delta.hpp"
+#include "celeg/backend/cpu/normalization.hpp"
 
 #include <algorithm>
 #include <cmath>

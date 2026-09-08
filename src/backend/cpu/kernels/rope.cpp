@@ -1,4 +1,4 @@
-#include "celeg/backend/cpu/kernels.hpp"
+#include "celeg/backend/cpu/rope.hpp"
 #include "celeg/backend/cpu/isa.hpp"
 #include "celeg/model/position.hpp"
 

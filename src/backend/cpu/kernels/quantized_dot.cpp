@@ -1,4 +1,4 @@
-#include "celeg/backend/cpu/kernels.hpp"
+#include "celeg/backend/cpu/quantized_dot.hpp"
 #include "celeg/model/weights/quantization.hpp"
 
 #include <algorithm>
