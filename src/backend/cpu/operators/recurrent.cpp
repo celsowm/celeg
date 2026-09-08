@@ -1,8 +1,8 @@
 #include "recurrent.hpp"
 #include "common.hpp"
+#include "../kernels/math.hpp"
 #include "celeg/backend/cpu/convolution.hpp"
 #include "celeg/backend/cpu/gated_delta.hpp"
-#include "celeg/backend/cpu/normalization.hpp"
 
 #include <chrono>
 #include <algorithm>
@@ -64,6 +64,7 @@ void execute_cpu_mamba2_token(
     const CpuCompiledModel::Mamba2Weights& weights) {
     auto& workspace = context.workspace;
     auto& shared = context.shared;
+    const CpuMathEngine& math = cpu_math_engine(shared.linear.isa());
     const auto& spec =
         std::get<Mamba2Spec>(shared.program.layers.at(layer).mixer);
     const int inner = spec.intermediate_size;
@@ -121,10 +122,10 @@ void execute_cpu_mamba2_token(
     const int norm_group_width = inner / spec.group_count;
     const float norm_eps = shared.program.final_norm.epsilon;
     for (int group = 0; group < spec.group_count; ++group) {
-        cpu_rmsnorm(workspace.mamba_inner.data() + group * norm_group_width,
-                    weights.norm.data() + group * norm_group_width,
-                    workspace.op_output.data() + group * norm_group_width,
-                    norm_group_width, norm_eps);
+        math.rmsnorm(workspace.mamba_inner.data() + group * norm_group_width,
+                     weights.norm.data() + group * norm_group_width,
+                     workspace.op_output.data() + group * norm_group_width,
+                     norm_group_width, norm_eps);
     }
     shared.linear.gemv(weights.out, workspace.op_output.data(),
                        workspace.hidden.data());
