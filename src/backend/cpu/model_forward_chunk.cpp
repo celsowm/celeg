@@ -1,6 +1,6 @@
 #include "detail/model_internal.hpp"
 #include "celeg/backend/cpu/elementwise.hpp"
-#include "celeg/backend/cpu/normalization.hpp"
+#include "kernels/math.hpp"
 #include "operators/attention.hpp"
 #include "operators/feed_forward.hpp"
 #include "operators/moe.hpp"
@@ -60,6 +60,7 @@ void CpuCompiledModel::forward_chunk(std::span<const int32_t> tokens,
     const size_t rows = tokens.size();
     const int base_position = session_.position_value;
     const size_t hidden = static_cast<size_t>(shared->program.hidden);
+    const CpuMathEngine& math = cpu_math_engine(shared->linear.isa());
     CpuExecutionContext execution{*shared, workspace_, session_};
     CpuRecurrentStateView recurrent_state{session_};
     workspace_.ensure_chunk(rows, shared->workspace_plan);
@@ -75,21 +76,21 @@ void CpuCompiledModel::forward_chunk(std::span<const int32_t> tokens,
                             float* output, size_t width, float epsilon = -1.0f) {
         if (epsilon < 0.0f) epsilon = shared->program.final_norm.epsilon;
         parallel_rows(shared->pool, rows, [&](size_t row) {
-            cpu_rmsnorm(input + row * width, weight.data(), output + row * width,
-                        width, epsilon);
+            math.rmsnorm(input + row * width, weight.data(), output + row * width,
+                         width, epsilon);
         });
     };
     auto rmsnorm_rows_inplace = [&](float* data, const std::vector<float>& weight,
                                     size_t width, float epsilon = -1.0f) {
         if (epsilon < 0.0f) epsilon = shared->program.final_norm.epsilon;
         parallel_rows(shared->pool, rows, [&](size_t row) {
-            cpu_rmsnorm_inplace(data + row * width, weight.data(), width,
-                                epsilon);
+            math.rmsnorm_inplace(data + row * width, weight.data(), width,
+                                 epsilon);
         });
     };
     auto residual_rows = [&](float* data, const float* residual, size_t width) {
         parallel_rows(shared->pool, rows, [&](size_t row) {
-            cpu_residual_add(data + row * width, residual + row * width, width);
+            math.residual_add(data + row * width, residual + row * width, width);
         });
     };
 
@@ -152,9 +153,9 @@ void CpuCompiledModel::forward_chunk(std::span<const int32_t> tokens,
                         values[d] *= input_plan.context_scale;
                     }
                 }
-                cpu_rmsnorm_inplace(values,
-                                    shared->weight_store.per_layer_projection_norm.data(),
-                                    input_size, input_plan.norm_epsilon);
+                math.rmsnorm_inplace(values,
+                                     shared->weight_store.per_layer_projection_norm.data(),
+                                     input_size, input_plan.norm_epsilon);
                 const float* token_input = token_values + static_cast<size_t>(layer) * input_size;
                 for (size_t d = 0; d < input_size; ++d) {
                     values[d] = (values[d] + token_input[d]) * input_plan.residual_scale;
@@ -287,7 +288,7 @@ void CpuCompiledModel::forward_chunk(std::span<const int32_t> tokens,
                                workspace_.chunk_latent_projection.data(), 0.0f,
                                "latent_q_projection");
                     for (size_t row = 0; row < rows; ++row) {
-                        cpu_rmsnorm_inplace(workspace_.chunk_latent_projection.data() +
+                        math.rmsnorm_inplace(workspace_.chunk_latent_projection.data() +
                             row * static_cast<size_t>(factorized->query_rank),
                             attention->latent_q_norm.data(), static_cast<size_t>(factorized->query_rank),
                             factorized->query_latent_norm.epsilon);
@@ -344,7 +345,7 @@ void CpuCompiledModel::forward_chunk(std::span<const int32_t> tokens,
                                   workspace_.chunk_latent_projection.data() +
                                       row * (latent.latent_rank + latent.rope_head_dim) + latent.latent_rank,
                                   workspace_.chunk_latent_key.data() + row * latent.latent_rank);
-                        cpu_rmsnorm_inplace(workspace_.chunk_latent_key.data() + row * latent.latent_rank,
+                        math.rmsnorm_inplace(workspace_.chunk_latent_key.data() + row * latent.latent_rank,
                             attention->latent_k_norm.data(), static_cast<size_t>(latent.latent_rank),
                             factorized->key_latent_norm.epsilon);
                         std::copy(workspace_.chunk_latent_key.data() + row * latent.latent_rank,
@@ -639,8 +640,8 @@ void CpuCompiledModel::forward_chunk(std::span<const int32_t> tokens,
 
     if (compute_logits) {
         const float* last_hidden = workspace_.chunk_hidden.data() + (rows - 1) * hidden;
-        cpu_rmsnorm(last_hidden, shared->weight_store.final_norm.data(), workspace_.final_normed.data(),
-                    hidden, shared->program.final_norm.epsilon);
+        math.rmsnorm(last_hidden, shared->weight_store.final_norm.data(), workspace_.final_normed.data(),
+                     hidden, shared->program.final_norm.epsilon);
         shared->linear.gemv(shared->tie_word_embeddings ? shared->weight_store.embedding :
                             shared->weight_store.lm_head, workspace_.final_normed.data(),
                             workspace_.logits.data());
