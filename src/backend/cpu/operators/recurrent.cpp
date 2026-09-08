@@ -1,5 +1,8 @@
 #include "recurrent.hpp"
 #include "common.hpp"
+#include "celeg/backend/cpu/convolution.hpp"
+#include "celeg/backend/cpu/gated_delta.hpp"
+#include "celeg/backend/cpu/normalization.hpp"
 
 #include <chrono>
 #include <algorithm>
