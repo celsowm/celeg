@@ -1,9 +1,12 @@
+#include "math.hpp"
+
 #include "celeg/backend/cpu/elementwise.hpp"
+#include "celeg/backend/cpu/kernel_backend.hpp"
 #include "celeg/backend/cpu/normalization.hpp"
 #include "celeg/backend/cpu/isa.hpp"
 
-#include <cmath>
 #include <algorithm>
+#include <cmath>
 #include <stdexcept>
 #include <vector>
 
@@ -26,6 +29,33 @@ static const bool g_has_avx2_fma = []() {
     return caps.avx2 && caps.fma;
 }();
 #endif
+
+bool uses_avx2_math(CpuIsa isa) {
+    return isa == CpuIsa::Avx2 || isa == CpuIsa::AvxVnni ||
+           isa == CpuIsa::Avx512Vnni;
+}
+
+void cpu_rmsnorm_scalar(const float* input, const float* weight, float* output,
+                        size_t width, float eps) {
+    double sum = 0.0;
+    for (size_t i = 0; i < width; ++i) {
+        sum += static_cast<double>(input[i]) * input[i];
+    }
+    const float inv = 1.0f / std::sqrt(static_cast<float>(sum / width) + eps);
+    for (size_t i = 0; i < width; ++i) output[i] = input[i] * inv * weight[i];
+}
+
+void cpu_residual_add_scalar(float* data, const float* residual, size_t count) {
+    for (size_t i = 0; i < count; ++i) data[i] += residual[i];
+}
+
+void cpu_swiglu_scalar(const float* gate_up, float* output, size_t count) {
+    for (size_t i = 0; i < count; ++i) {
+        const float gate = gate_up[i];
+        const float up = gate_up[count + i];
+        output[i] = (gate / (1.0f + std::exp(-gate))) * up;
+    }
+}
 
 #if (defined(__GNUC__) || defined(__clang__)) && (defined(__x86_64__) || defined(__i386__))
 __attribute__((target("avx2,fma")))
@@ -54,6 +84,58 @@ void cpu_swiglu_avx2(const float* gate_up, float* output, size_t count) {
 
 }
 
+CpuMathEngine::CpuMathEngine(const CpuKernelBackend& backend)
+    : isa_(backend.isa),
+      rmsnorm_(cpu_rmsnorm_scalar),
+      residual_add_(cpu_residual_add_scalar),
+      swiglu_(cpu_swiglu_scalar),
+      qk_norm_rope_(detail::select_cpu_qk_norm_rope_kernel(backend.isa)) {
+#if (defined(__GNUC__) || defined(__clang__)) && (defined(__x86_64__) || defined(__i386__))
+    if (uses_avx2_math(backend.isa)) {
+        rmsnorm_ = cpu_rmsnorm_avx2;
+        residual_add_ = cpu_residual_add_avx2;
+        swiglu_ = cpu_swiglu_avx2;
+    }
+#elif defined(_MSC_VER) && CELEG_CPU_X86
+    if (uses_avx2_math(backend.isa)) {
+        rmsnorm_ = detail::cpu_rmsnorm_avx2_msvc;
+        residual_add_ = detail::cpu_residual_add_avx2_msvc;
+        swiglu_ = detail::cpu_swiglu_avx2_msvc;
+    }
+#endif
+}
+
+void CpuMathEngine::rmsnorm(const float* input, const float* weight, float* output,
+                            size_t width, float eps) const {
+    if (!input || !weight || !output || width == 0 || !(eps > 0.0f)) {
+        throw std::invalid_argument("invalid RMSNorm arguments");
+    }
+    rmsnorm_(input, weight, output, width, eps);
+}
+
+void CpuMathEngine::rmsnorm_inplace(float* data, const float* weight,
+                                    size_t width, float eps) const {
+    if (!data || !weight || width == 0 || !(eps > 0.0f)) {
+        throw std::invalid_argument("invalid RMSNorm arguments");
+    }
+    thread_local std::vector<float> temp;
+    temp.resize(width);
+    rmsnorm_(data, weight, temp.data(), width, eps);
+    std::copy(temp.begin(), temp.end(), data);
+}
+
+void CpuMathEngine::residual_add(float* data, const float* residual,
+                                 size_t count) const {
+    if (!data || !residual) throw std::invalid_argument("invalid residual arguments");
+    residual_add_(data, residual, count);
+}
+
+void CpuMathEngine::swiglu(const float* gate_up, float* output,
+                           size_t count) const {
+    if (!gate_up || !output) throw std::invalid_argument("invalid SwiGLU arguments");
+    swiglu_(gate_up, output, count);
+}
+
 void cpu_rmsnorm(const float* input, const float* weight, float* output,
                  size_t width, float eps) {
     if (!input || !weight || !output || width == 0 || !(eps > 0.0f)) {
@@ -70,10 +152,7 @@ void cpu_rmsnorm(const float* input, const float* weight, float* output,
         return;
     }
 #endif
-    double sum = 0.0;
-    for (size_t i = 0; i < width; ++i) sum += static_cast<double>(input[i]) * input[i];
-    const float inv = 1.0f / std::sqrt(static_cast<float>(sum / width) + eps);
-    for (size_t i = 0; i < width; ++i) output[i] = input[i] * inv * weight[i];
+    cpu_rmsnorm_scalar(input, weight, output, width, eps);
 }
 
 void cpu_rmsnorm_inplace(float* data, const float* weight, size_t width, float eps) {
@@ -96,7 +175,7 @@ void cpu_residual_add(float* data, const float* residual, size_t count) {
         return;
     }
 #endif
-    for (size_t i = 0; i < count; ++i) data[i] += residual[i];
+    cpu_residual_add_scalar(data, residual, count);
 }
 
 void cpu_swiglu(const float* gate_up, float* output, size_t count) {
@@ -112,11 +191,7 @@ void cpu_swiglu(const float* gate_up, float* output, size_t count) {
         return;
     }
 #endif
-    for (size_t i = 0; i < count; ++i) {
-        const float gate = gate_up[i];
-        const float up = gate_up[count + i];
-        output[i] = (gate / (1.0f + std::exp(-gate))) * up;
-    }
+    cpu_swiglu_scalar(gate_up, output, count);
 }
 
 void cpu_gated_gelu_tanh(const float* gate_up, float* output, size_t count) {
