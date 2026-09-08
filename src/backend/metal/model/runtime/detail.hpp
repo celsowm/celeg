@@ -93,6 +93,19 @@ struct MetalModel::Impl {
         LinearStorage storage = LinearStorage::Float32;
         std::optional<TensorRole> role;
         int layer = -1;
+        /// @brief Memoized decode-matvec pipeline for this weight.
+        ///
+        /// The kernel selected by `matvec_kernel`/`swiglu_matvec_kernel` is a
+        /// pure function of the (storage, rows, cols) triple, which never
+        /// changes for a bound weight, so the lookup is resolved once and
+        /// reused. Single-threaded encode only; the cache owns the state.
+        mutable id<MTLComputePipelineState> cached_matvec_pipeline = nil;
+        mutable MetalMatvecKernel cached_matvec_geometry{nullptr, 0, 0, 0};
+        /// @brief Which selector resolved the memo: 1 = `matvec_kernel`,
+        /// 2 = `swiglu_matvec_kernel`. Each weight uses exactly one decode
+        /// matvec path; the tag keeps the memo sound even if that ever
+        /// changes (a tag mismatch simply re-resolves).
+        mutable uint8_t cached_matvec_path = 0;
     };
 
     struct MetalKernelBinding {
@@ -237,6 +250,13 @@ struct MetalModel::Impl {
     MetalExecutionMetrics execution_metrics;
     std::chrono::steady_clock::time_point command_started;
     uint64_t command_dispatches = 0;
+    /// @brief True while the active command buffer encodes decode work through a
+    /// concurrent compute encoder. Serializes through explicit buffer barriers
+    /// except inside a parallel group.
+    bool concurrent_decode = false;
+    /// @brief True while encoding mutually independent dispatches that share
+    /// read-only inputs and write disjoint outputs; suppresses barriers.
+    bool parallel_group = false;
     id<MTLCounterSampleBuffer> gpu_counter_samples = nil;
     std::vector<std::string> gpu_counter_dispatches;
     NSUInteger gpu_counter_next_sample = 0;
@@ -274,6 +294,17 @@ struct MetalModel::Impl {
                   NSUInteger count);
     void dispatch_cooperative(id<MTLComputeCommandEncoder> encoder, std::string_view name,
                               NSUInteger groups);
+    /// @brief Emits a buffer-scope barrier when concurrent decode is active and
+    /// no parallel group is open. No-op on serial encoders and in profilers.
+    void order_before_dispatch(id<MTLComputeCommandEncoder> encoder);
+    /// @brief Opens a section of mutually independent dispatches. Emits the
+    /// entry barrier that orders the group after prior work, then suppresses
+    /// barriers inside. Callers must guarantee shared read-only inputs and
+    /// disjoint outputs, then close with end_parallel_group before any
+    /// dependent dispatch is encoded.
+    void begin_parallel_group(id<MTLComputeCommandEncoder> encoder);
+    /// @brief Closes a parallel group; the next ordered dispatch barriers.
+    void end_parallel_group();
     void record_dispatch(std::string_view name);
     id<MTLComputeCommandEncoder> compute_encoder(id<MTLComputeCommandEncoder> fallback);
     void set_buffer(id<MTLComputeCommandEncoder> encoder, id<MTLBuffer> value,
@@ -325,7 +356,7 @@ struct MetalModel::Impl {
                              uint32_t count, float weight);
 
     void encode_short_convolution(id<MTLComputeCommandEncoder> encoder,
-                                  Layer& layer);
+                                   Layer& layer);
     void encode_short_convolution_batch(id<MTLComputeCommandEncoder> encoder,
                                         Layer& layer, uint32_t rows,
                                         uint32_t base_position);

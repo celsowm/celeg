@@ -75,7 +75,7 @@ constexpr Binding kBindings[] = {
     {"q5_k", celeg::GgmlType::Q5_K, "celeg_matvec_q5k",
      "celeg_matvec_q5k_rows8", 16, 128, 0},
     {"q4_k", celeg::GgmlType::Q4_K, "celeg_matvec_q4k",
-     "celeg_matvec_q4k_rows8", 16, 128, 0},
+     nullptr, 4, 64, 0},
     {"q4_0", celeg::GgmlType::Q4_0, "celeg_matvec_q4_0", nullptr, 16, 128, 0},
 };
 

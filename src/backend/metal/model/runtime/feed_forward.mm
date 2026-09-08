@@ -20,11 +20,13 @@ void MetalModel::Impl::encode_dense_feed_forward(
 
     const uint32_t intermediate = static_cast<uint32_t>(layer.intermediate);
     if (!gate_up_ready) {
+        begin_parallel_group(encoder);
         encode_matvec(encoder, layer.ffn_gate, normed, gate_up, 0);
         tag_last_gpu_dispatch("ffn_gate", layer.ffn_gate);
         encode_matvec(encoder, layer.ffn_up, normed, gate_up,
                       static_cast<NSUInteger>(layer.intermediate) * sizeof(float));
         tag_last_gpu_dispatch("ffn_up", layer.ffn_up);
+        end_parallel_group();
     }
     if (encode_swiglu_matvec(encoder, layer.ffn_down, gate_up, operation)) {
         tag_last_gpu_dispatch("ffn_down", layer.ffn_down);
@@ -74,6 +76,7 @@ void MetalModel::Impl::encode_dense_feed_forward_batch(
         : "celeg_swiglu_batch_2d";
     id<MTLComputePipelineState> swiglu = pipeline(swiglu_kernel);
     encoder = compute_encoder(encoder);
+    order_before_dispatch(encoder);
     [encoder setComputePipelineState:swiglu];
     const NSUInteger threads_x = std::min<NSUInteger>(
         intermediate, swiglu.maxTotalThreadsPerThreadgroup);

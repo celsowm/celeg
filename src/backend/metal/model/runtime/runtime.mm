@@ -204,7 +204,7 @@ std::string MetalModel::backend_description() const {
          (*impl_).pipeline_cache.tensor_fast_q6k &&
          metal_model_detail::ns_string((*impl_).device.name).find("Apple M5") !=
              std::string::npos
-            ? "selective_m5_ffn_gate_0_7" : "strict") +
+             ? "selective_m5_ffn_down" : "strict") +
         " fast_q8_0=" + ((*impl_).pipeline_cache.tensor_fast_q8_0 ? "yes" : "no") +
         ((*impl_).pipeline_cache.tensor_compile_error.empty()
             ? std::string{} : " tensor_error=" + (*impl_).pipeline_cache.tensor_compile_error) +

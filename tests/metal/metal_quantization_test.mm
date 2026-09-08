@@ -83,7 +83,8 @@ std::vector<float> run_matvec(id<MTLDevice> device,
                               const std::vector<float>& input,
                               const char* requested_kernel = nullptr,
                               uint32_t rows_per_threadgroup = 16,
-                              uint32_t threadgroup_floats = 0) {
+                              uint32_t threadgroup_floats = 0,
+                              uint32_t threads = 128) {
     NSError* error = nil;
     NSString* source = [NSString stringWithUTF8String:celeg::metal_detail::kInferenceShader];
     id<MTLLibrary> library = [device newLibraryWithSource:source options:nil error:&error];
@@ -132,7 +133,7 @@ std::vector<float> run_matvec(id<MTLDevice> device,
     }
     [encoder dispatchThreadgroups:MTLSizeMake(
         (rows + rows_per_threadgroup - 1u) / rows_per_threadgroup, 1, 1)
-             threadsPerThreadgroup:MTLSizeMake(128, 1, 1)];
+             threadsPerThreadgroup:MTLSizeMake(threads, 1, 1)];
     [encoder endEncoding];
     [command_buffer commit];
     [command_buffer waitUntilCompleted];
@@ -207,7 +208,7 @@ struct Geometry {
 
 Geometry swiglu_geometry(const char* kernel_name) {
     if (std::strcmp(kernel_name, "celeg_swiglu_matvec_q4_0") == 0) return {16, 128, 0};
-    if (std::strcmp(kernel_name, "celeg_swiglu_matvec_q4k") == 0) return {16, 128, 0};
+    if (std::strcmp(kernel_name, "celeg_swiglu_matvec_q4k") == 0) return {4, 64, 0};
     if (std::strcmp(kernel_name, "celeg_swiglu_matvec_q5k") == 0) return {16, 128, 0};
     if (std::strcmp(kernel_name, "celeg_swiglu_matvec_q6k") == 0) return {16, 128, 0};
     if (std::strcmp(kernel_name, "celeg_swiglu_matvec_q8_0_rows8") == 0) {
@@ -323,9 +324,13 @@ bool check_matvec(const celeg::GgufFile& file, celeg::GgmlType type,
         for (uint32_t index = 0; index < cols; ++index) {
             input[index + 1] = std::sin(static_cast<float>(index + 1) * 0.017f);
         }
+        /// Mirrors `MetalModel::Impl::matvec_kernel`: Q4_K uses the
+        /// four-rows-per-threadgroup, 64-thread llama-style mapping.
+        const bool q4k = type == celeg::GgmlType::Q4_K && kernel_name == nullptr;
         const std::vector<float> actual = run_matvec(
             device, tensor, rows, input, kernel_name,
-            rows_per_threadgroup, threadgroup_floats);
+            q4k ? 4 : rows_per_threadgroup, threadgroup_floats,
+            q4k ? 64 : 128);
         celeg::GgmlMatrixView matrix;
         matrix.type = type;
         matrix.rows = static_cast<uint32_t>(tensor.shape.at(0));

@@ -103,6 +103,7 @@ void MetalModel::Impl::encode_attention_span(
     const NSUInteger shared_floats =
         2u * kAttentionSimdgroups + kAttentionSimdgroups * head_dim;
     encoder = compute_encoder(encoder);
+    order_before_dispatch(encoder);
     [encoder setComputePipelineState:state];
     [encoder setThreadgroupMemoryLength:shared_floats * sizeof(float) atIndex:0];
     [encoder dispatchThreadgroups:MTLSizeMake(query_heads, rows, 1)
@@ -148,15 +149,21 @@ void MetalModel::Impl::encode_attention(
         set_bytes(encoder, &query_width, sizeof(query_width), 3);
         set_bytes(encoder, &head_dim, sizeof(head_dim), 4);
         dispatch(encoder, "celeg_extract_attention_query_batch", query_width);
+        if (owns_kv) {
+            encode_matvec(encoder, layer.key, normed, key_buffer);
+            encode_matvec(encoder, layer.value, normed, value_buffer);
+        }
     } else {
+        begin_parallel_group(encoder);
         encode_matvec(encoder, layer.query, normed, query_buffer);
         if (gate) {
             encode_matvec(encoder, layer.attention_gate, normed, projected);
         }
-    }
-    if (owns_kv) {
-        encode_matvec(encoder, layer.key, normed, key_buffer);
-        encode_matvec(encoder, layer.value, normed, value_buffer);
+        if (owns_kv) {
+            encode_matvec(encoder, layer.key, normed, key_buffer);
+            encode_matvec(encoder, layer.value, normed, value_buffer);
+        }
+        end_parallel_group();
     }
 
     const uint32_t position_value = static_cast<uint32_t>(position);
@@ -280,11 +287,21 @@ void MetalModel::Impl::encode_attention(
             set_bytes(encoder, &layer.key_norm_epsilon,
                       sizeof(layer.key_norm_epsilon), 14);
             set_bytes(encoder, &page_tokens, sizeof(page_tokens), 15);
-            dispatch(encoder,
-                     split_half_rope(attention)
-                         ? "celeg_qk_norm_rope_store_kv_split"
-                         : "celeg_qk_norm_rope_store_kv",
-                     std::max(query_heads, prepared_key_heads));
+            if (split_half_rope(attention)) {
+                id<MTLComputePipelineState> state =
+                    pipeline("celeg_qk_norm_rope_store_kv_split");
+                encoder = compute_encoder(encoder);
+                order_before_dispatch(encoder);
+                [encoder setComputePipelineState:state];
+                const NSUInteger qk_groups =
+                    std::max(query_heads, prepared_key_heads);
+                [encoder dispatchThreadgroups:MTLSizeMake(qk_groups, 1, 1)
+                         threadsPerThreadgroup:MTLSizeMake(32, 1, 1)];
+                record_dispatch("celeg_qk_norm_rope_store_kv_split");
+            } else {
+                dispatch(encoder, "celeg_qk_norm_rope_store_kv",
+                         std::max(query_heads, prepared_key_heads));
+            }
         }
     }
 
@@ -525,6 +542,7 @@ void MetalModel::Impl::encode_attention_batch(
             throw std::runtime_error("Metal pipeline cannot run the batch KV store kernel");
         }
         encoder = compute_encoder(encoder);
+        order_before_dispatch(encoder);
         [encoder setComputePipelineState:state];
         [encoder dispatchThreadgroups:MTLSizeMake(
             (kv_width + threads - 1u) / threads, rows, 1)
@@ -562,6 +580,7 @@ void MetalModel::Impl::encode_attention_batch(
             state.staticThreadgroupMemoryLength + shared_bytes <=
                 device.maxThreadgroupMemoryLength) {
             encoder = compute_encoder(encoder);
+            order_before_dispatch(encoder);
             [encoder setComputePipelineState:state];
             [encoder setThreadgroupMemoryLength:shared_bytes atIndex:0];
             [encoder dispatchThreadgroups:MTLSizeMake(

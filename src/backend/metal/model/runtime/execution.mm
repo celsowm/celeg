@@ -204,6 +204,7 @@ void MetalModel::Impl::encode_prefill_batch(
             : "celeg_residual_rmsnorm_batch";
         id<MTLComputePipelineState> state = use_cached ? cached_state : pipeline(kernel);
         encoder = compute_encoder(encoder);
+        order_before_dispatch(encoder);
         [encoder setComputePipelineState:state];
         if (use_cached) {
             [encoder setThreadgroupMemoryLength:scratch_bytes atIndex:0];

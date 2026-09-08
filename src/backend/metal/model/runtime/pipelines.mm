@@ -11,6 +11,16 @@ using metal_model_detail::ns_string;
 
 namespace {
 
+/// @brief Whether the device is Apple M5, resolved once per process.
+///
+/// The device never changes at runtime, so the `matvec_kernel` selection
+/// fast path reads this instead of converting `device.name` per dispatch.
+bool device_is_apple_m5(id<MTLDevice> device) {
+    static const bool m5 = device != nil &&
+        ns_string(device.name).find("Apple M5") != std::string::npos;
+    return m5;
+}
+
 /// @brief Weight-tile geometry; must match the constants in `tensor.metal`.
 constexpr NSUInteger kTensorTileRows = 64;
 constexpr NSUInteger kTensorTileTokens = 128;
@@ -64,6 +74,21 @@ bool dense_matvec_rows_experiment_enabled() {
     }();
     return enabled;
 }
+
+/// @brief Concurrent decode encoding only when explicitly requested.
+///
+/// Serial encoding is the default: A/B showed the concurrent encoder's
+/// per-dispatch barriers cost ~65 µs/token of CPU with no remaining GPU
+/// overlap gain on current kernels (serial wins wall ~3%, GPU tied).
+/// Set CELEG_METAL_CONCURRENT_DECODE=1 to re-enable the concurrent encoder
+/// with parallel-group overlap (worth re-measuring for slower kernels).
+bool concurrent_decode_enabled() {
+    static const bool enabled = [] {
+        const char* value = std::getenv("CELEG_METAL_CONCURRENT_DECODE");
+        return value != nullptr && value[0] == '1' && value[1] == '\0';
+    }();
+    return enabled;
+}
 }
 
 std::optional<std::string_view> MetalModel::Impl::linear_kernel(
@@ -100,7 +125,7 @@ MetalMatvecKernel MetalModel::Impl::matvec_kernel(LinearStorage storage,
     const bool ffn_expansion = rows >= 4096 && rows < 32768 && cols <= 2048;
     const bool ffn_contraction = rows <= 2048 && cols >= 4096 && cols < 32768;
     const bool m5_fast = options.numerical_policy == MetalNumericalPolicy::Fast &&
-        ns_string(device.name).find("Apple M5") != std::string::npos;
+        device_is_apple_m5(device);
     const bool dense_rows = m5_fast && dense_matvec_rows_experiment_enabled();
     switch (storage) {
         case LinearStorage::Float32: return {"celeg_matvec", 8, 256, 0};
@@ -118,13 +143,12 @@ MetalMatvecKernel MetalModel::Impl::matvec_kernel(LinearStorage storage,
             }
             return {"celeg_matvec_bf16", 2, 128, 8};
         case LinearStorage::Q4_0: return {"celeg_matvec_q4_0", 16, 128, 0};
-        case LinearStorage::Q4K: return ffn_expansion
-            ? MetalMatvecKernel{"celeg_matvec_q4k_rows8", 32, 128, 0}
-            : MetalMatvecKernel{"celeg_matvec_q4k", 16, 128, 0};
+        case LinearStorage::Q4K: return {"celeg_matvec_q4k", 4, 64, 0};
         case LinearStorage::Q5K: return ffn_expansion
             ? MetalMatvecKernel{"celeg_matvec_q5k_rows8", 32, 128, 0}
             : MetalMatvecKernel{"celeg_matvec_q5k", 16, 128, 0};
-        case LinearStorage::Q6K: return {"celeg_matvec_q6k", 16, 128, 0};
+        case LinearStorage::Q6K:
+            return MetalMatvecKernel{"celeg_matvec_q6k_llama", 4, 64, 0};
         case LinearStorage::Q8_0: return m5_fast
             ? MetalMatvecKernel{"celeg_matvec_q8_0_m5", 2, 128, 8}
             : ffn_expansion || ffn_contraction
@@ -138,12 +162,13 @@ MetalMatvecKernel MetalModel::Impl::swiglu_matvec_kernel(LinearStorage storage,
                                                          uint32_t rows,
                                                          uint32_t cols) const {
     const bool m5_fast = options.numerical_policy == MetalNumericalPolicy::Fast &&
-        ns_string(device.name).find("Apple M5") != std::string::npos;
+        device_is_apple_m5(device);
     switch (storage) {
         case LinearStorage::Q4_0: return {"celeg_swiglu_matvec_q4_0", 16, 128, 0};
-        case LinearStorage::Q4K: return {"celeg_swiglu_matvec_q4k", 16, 128, 0};
+        case LinearStorage::Q4K: return {"celeg_swiglu_matvec_q4k", 4, 64, 0};
         case LinearStorage::Q5K: return {"celeg_swiglu_matvec_q5k", 16, 128, 0};
-        case LinearStorage::Q6K: return {"celeg_swiglu_matvec_q6k", 16, 128, 0};
+        case LinearStorage::Q6K:
+            return MetalMatvecKernel{"celeg_swiglu_matvec_q6k_llama", 4, 64, 0};
         case LinearStorage::Q8_0: return rows <= 2048 && cols >= 4096 && cols < 32768
             ? m5_fast
                 ? MetalMatvecKernel{"celeg_swiglu_matvec_q8_0_m5", 2, 128, 8}
@@ -204,9 +229,18 @@ void MetalModel::Impl::begin_commands(
         }
     }
 
+    concurrent_decode = false;
+    parallel_group = false;
     if (gpu_counter_samples) {
         gpu_profile_command_buffer = command_buffer;
         encoder = compute_encoder(nil);
+    } else if (concurrent_decode_enabled()) {
+        encoder = [command_buffer
+            computeCommandEncoderWithDispatchType:MTLDispatchTypeConcurrent];
+        concurrent_decode = encoder != nil;
+        if (!concurrent_decode) {
+            encoder = [command_buffer computeCommandEncoder];
+        }
     } else {
         encoder = [command_buffer computeCommandEncoder];
     }
@@ -273,8 +307,27 @@ void MetalModel::Impl::finish_commands(
     gpu_counter_next_sample = 0;
     gpu_profile_command_buffer = nil;
     gpu_profile_encoder = nil;
+    concurrent_decode = false;
+    parallel_group = false;
     encoder = nil;
     command_buffer = nil;
+}
+
+void MetalModel::Impl::order_before_dispatch(
+    id<MTLComputeCommandEncoder> encoder) {
+    if (!concurrent_decode || parallel_group) return;
+    [compute_encoder(encoder) memoryBarrierWithScope:MTLBarrierScopeBuffers];
+}
+
+void MetalModel::Impl::begin_parallel_group(
+    id<MTLComputeCommandEncoder> encoder) {
+    if (!concurrent_decode) return;
+    [compute_encoder(encoder) memoryBarrierWithScope:MTLBarrierScopeBuffers];
+    parallel_group = true;
+}
+
+void MetalModel::Impl::end_parallel_group() {
+    parallel_group = false;
 }
 
 id<MTLComputePipelineState> MetalPipelineCache::pipeline(std::string_view name) {
@@ -348,6 +401,7 @@ void MetalModel::Impl::dispatch(id<MTLComputeCommandEncoder> encoder, std::strin
     if (count == 0) return;
     id<MTLComputePipelineState> state = pipeline(name);
     encoder = compute_encoder(encoder);
+    order_before_dispatch(encoder);
     [encoder setComputePipelineState:state];
     const NSUInteger threads = std::min(count, state.maxTotalThreadsPerThreadgroup);
     [encoder dispatchThreads:MTLSizeMake(count, 1, 1)
@@ -364,6 +418,7 @@ void MetalModel::Impl::dispatch_cooperative(id<MTLComputeCommandEncoder> encoder
         throw std::runtime_error("Metal pipeline cannot run cooperative kernel");
     }
     encoder = compute_encoder(encoder);
+    order_before_dispatch(encoder);
     [encoder setComputePipelineState:state];
     [encoder dispatchThreadgroups:MTLSizeMake(groups, 1, 1)
        threadsPerThreadgroup:MTLSizeMake(threads, 1, 1)];
@@ -426,11 +481,21 @@ void MetalModel::Impl::encode_matvec(id<MTLComputeCommandEncoder> encoder,
     if (weight.row_bytes != 0) {
         set_bytes(encoder, &weight.row_bytes, sizeof(weight.row_bytes), 5);
     }
-    const MetalMatvecKernel selected = matvec_kernel(
-        weight.storage, weight.rows, weight.cols);
-    if (!selected.name) throw std::runtime_error("unsupported Metal matvec binding");
-    id<MTLComputePipelineState> state = pipeline(selected.name);
+    MetalMatvecKernel selected;
+    id<MTLComputePipelineState> state;
+    if (weight.cached_matvec_path == 1 && weight.cached_matvec_pipeline != nil) {
+        selected = weight.cached_matvec_geometry;
+        state = weight.cached_matvec_pipeline;
+    } else {
+        selected = matvec_kernel(weight.storage, weight.rows, weight.cols);
+        if (!selected.name) throw std::runtime_error("unsupported Metal matvec binding");
+        state = pipeline(selected.name);
+        weight.cached_matvec_pipeline = state;
+        weight.cached_matvec_geometry = selected;
+        weight.cached_matvec_path = 1;
+    }
     encoder = compute_encoder(encoder);
+    order_before_dispatch(encoder);
     [encoder setComputePipelineState:state];
     if (selected.threadgroup_floats != 0) {
         [encoder setThreadgroupMemoryLength:selected.threadgroup_floats * sizeof(float)
@@ -446,17 +511,27 @@ void MetalModel::Impl::encode_matvec(id<MTLComputeCommandEncoder> encoder,
 bool MetalModel::Impl::encode_swiglu_matvec(
     id<MTLComputeCommandEncoder> encoder, const Linear& weight,
     id<MTLBuffer> gate_up, id<MTLBuffer> output) {
-    const MetalMatvecKernel selected = swiglu_matvec_kernel(
-        weight.storage, weight.rows, weight.cols);
-    if (!selected.name) return false;
+    MetalMatvecKernel selected;
+    id<MTLComputePipelineState> state;
+    if (weight.cached_matvec_path == 2 && weight.cached_matvec_pipeline != nil) {
+        selected = weight.cached_matvec_geometry;
+        state = weight.cached_matvec_pipeline;
+    } else {
+        selected = swiglu_matvec_kernel(weight.storage, weight.rows, weight.cols);
+        if (!selected.name) return false;
+        state = pipeline(selected.name);
+        weight.cached_matvec_pipeline = state;
+        weight.cached_matvec_geometry = selected;
+        weight.cached_matvec_path = 2;
+    }
     set_buffer(encoder, weight.buffer, 0);
     set_buffer(encoder, gate_up, 1);
     set_buffer(encoder, output, 2);
     set_bytes(encoder, &weight.rows, sizeof(weight.rows), 3);
     set_bytes(encoder, &weight.cols, sizeof(weight.cols), 4);
     set_bytes(encoder, &weight.row_bytes, sizeof(weight.row_bytes), 5);
-    id<MTLComputePipelineState> state = pipeline(selected.name);
     encoder = compute_encoder(encoder);
+    order_before_dispatch(encoder);
     [encoder setComputePipelineState:state];
     if (selected.threadgroup_floats != 0) {
         [encoder setThreadgroupMemoryLength:selected.threadgroup_floats * sizeof(float)
@@ -530,10 +605,8 @@ void MetalModel::Impl::encode_matmul(id<MTLComputeCommandEncoder> encoder,
         bool custom_tensor = false;
         const bool relaxed = options.numerical_policy == MetalNumericalPolicy::Fast &&
             fast_tensor_matmul_available(weight.storage);
-        const bool m5_q6_gate = rows >= 128 &&
-            ns_string(device.name).find("Apple M5") != std::string::npos &&
-            weight.role == TensorRole::FfnGate && weight.layer >= 0 &&
-            weight.layer < 8;
+        const bool m5_q6_selective =
+            device_is_apple_m5(device) && weight.role == TensorRole::FfnDown;
 
         if (relaxed && weight.storage == LinearStorage::Float16) {
             selected_kernel = rows <= 32 ? kF16RelaxedN32Kernel : kF16RelaxedKernel;
@@ -551,7 +624,7 @@ void MetalModel::Impl::encode_matmul(id<MTLComputeCommandEncoder> encoder,
             selected_kernel = rows <= 32 ? kQ5KRelaxedN32Kernel : kQ5KRelaxedKernel;
             custom_tensor = true;
         } else if (relaxed && weight.storage == LinearStorage::Q6K) {
-            if (m5_q6_gate) {
+            if (m5_q6_selective) {
                 selected_kernel = rows <= 32
                     ? kQ6KRelaxedN32Kernel : kQ6KRelaxedKernel;
             } else {
@@ -586,6 +659,7 @@ void MetalModel::Impl::encode_matmul(id<MTLComputeCommandEncoder> encoder,
         }
 
         encoder = compute_encoder(encoder);
+        order_before_dispatch(encoder);
         [encoder setComputePipelineState:state];
         [encoder setThreadgroupMemoryLength:shared_bytes atIndex:0];
         const NSUInteger row_groups = exact_groups
@@ -604,6 +678,7 @@ void MetalModel::Impl::encode_matmul(id<MTLComputeCommandEncoder> encoder,
     const NSUInteger groups = (weight.rows + 7u) / 8u;
     id<MTLComputePipelineState> state = pipeline(*kernel);
     encoder = compute_encoder(encoder);
+    order_before_dispatch(encoder);
     [encoder setComputePipelineState:state];
     [encoder dispatchThreadgroups:MTLSizeMake(groups, rows, 1)
              threadsPerThreadgroup:MTLSizeMake(256, 1, 1)];
@@ -708,6 +783,7 @@ void MetalModel::Impl::encode_rmsnorm_batch(id<MTLComputeCommandEncoder> encoder
     set_bytes(encoder, &epsilon, sizeof(epsilon), 5);
     id<MTLComputePipelineState> state = pipeline("celeg_rmsnorm_batch");
     encoder = compute_encoder(encoder);
+    order_before_dispatch(encoder);
     [encoder setComputePipelineState:state];
     [encoder dispatchThreadgroups:MTLSizeMake(rows, 1, 1)
        threadsPerThreadgroup:MTLSizeMake(256, 1, 1)];

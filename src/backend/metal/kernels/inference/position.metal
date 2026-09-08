@@ -1,3 +1,17 @@
+/**
+ * @brief Q/K norm, split-half RoPE, and KV store with one thread per pair.
+ *
+ * The legacy mapping used one thread per head and serialized the norm, the
+ * per-pair transcendentals, and the stores. Here one 32-thread threadgroup
+ * serves one head and each lane owns a strided pair subset: phase one
+ * reduces the per-head norm denominators with a single-simdgroup
+ * `simd_sum` (no threadgroup exchange needed — the inverse stays in a
+ * register), phase two scales, rotates, and stores its own pairs. The
+ * per-element operation order matches the legacy kernel exactly, so
+ * everything downstream of the inverse agrees bitwise; only the norm
+ * summation order differs (tolerance-level drift). Launch with 32 threads
+ * per threadgroup and `max(query_heads, key_heads)` threadgroups.
+ */
 kernel void celeg_qk_norm_rope_store_kv_split(
     device float* query [[buffer(0)]],
     device const float* query_weight [[buffer(1)]],
@@ -15,52 +29,83 @@ kernel void celeg_qk_norm_rope_store_kv_split(
     constant float& query_epsilon [[buffer(13)]],
     constant float& key_epsilon [[buffer(14)]],
     constant uint& page_tokens [[buffer(15)]],
-    uint head [[thread_position_in_grid]]) {
-    const uint pairs = head_dim / 2;
-    if (head < query_heads) {
+    uint group [[threadgroup_position_in_grid]],
+    uint lane [[thread_index_in_simdgroup]]) {
+    const uint pairs = head_dim / 2u;
+    const uint head = group;
+    const bool has_query = head < query_heads;
+    const bool has_key = head < key_heads;
+    if (!has_query && !has_key) return;
+    float query_sum = 0.0f;
+    float key_sum = 0.0f;
+    if (has_query) {
         const size_t base = static_cast<size_t>(head) * head_dim;
-        float sum = 0.0f;
-        for (uint d = 0; d < head_dim; ++d) sum += query[base + d] * query[base + d];
-        const float inverse = rsqrt(sum / static_cast<float>(head_dim) + query_epsilon);
-        for (uint d = 0; d < head_dim; ++d) query[base + d] *= inverse * query_weight[d];
-        for (uint pair = 0; pair < pairs; ++pair) {
+        for (uint pair = lane; pair < pairs; pair += 32u) {
+            const float x = query[base + pair];
+            const float y = query[base + pairs + pair];
+            query_sum += x * x + y * y;
+        }
+        if (2u * pairs < head_dim && lane == 0) {
+            const float tail = query[base + head_dim - 1u];
+            query_sum += tail * tail;
+        }
+    }
+    if (has_key) {
+        const size_t base = static_cast<size_t>(head) * head_dim;
+        for (uint pair = lane; pair < pairs; pair += 32u) {
+            const float x = key[base + pair];
+            const float y = key[base + pairs + pair];
+            key_sum += x * x + y * y;
+        }
+        if (2u * pairs < head_dim && lane == 0) {
+            const float tail = key[base + head_dim - 1u];
+            key_sum += tail * tail;
+        }
+    }
+    const float query_inverse = has_query
+        ? rsqrt(simd_sum(query_sum) / static_cast<float>(head_dim) + query_epsilon)
+        : 0.0f;
+    const float key_inverse = has_key
+        ? rsqrt(simd_sum(key_sum) / static_cast<float>(head_dim) + key_epsilon)
+        : 0.0f;
+    if (has_query) {
+        const size_t base = static_cast<size_t>(head) * head_dim;
+        for (uint pair = lane; pair < pairs; pair += 32u) {
             const float frequency = pow(theta, -2.0f * static_cast<float>(pair) /
-                                              static_cast<float>(head_dim));
+                                               static_cast<float>(head_dim));
             const float angle = static_cast<float>(position) * frequency;
             const float c = cos(angle);
             const float s = sin(angle);
             const size_t first = base + pair;
             const size_t second = base + pairs + pair;
-            const float x = query[first];
-            const float y = query[second];
+            const float x = query[first] * (query_inverse * query_weight[pair]);
+            const float y = query[second] * (query_inverse * query_weight[pairs + pair]);
             query[first] = (x * c - y * s) * query_scale;
             query[second] = (y * c + x * s) * query_scale;
         }
     }
-    if (head < key_heads) {
+    if (has_key) {
         const size_t base = static_cast<size_t>(head) * head_dim;
-        float sum = 0.0f;
-        for (uint d = 0; d < head_dim; ++d) sum += key[base + d] * key[base + d];
-        const float inverse = rsqrt(sum / static_cast<float>(head_dim) + key_epsilon);
-        for (uint d = 0; d < head_dim; ++d) key[base + d] *= inverse * key_weight[d];
-        for (uint pair = 0; pair < pairs; ++pair) {
+        for (uint pair = lane; pair < pairs; pair += 32u) {
             const float frequency = pow(theta, -2.0f * static_cast<float>(pair) /
-                                              static_cast<float>(head_dim));
+                                               static_cast<float>(head_dim));
             const float angle = static_cast<float>(position) * frequency;
             const float c = cos(angle);
             const float s = sin(angle);
             const size_t first = base + pair;
             const size_t second = base + pairs + pair;
-            const float x = key[first];
-            const float y = key[second];
+            const float x = key[first] * (key_inverse * key_weight[pair]);
+            const float y = key[second] * (key_inverse * key_weight[pairs + pair]);
             key[first] = x * c - y * s;
             key[second] = y * c + x * s;
         }
         const size_t cache_base = static_cast<size_t>(position) *
             static_cast<size_t>(key_heads) * head_dim + base;
-        for (uint d = 0; d < head_dim; ++d) {
-            key_cache[cache_base + d] = key[base + d];
-            value_cache[cache_base + d] = value[base + d];
+        for (uint pair = lane; pair < pairs; pair += 32u) {
+            key_cache[cache_base + pair] = key[base + pair];
+            key_cache[cache_base + pairs + pair] = key[base + pairs + pair];
+            value_cache[cache_base + pair] = value[base + pair];
+            value_cache[cache_base + pairs + pair] = value[base + pairs + pair];
         }
     }
 }

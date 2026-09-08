@@ -109,6 +109,7 @@ void MetalModel::Impl::encode_short_convolution_batch(
         id<MTLComputePipelineState> state = pipeline("celeg_shortconv_batch_ring");
         constexpr NSUInteger threads = 256;
         encoder = compute_encoder(encoder);
+        order_before_dispatch(encoder);
         [encoder setComputePipelineState:state];
         [encoder dispatchThreadgroups:MTLSizeMake((hidden_width + threads - 1u) / threads, 1, 1)
                threadsPerThreadgroup:MTLSizeMake(threads, 1, 1)];
