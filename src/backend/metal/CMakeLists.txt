@@ -28,7 +28,14 @@ set(CELEG_METAL_SHADER_SOURCES
     src/backend/metal/kernels/probe.metal
     src/backend/metal/kernels/inference.metal
     src/backend/metal/kernels/inference/common.metal
-    src/backend/metal/kernels/inference/vector.metal
+    src/backend/metal/kernels/inference/matvec_input.metal
+    src/backend/metal/kernels/inference/matvec_dense.metal
+    src/backend/metal/kernels/inference/matvec_q80.metal
+    src/backend/metal/kernels/inference/matvec_q6k.metal
+    src/backend/metal/kernels/inference/matvec_q4k.metal
+    src/backend/metal/kernels/inference/matvec_q40_q5k.metal
+    src/backend/metal/kernels/inference/matvec_kernels.metal
+    src/backend/metal/kernels/inference/embeddings.metal
     src/backend/metal/kernels/inference/dense_matvec_rows.metal
     src/backend/metal/kernels/inference/state.metal
     src/backend/metal/kernels/inference/projection.metal

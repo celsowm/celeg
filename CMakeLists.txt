@@ -240,7 +240,14 @@ if(CELEG_ENABLE_METAL)
     enable_language(OBJCXX)
     set(CELEG_METAL_INFERENCE_SOURCES
         src/backend/metal/kernels/inference/common.metal
-        src/backend/metal/kernels/inference/vector.metal
+        src/backend/metal/kernels/inference/matvec_input.metal
+        src/backend/metal/kernels/inference/matvec_dense.metal
+        src/backend/metal/kernels/inference/matvec_q80.metal
+        src/backend/metal/kernels/inference/matvec_q6k.metal
+        src/backend/metal/kernels/inference/matvec_q4k.metal
+        src/backend/metal/kernels/inference/matvec_q40_q5k.metal
+        src/backend/metal/kernels/inference/matvec_kernels.metal
+        src/backend/metal/kernels/inference/embeddings.metal
         src/backend/metal/kernels/inference/state.metal
         src/backend/metal/kernels/inference/projection.metal
         src/backend/metal/kernels/inference/batch.metal
