@@ -4,7 +4,7 @@
 #include "kernels/kernels.cuh"
 #include "backend/cuda/gemm_dispatcher.hpp"
 #include "weight_layout.hpp"
-#include "celeg/backend/cpu/kernels.hpp"
+#include "celeg/backend/cpu/gated_delta.hpp"
 #include "celeg/model/reference.hpp"
 #include "backend/cuda/paged_kv.hpp"
 #include "cuda/sampling_tests.hpp"
@@ -1009,7 +1009,7 @@ int main() {
         CELEG_CUDA(cudaStreamSynchronize(stream.get()));
         for (int i = 0; i < head_dim; ++i) {
             expect_near(to_float(a[static_cast<size_t>(i)]),
-                        to_float(b[static_cast<size_t>(i)]), 0.03f);
+                        to_float(b[static_cast<size_t>(i)], 0.03f));
         }
     }
 
