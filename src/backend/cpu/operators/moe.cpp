@@ -1,6 +1,6 @@
 #include "moe.hpp"
 #include "common.hpp"
-#include "celeg/backend/cpu/elementwise.hpp"
+#include "../kernels/math.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -140,6 +140,7 @@ void execute_cpu_moe_token(CpuExecutionContext& context, size_t layer,
                            const MoeLayerProgram& semantics) {
     auto& shared = context.shared;
     auto& workspace = context.workspace;
+    const CpuMathEngine& math = cpu_math_engine(shared.linear.isa());
     const size_t hidden = static_cast<size_t>(shared.program.hidden);
     const int experts = semantics.router.expert_count;
     const int selected = semantics.router.experts_per_token;
@@ -177,7 +178,7 @@ void execute_cpu_moe_token(CpuExecutionContext& context, size_t layer,
             w2 = &weights.expert_w2[static_cast<size_t>(expert)];
         }
         shared.linear.gemv(*w13, workspace.normed.data(), workspace.gate_up.data());
-        cpu_swiglu(workspace.gate_up.data(), workspace.activated.data(), intermediate);
+        math.swiglu(workspace.gate_up.data(), workspace.activated.data(), intermediate);
         shared.linear.gemv(*w2, workspace.activated.data(), workspace.op_output.data());
         const float route_weight = workspace.moe_weights[static_cast<size_t>(route_index)];
         for (size_t d = 0; d < hidden; ++d) {
@@ -189,8 +190,8 @@ void execute_cpu_moe_token(CpuExecutionContext& context, size_t layer,
         const int shared_intermediate = semantics.shared->mlp.intermediate_size;
         shared.linear.gemv(weights.shared_w13, workspace.normed.data(),
                            workspace.gate_up.data());
-        cpu_swiglu(workspace.gate_up.data(), workspace.activated.data(),
-                   shared_intermediate);
+        math.swiglu(workspace.gate_up.data(), workspace.activated.data(),
+                    shared_intermediate);
         shared.linear.gemv(weights.shared_w2, workspace.activated.data(),
                            workspace.shared_output.data());
         float gate = 1.0f;
@@ -213,6 +214,7 @@ void execute_cpu_moe_chunk(CpuExecutionContext& context, size_t layer,
                            size_t rows, bool& normed_q8_ready) {
     auto& shared = context.shared;
     auto& workspace = context.workspace;
+    const CpuMathEngine& math = cpu_math_engine(shared.linear.isa());
     const size_t hidden = static_cast<size_t>(shared.program.hidden);
     const int experts = semantics.router.expert_count;
     const int selected = semantics.router.experts_per_token;
@@ -306,10 +308,10 @@ void execute_cpu_moe_chunk(CpuExecutionContext& context, size_t layer,
                                workspace.moe_gathered_normed.data(),
                                workspace.moe_gathered_gate_up.data());
     cpu_parallel_rows(shared.pool, routes, [&](size_t route) {
-        cpu_swiglu(workspace.moe_gathered_gate_up.data() +
-                       route * 2ULL * static_cast<size_t>(intermediate),
-                   workspace.moe_gathered_activated.data() +
-                       route * static_cast<size_t>(intermediate), intermediate);
+        math.swiglu(workspace.moe_gathered_gate_up.data() +
+                        route * 2ULL * static_cast<size_t>(intermediate),
+                    workspace.moe_gathered_activated.data() +
+                        route * static_cast<size_t>(intermediate), intermediate);
     });
     workspace.moe_gemm_jobs.clear();
     for (int expert = 0; expert < experts; ++expert) {
@@ -343,11 +345,11 @@ void execute_cpu_moe_chunk(CpuExecutionContext& context, size_t layer,
                        workspace.chunk_normed.data(), workspace.chunk_gate_up.data(),
                        rows, hidden, normed_q8_ready);
         cpu_parallel_rows(shared.pool, rows, [&](size_t row) {
-            cpu_swiglu(workspace.chunk_gate_up.data() +
-                           row * 2ULL * static_cast<size_t>(shared_intermediate),
-                       workspace.chunk_activated.data() +
-                           row * static_cast<size_t>(shared_intermediate),
-                       shared_intermediate);
+            math.swiglu(workspace.chunk_gate_up.data() +
+                            row * 2ULL * static_cast<size_t>(shared_intermediate),
+                        workspace.chunk_activated.data() +
+                            row * static_cast<size_t>(shared_intermediate),
+                        shared_intermediate);
         });
         cpu_layer_gemm(shared, workspace, weights.shared_w2,
                        workspace.chunk_activated.data(), workspace.shared_output.data(),
