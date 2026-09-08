@@ -233,7 +233,7 @@ void CpuCompiledModel::forward_chunk(std::span<const int32_t> tokens,
                         position, position, position};
                     const auto& rope_position = explicit_rope ? *explicit_rope : scalar_rope;
                     apply_cpu_attention_qk(
-                        layout, *attention,
+                        layout, *attention, math,
                         workspace_.chunk_qkv.data() + row * layout.query_projection_width(),
                         nullptr, nullptr, position, rope_position);
                 });
@@ -488,7 +488,7 @@ void CpuCompiledModel::forward_chunk(std::span<const int32_t> tokens,
                     const std::array<int32_t, 3> scalar_rope = {
                         position, position, position};
                     const auto& rope_position = explicit_rope ? *explicit_rope : scalar_rope;
-                    apply_cpu_attention_qk(layout, *attention, q, k, v, position,
+                    apply_cpu_attention_qk(layout, *attention, math, q, k, v, position,
                                            rope_position);
                 });
                 const int owner = shared->layer_to_kv_owner.at(index);
