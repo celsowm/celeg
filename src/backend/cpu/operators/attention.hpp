@@ -6,8 +6,11 @@
 
 namespace celeg {
 
+class CpuMathEngine;
+
 void apply_cpu_attention_qk(const AttentionSpec& layout,
                             const CpuCompiledModel::AttentionWeights& weights,
+                            const CpuMathEngine& math,
                             float* query,
                             float* key,
                             float* value,
