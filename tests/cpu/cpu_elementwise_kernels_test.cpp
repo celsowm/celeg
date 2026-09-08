@@ -1,4 +1,5 @@
-#include "celeg/backend/cpu/kernels.hpp"
+#include "celeg/backend/cpu/elementwise.hpp"
+#include "celeg/backend/cpu/normalization.hpp"
 #include "support/assertions.hpp"
 
 #include <cmath>
