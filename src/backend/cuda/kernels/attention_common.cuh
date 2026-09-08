@@ -1,3 +1,4 @@
+#pragma once
 
 __device__ __forceinline__ float attention_dot_int8(const __nv_bfloat16* query,
                                     const int8_t* key, float key_scale,
