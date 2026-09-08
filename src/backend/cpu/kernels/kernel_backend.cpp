@@ -53,8 +53,9 @@ bool CpuKernelBackend::supports_hw(const CpuCapabilities& caps) const {
         case CpuIsa::Auto: return false;
         case CpuIsa::Scalar: return true;
         case CpuIsa::Avx2: return caps.avx2 && caps.fma;
-        case CpuIsa::AvxVnni: return caps.avx_vnni;
-        case CpuIsa::Avx512Vnni: return caps.avx512f && caps.avx512_vnni;
+        case CpuIsa::AvxVnni: return caps.avx_vnni && caps.fma;
+        case CpuIsa::Avx512Vnni:
+            return caps.supports(CpuIsa::Avx512Vnni) && caps.fma;
         case CpuIsa::AmxInt8: return caps.amx_tile && caps.amx_int8;
         case CpuIsa::Neon: return caps.neon;
         case CpuIsa::DotProd: return caps.dotprod;
@@ -95,8 +96,10 @@ const CpuKernelBackend& cpu_resolve_kernel_backend(CpuIsa requested,
                     "requested CPU ISA was not compiled into this binary");
             }
             if (!backend.supports_hw(caps)) {
-                if (requested == CpuIsa::Avx2) {
-                    throw std::invalid_argument("AVX2 CPU backend requires FMA");
+                if (requested == CpuIsa::Avx2 || requested == CpuIsa::AvxVnni ||
+                    requested == CpuIsa::Avx512Vnni) {
+                    throw std::invalid_argument(
+                        "requested x86 vector CPU backend requires its ISA features and FMA");
                 }
                 throw std::invalid_argument(
                     "requested CPU ISA is not supported by this host");
