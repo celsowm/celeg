@@ -3,7 +3,6 @@
 #include "celeg/backend/cpu/elementwise.hpp"
 #include "celeg/backend/cpu/kernel_backend.hpp"
 #include "celeg/backend/cpu/normalization.hpp"
-#include "celeg/backend/cpu/isa.hpp"
 
 #include <algorithm>
 #include <array>
@@ -24,16 +23,9 @@
 namespace celeg {
 namespace {
 
-#if CELEG_CPU_X86
-static const bool g_has_avx2_fma = []() {
-    auto caps = detect_cpu_capabilities();
-    return caps.avx2 && caps.fma;
-}();
-#endif
-
 bool uses_avx2_math(CpuIsa isa) {
     return isa == CpuIsa::Avx2 || isa == CpuIsa::AvxVnni ||
-           isa == CpuIsa::Avx512Vnni;
+           isa == CpuIsa::Avx512Vnni || isa == CpuIsa::AmxInt8;
 }
 
 void cpu_rmsnorm_scalar(const float* input, const float* weight, float* output,
@@ -91,6 +83,9 @@ CpuMathEngine::CpuMathEngine(const CpuKernelBackend& backend)
       residual_add_(cpu_residual_add_scalar),
       swiglu_(cpu_swiglu_scalar),
       qk_norm_rope_(detail::select_cpu_qk_norm_rope_kernel(backend.isa)) {
+    if (backend.isa == CpuIsa::Auto) {
+        throw std::invalid_argument("CPU math engine requires a resolved ISA");
+    }
 #if (defined(__GNUC__) || defined(__clang__)) && (defined(__x86_64__) || defined(__i386__))
     if (uses_avx2_math(backend.isa)) {
         rmsnorm_ = cpu_rmsnorm_avx2;
@@ -107,8 +102,10 @@ CpuMathEngine::CpuMathEngine(const CpuKernelBackend& backend)
 }
 
 const CpuMathEngine& cpu_math_engine(CpuIsa isa) {
-    static const std::array<CpuMathEngine, 11> engines = {
-        CpuMathEngine(cpu_kernel_backend(CpuIsa::Auto)),
+    if (isa == CpuIsa::Auto) {
+        throw std::invalid_argument("CPU math engine requires a resolved ISA");
+    }
+    static const std::array<CpuMathEngine, 10> engines = {
         CpuMathEngine(cpu_kernel_backend(CpuIsa::Scalar)),
         CpuMathEngine(cpu_kernel_backend(CpuIsa::Avx2)),
         CpuMathEngine(cpu_kernel_backend(CpuIsa::AvxVnni)),
@@ -121,10 +118,10 @@ const CpuMathEngine& cpu_math_engine(CpuIsa isa) {
         CpuMathEngine(cpu_kernel_backend(CpuIsa::Sme2)),
     };
     const size_t index = static_cast<size_t>(isa);
-    if (index >= engines.size()) {
+    if (index == 0 || index > engines.size()) {
         throw std::invalid_argument("invalid resolved CPU ISA for math engine");
     }
-    return engines[index];
+    return engines[index - 1];
 }
 
 void CpuMathEngine::rmsnorm(const float* input, const float* weight, float* output,
@@ -163,17 +160,6 @@ void cpu_rmsnorm(const float* input, const float* weight, float* output,
     if (!input || !weight || !output || width == 0 || !(eps > 0.0f)) {
         throw std::invalid_argument("invalid RMSNorm arguments");
     }
-#if (defined(__GNUC__) || defined(__clang__)) && (defined(__x86_64__) || defined(__i386__))
-    if (g_has_avx2_fma) {
-        cpu_rmsnorm_avx2(input, weight, output, width, eps);
-        return;
-    }
-#elif defined(_MSC_VER) && CELEG_CPU_X86
-    if (g_has_avx2_fma) {
-        detail::cpu_rmsnorm_avx2_msvc(input, weight, output, width, eps);
-        return;
-    }
-#endif
     cpu_rmsnorm_scalar(input, weight, output, width, eps);
 }
 
@@ -186,33 +172,11 @@ void cpu_rmsnorm_inplace(float* data, const float* weight, size_t width, float e
 
 void cpu_residual_add(float* data, const float* residual, size_t count) {
     if (!data || !residual) throw std::invalid_argument("invalid residual arguments");
-#if (defined(__GNUC__) || defined(__clang__)) && (defined(__x86_64__) || defined(__i386__))
-    if (g_has_avx2_fma) {
-        cpu_residual_add_avx2(data, residual, count);
-        return;
-    }
-#elif defined(_MSC_VER) && CELEG_CPU_X86
-    if (g_has_avx2_fma) {
-        detail::cpu_residual_add_avx2_msvc(data, residual, count);
-        return;
-    }
-#endif
     cpu_residual_add_scalar(data, residual, count);
 }
 
 void cpu_swiglu(const float* gate_up, float* output, size_t count) {
     if (!gate_up || !output) throw std::invalid_argument("invalid SwiGLU arguments");
-#if (defined(__GNUC__) || defined(__clang__)) && (defined(__x86_64__) || defined(__i386__))
-    if (g_has_avx2_fma) {
-        cpu_swiglu_avx2(gate_up, output, count);
-        return;
-    }
-#elif defined(_MSC_VER) && CELEG_CPU_X86
-    if (g_has_avx2_fma) {
-        detail::cpu_swiglu_avx2_msvc(gate_up, output, count);
-        return;
-    }
-#endif
     cpu_swiglu_scalar(gate_up, output, count);
 }
 
