@@ -1,5 +1,6 @@
 #include "celeg/backend/cpu/isa.hpp"
-#include "celeg/backend/cpu/kernels.hpp"
+#include "celeg/backend/cpu/kernel_backend.hpp"
+#include "celeg/backend/cpu/linear.hpp"
 #include "celeg/backend/cpu/quantization.hpp"
 #include "celeg/backend/cpu/thread_pool.hpp"
 #include "celeg/backend/cpu/topology.hpp"
@@ -40,21 +41,16 @@ int main(int argc, char** argv) {
         const auto matrix = celeg::quantize_float_groupwise_q4(
             source.data(), rows, cols, static_cast<size_t>(group));
         const auto caps = celeg::detect_cpu_capabilities();
-        const celeg::CpuIsa isa = requested == celeg::CpuIsa::Auto
-            ? caps.best_isa() : requested;
-        if (!celeg::cpu_isa_compiled(isa)) {
-            throw std::invalid_argument("requested ISA was not compiled into this binary");
-        }
-        if (!caps.supports(isa)) {
-            throw std::invalid_argument("requested ISA is not supported by this host");
-        }
+        const celeg::CpuKernelBackend& backend =
+            celeg::cpu_resolve_kernel_backend(requested, caps);
+        const celeg::CpuIsa isa = backend.isa;
         if (isa == celeg::CpuIsa::AmxInt8 || isa == celeg::CpuIsa::DotProd ||
             isa == celeg::CpuIsa::I8mm || isa == celeg::CpuIsa::Sve2 ||
             isa == celeg::CpuIsa::Sme2) {
             throw std::invalid_argument("requested ISA has no executable v0.0.20 kernel");
         }
         celeg::CpuThreadPool pool(threads, affinity);
-        celeg::CpuLinearEngine linear(isa, pool);
+        celeg::CpuLinearEngine linear(backend, pool);
         auto execute = [&] {
             if (batch == 1) linear.gemv(matrix, input.data(), output.data());
             else linear.gemm(matrix, input.data(), output.data(), batch);
