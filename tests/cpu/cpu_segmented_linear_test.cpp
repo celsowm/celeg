@@ -1,4 +1,5 @@
-#include "celeg/backend/cpu/kernels.hpp"
+#include "celeg/backend/cpu/kernel_backend.hpp"
+#include "celeg/backend/cpu/linear.hpp"
 #include "support/assertions.hpp"
 
 #include <cmath>
@@ -32,8 +33,9 @@ int main() {
     segmented.validate();
 
     celeg::CpuThreadPool pool(6);
+    const celeg::CpuCapabilities caps = celeg::detect_cpu_capabilities();
     celeg::CpuLinearEngine linear(
-        celeg::detect_cpu_capabilities().best_isa(), pool);
+        celeg::cpu_resolve_kernel_backend(celeg::CpuIsa::Auto, caps), pool);
 
     std::vector<float> actual(rows);
     std::vector<float> expected(rows);
