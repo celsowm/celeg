@@ -1,5 +1,6 @@
 #include "../detail/model_internal.hpp"
 #include "attention.hpp"
+#include "celeg/backend/cpu/normalization.hpp"
 
 #include <algorithm>
 #include <cstdlib>
