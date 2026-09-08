@@ -1,4 +1,6 @@
 #include "detail/model_internal.hpp"
+#include "celeg/backend/cpu/elementwise.hpp"
+#include "celeg/backend/cpu/normalization.hpp"
 #include "operators/attention.hpp"
 #include "operators/feed_forward.hpp"
 #include "operators/moe.hpp"
