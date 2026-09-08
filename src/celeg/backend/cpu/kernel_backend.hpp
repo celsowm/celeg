@@ -2,7 +2,7 @@
 
 #include "celeg/backend/cpu/isa.hpp"
 #include "celeg/backend/cpu/gguf.hpp"
-#include "celeg/backend/cpu/kernels.hpp"
+#include "celeg/backend/cpu/quantized_dot.hpp"
 
 namespace celeg {
 
