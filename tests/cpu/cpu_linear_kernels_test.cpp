@@ -1,10 +1,10 @@
+#include "celeg/backend/cpu/kernel_backend.hpp"
 #include "celeg/backend/cpu/linear.hpp"
 #include "celeg/backend/cpu/quantized_dot.hpp"
 #include "celeg/quantization/scalars.hpp"
 #include "support/assertions.hpp"
 
 #include <cmath>
-#include <stdexcept>
 #include <vector>
 
 namespace {
@@ -13,7 +13,9 @@ std::vector<float> run_gemv(const celeg::Q4GroupMatrix& weight,
                             const std::vector<float>& input,
                             celeg::CpuIsa isa) {
     celeg::CpuThreadPool pool(4);
-    celeg::CpuLinearEngine engine(isa, pool);
+    const celeg::CpuCapabilities caps = celeg::detect_cpu_capabilities();
+    celeg::CpuLinearEngine engine(
+        celeg::cpu_resolve_kernel_backend(isa, caps), pool);
     std::vector<float> output(weight.rows);
     engine.gemv(weight, input.data(), output.data());
     return output;
@@ -31,16 +33,12 @@ void check_close(const std::vector<float>& actual,
 }
 
 int main() {
-    {
-        celeg::CpuThreadPool pool(1);
-        bool rejected_auto = false;
-        try {
-            celeg::CpuLinearEngine engine(celeg::CpuIsa::Auto, pool);
-        } catch (const std::invalid_argument&) {
-            rejected_auto = true;
-        }
-        CELEG_TEST_CHECK(rejected_auto);
-    }
+    const celeg::CpuCapabilities caps = celeg::detect_cpu_capabilities();
+    const celeg::CpuKernelBackend& auto_backend =
+        celeg::cpu_resolve_kernel_backend(celeg::CpuIsa::Auto, caps);
+    CELEG_TEST_CHECK(auto_backend.isa != celeg::CpuIsa::Auto);
+    CELEG_TEST_CHECK(auto_backend.compiled);
+    CELEG_TEST_CHECK(auto_backend.supports_hw(caps));
 
     constexpr size_t rows = 37;
     constexpr size_t cols = 128;
@@ -57,7 +55,6 @@ int main() {
         weights.data(), rows, cols, 32);
     const std::vector<float> scalar = run_gemv(q4, input, celeg::CpuIsa::Scalar);
 
-    const celeg::CpuCapabilities caps = celeg::detect_cpu_capabilities();
     if (caps.supports(celeg::CpuIsa::Avx2) && caps.fma &&
         celeg::cpu_isa_compiled(celeg::CpuIsa::Avx2)) {
         const auto avx2 = run_gemv(q4, input, celeg::CpuIsa::Avx2);
@@ -96,7 +93,7 @@ int main() {
     }
 
     celeg::CpuThreadPool pool(6);
-    celeg::CpuLinearEngine best_engine(caps.best_isa(), pool);
+    celeg::CpuLinearEngine best_engine(auto_backend, pool);
     std::vector<float> batch_output(batch * rows);
     best_engine.gemm(q4, batch_input.data(), batch_output.data(), batch);
     for (size_t b = 0; b < batch; ++b) {
