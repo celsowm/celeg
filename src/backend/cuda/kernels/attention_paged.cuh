@@ -468,25 +468,12 @@ __global__ void gqa_decode_segment_reduce_batch_kernel(
     if (row >= rows) return;
     const size_t base =
         (static_cast<size_t>(row) * q_heads + query_head) * chunks;
-    float global_max = -FLT_MAX;
-    for (int chunk = 0; chunk < chunks; ++chunk) {
-        global_max = fmaxf(global_max, partial_max[base + chunk]);
-    }
-    float denominator = 0.0f;
-    float accumulator = 0.0f;
-    for (int chunk = 0; chunk < chunks; ++chunk) {
-        const float local_denom = partial_denom[base + chunk];
-        if (local_denom == 0.0f) continue;
-        const float factor = expf(partial_max[base + chunk] - global_max);
-        denominator += local_denom * factor;
-        if (lane < head_dim) {
-            accumulator += partial_accum[
-                (base + chunk) * static_cast<size_t>(head_dim) + lane] * factor;
-        }
-    }
+    const float merged = merge_segmented_attention_lane(
+        base, chunks, lane, head_dim,
+        partial_max, partial_denom, partial_accum);
     if (lane < head_dim) {
         out[(static_cast<size_t>(row) * q_heads + query_head) * head_dim + lane] =
-            __float2bfloat16(accumulator / denominator);
+            __float2bfloat16(merged);
     }
 }
 
