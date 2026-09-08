@@ -24,6 +24,10 @@ __device__ __forceinline__ float attention_dot(const __nv_bfloat16* query,
     return block_sum(partial, warp_sums, total);
 }
 
+__device__ __forceinline__ float strict_attention_score(float dot, float scale) {
+    return rounded_bf16_float(rounded_bf16_float(dot) * scale);
+}
+
 /// Online/segmented decode kernels launch with 32 threads and stride
 /// `for (d = lane; d < head_dim; d += 32)`, accumulating into a per-lane
 /// register array. The supported head_dim ceiling is therefore
