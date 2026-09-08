@@ -1,6 +1,7 @@
 #include "feed_forward.hpp"
 
 #include "common.hpp"
+#include "celeg/backend/cpu/elementwise.hpp"
 
 #include <chrono>
 #include <stdexcept>
