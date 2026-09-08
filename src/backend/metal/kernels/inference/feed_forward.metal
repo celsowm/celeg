@@ -1,3 +1,11 @@
+inline float celeg_swiglu(float gate, float up) {
+    return gate / (1.0f + exp(-gate)) * up;
+}
+
+inline float celeg_swiglu_relaxed(float gate, float up) {
+    return gate / (1.0f + fast::exp(-gate)) * up;
+}
+
 kernel void celeg_swiglu_batch_2d(device const float* gate_up [[buffer(0)]],
                                   device float* output [[buffer(1)]],
                                   constant uint& rows [[buffer(2)]],
@@ -10,7 +18,7 @@ kernel void celeg_swiglu_batch_2d(device const float* gate_up [[buffer(0)]],
     const float gate = gate_up[base + column];
     const float up = gate_up[base + width + column];
     output[static_cast<size_t>(token) * width + column] =
-        gate / (1.0f + exp(-gate)) * up;
+        celeg_swiglu(gate, up);
 }
 
 kernel void celeg_swiglu_batch_2d_relaxed(device const float* gate_up [[buffer(0)]],
@@ -25,5 +33,5 @@ kernel void celeg_swiglu_batch_2d_relaxed(device const float* gate_up [[buffer(0
     const float gate = gate_up[base + column];
     const float up = gate_up[base + width + column];
     output[static_cast<size_t>(token) * width + column] =
-        gate / (1.0f + fast::exp(-gate)) * up;
+        celeg_swiglu_relaxed(gate, up);
 }
