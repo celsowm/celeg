@@ -1,3 +1,5 @@
+#pragma once
+
 __global__ void split_qkv_rows_kernel(const __nv_bfloat16* qkv,
                                       __nv_bfloat16* q,
                                       __nv_bfloat16* k,
@@ -179,6 +181,3 @@ void launch_qk_norm_rope_batch_positions(
         CELEG_KERNEL_DEBUG_SYNC(stream);
     }
 }
-
-
-
