@@ -1009,7 +1009,7 @@ int main() {
         CELEG_CUDA(cudaStreamSynchronize(stream.get()));
         for (int i = 0; i < head_dim; ++i) {
             expect_near(to_float(a[static_cast<size_t>(i)]),
-                        to_float(b[static_cast<size_t>(i)], 0.03f));
+                        to_float(b[static_cast<size_t>(i)]), 0.03f);
         }
     }
 
