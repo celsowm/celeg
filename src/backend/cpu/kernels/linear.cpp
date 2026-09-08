@@ -72,9 +72,13 @@ size_t segment_rows(const CpuLinearMatrix& segment) {
 
 CpuLinearEngine::CpuLinearEngine(CpuIsa isa, CpuThreadPool& pool)
     : isa_(isa), pool_(&pool) {
-    const CpuCapabilities caps = detect_cpu_capabilities();
-    const CpuKernelBackend& backend = cpu_resolve_kernel_backend(isa, caps);
-    isa_ = backend.isa;
+    if (isa == CpuIsa::Auto) {
+        throw std::invalid_argument("CpuLinearEngine requires a resolved CPU ISA");
+    }
+    const CpuKernelBackend& backend = cpu_kernel_backend(isa);
+    if (!backend.compiled) {
+        throw std::invalid_argument("CpuLinearEngine ISA is not compiled into this binary");
+    }
     dot_ = backend.kernels.q4_dot;
     q8_dot_ = backend.kernels.q4_q8_dot;
     gguf_dot_ = backend.kernels.gguf_dot;
@@ -497,7 +501,6 @@ void CpuLinearEngine::prepare_gguf_activation(
     }
     quantize_gguf_rows(*pool_, isa_, input, rows, cols, activation);
 }
-
 void CpuLinearEngine::gemm_gguf(std::span<const CpuQ8KBlock> activation,
                                 const CpuLinearWeight& weight, float* output,
                                 size_t rows, float beta) const {
