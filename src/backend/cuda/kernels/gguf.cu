@@ -1,5 +1,6 @@
 #include "kernels/gguf.cuh"
 #include "celeg/checkpoint/gguf_blocks.hpp"
+#include "reductions.cuh"
 
 #include <cuda_fp16.h>
 
@@ -16,6 +17,7 @@ namespace {
 using celeg::gguf_blocks::BlockQ4K;
 using celeg::gguf_blocks::BlockQ6K;
 using celeg::gguf_blocks::q4k_scale_min;
+using celeg::cuda_reductions::warp_sum;
 
 /// Every launcher below is templated over the two types that have native
 /// device kernels. Reaching this means a caller routed a third type here;
@@ -25,13 +27,6 @@ using celeg::gguf_blocks::q4k_scale_min;
 [[noreturn]] void unsupported_native_gguf(GgmlType type, const char* kernel) {
     throw std::runtime_error(std::string("no native CUDA GGUF ") + kernel +
                              " kernel for " + ggml_type_name(type));
-}
-
-__device__ __forceinline__ float warp_reduce_sum(float v) {
-    for (int offset = 16; offset > 0; offset >>= 1) {
-        v += __shfl_down_sync(0xffffffffu, v, offset);
-    }
-    return v;
 }
 
 __device__ __forceinline__ float q4k_value(const BlockQ4K* blk, int col) {
@@ -104,7 +99,7 @@ __global__ void gguf_gemv_kernel(const __nv_bfloat16* __restrict__ x,
                 sum += __bfloat162float(pair.y) * ValueFn(blk, c + 1);
             }
         }
-        sum = warp_reduce_sum(sum);
+        sum = warp_sum(sum);
         if (lane == 0) {
             float value = sum;
             const size_t out_index =
