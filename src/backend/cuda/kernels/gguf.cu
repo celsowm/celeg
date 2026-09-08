@@ -13,6 +13,8 @@ bool cuda_gguf_native_mmq(GgmlType type) {
 }
 namespace {
 
+using celeg::gguf_blocks::BlockQ4K;
+using celeg::gguf_blocks::BlockQ6K;
 using celeg::gguf_blocks::q4k_scale_min;
 
 /// Every launcher below is templated over the two types that have native
@@ -32,17 +34,9 @@ __device__ __forceinline__ float warp_reduce_sum(float v) {
     return v;
 }
 
-struct BlockQ4K {
-    __half d;
-    __half dmin;
-    uint8_t scales[12];
-    uint8_t qs[128];
-};
-
-
 __device__ __forceinline__ float q4k_value(const BlockQ4K* blk, int col) {
-    const float d = __half2float(blk->d);
-    const float dmin = __half2float(blk->dmin);
+    const float d = __half2float(__ushort_as_half(blk->d));
+    const float dmin = __half2float(__ushort_as_half(blk->dmin));
     const int sub = col >> 5;
     const int within = col & 31;
     uint8_t sc, m;
@@ -54,15 +48,8 @@ __device__ __forceinline__ float q4k_value(const BlockQ4K* blk, int col) {
     return d * sc * static_cast<float>(q) - dmin * m;
 }
 
-struct BlockQ6K {
-    uint8_t ql[128];
-    uint8_t qh[64];
-    int8_t scales[16];
-    __half d;
-};
-
 __device__ __forceinline__ float q6k_value(const BlockQ6K* blk, int col) {
-    const float d = __half2float(blk->d);
+    const float d = __half2float(__ushort_as_half(blk->d));
     const int half = col >> 7;
     const int idx = col & 127;
     const int n = idx & 31;
