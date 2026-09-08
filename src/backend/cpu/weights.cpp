@@ -2,6 +2,7 @@
 
 #include "checkpoint/detail/bootstrap.hpp"
 #include "celeg/backend/cpu/compiler.hpp"
+#include "celeg/backend/cpu/kernel_backend.hpp"
 #include "celeg/backend/cpu/weight_codec.hpp"
 #include "celeg/checkpoint/weight_repository.hpp"
 #include "celeg/checkpoint/tensor_names.hpp"
@@ -49,7 +50,7 @@ CpuCompiledModel::Shared::Shared(const std::string& path, int context,
       options(std::move(requested)),
       capabilities(detect_cpu_capabilities()),
       pool(options.threads, options.affinity),
-      linear(options.isa, pool),
+      linear(cpu_resolve_kernel_backend(options.isa, capabilities).isa, pool),
       shape(runtime_topology.exec), dims(runtime_topology.dims) {
     if (max_context <= 0) throw std::invalid_argument("max_context must be positive");
     if (options.kv_page_tokens == 0) {
