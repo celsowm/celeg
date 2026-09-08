@@ -1,6 +1,7 @@
 #if defined(_MSC_VER) && (defined(_M_X64) || defined(_M_IX86))
 
 #include "quantized_dot_avx2_msvc.hpp"
+#include "quantized_dot_common.hpp"
 
 #include "celeg/model/weights/quantization.hpp"
 
@@ -12,12 +13,6 @@
 namespace celeg::detail {
 namespace {
 
-inline int decode_q4(const uint8_t* packed, size_t col) {
-    const uint8_t byte = packed[col >> 1];
-    const uint8_t nibble = (col & 1U) == 0 ? byte & 0x0fU : byte >> 4;
-    return nibble >= 8U ? static_cast<int>(nibble) - 16 : static_cast<int>(nibble);
-}
-
 inline __m256i unpack_q4_biased(const uint8_t* packed) {
     const __m128i bytes = _mm_loadu_si128(reinterpret_cast<const __m128i*>(packed));
     const __m128i mask = _mm_set1_epi8(0x0f);
@@ -25,7 +20,7 @@ inline __m256i unpack_q4_biased(const uint8_t* packed) {
     const __m128i high = _mm_and_si128(_mm_srli_epi16(bytes, 4), mask);
     __m256i weights = _mm256_castsi128_si256(_mm_unpacklo_epi8(low, high));
     weights = _mm256_inserti128_si256(weights, _mm_unpackhi_epi8(low, high), 1);
-    return _mm256_xor_si256(weights, _mm256_set1_epi8(8));
+    return _mm256_xor_si256(weights, _mm256_set1_epi8(kQ4UnsignedBias));
 }
 
 inline __m256i dot32_epi32(__m256i biased_weights, const int8_t* activation) {
@@ -63,7 +58,7 @@ float q4_dot_avx2_msvc(const uint8_t* packed_row, const uint16_t* scales_bf16,
     __m256 total = _mm256_setzero_ps();
     size_t col = 0;
     const __m128i mask_0f = _mm_set1_epi8(0x0f);
-    const __m128i val_8 = _mm_set1_epi8(8);
+    const __m128i val_8 = _mm_set1_epi8(kQ4UnsignedBias);
     float scalar_tail = 0.0f;
     for (size_t group = 0; group < groups_per_row; ++group) {
         const float scale_val = celeg::bf16_bits_to_float(scales_bf16[group]);
@@ -94,12 +89,12 @@ float q4_dot_avx2_msvc(const uint8_t* packed_row, const uint16_t* scales_bf16,
             group_total = _mm256_fmadd_ps(_mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(signed_bytes)), _mm256_loadu_ps(activation + col), group_total);
         }
         total = _mm256_fmadd_ps(group_total, scale, total);
-        for (; col < group_end; ++col) scalar_tail += static_cast<float>(decode_q4(packed_row, col)) * scale_val * activation[col];
+        for (; col < group_end; ++col) scalar_tail += static_cast<float>(decode_signed_q4(packed_row, col)) * scale_val * activation[col];
     }
     float result = hsum256_ps(total) + scalar_tail;
     for (; col < cols; ++col) {
         const size_t group = col / group_size;
-        result += static_cast<float>(decode_q4(packed_row, col)) * celeg::bf16_bits_to_float(scales_bf16[group]) * activation[col];
+        result += static_cast<float>(decode_signed_q4(packed_row, col)) * celeg::bf16_bits_to_float(scales_bf16[group]) * activation[col];
     }
     return result;
 }
@@ -131,7 +126,7 @@ float q4_q8_dot_avx2_msvc(const uint8_t* packed_row, const uint16_t* weight_scal
         int32_t scalar_dot = 0;
         int32_t scalar_activation_sum = 0;
         for (size_t col = simd_end; col < end; ++col) {
-            scalar_dot += decode_q4(packed_row, col) * static_cast<int32_t>(activation_q8[col]);
+            scalar_dot += decode_signed_q4(packed_row, col) * static_cast<int32_t>(activation_q8[col]);
             scalar_activation_sum += activation_q8[col];
         }
         if (scalar_dot != 0) scalar_total += static_cast<float>(scalar_dot) * combined;
@@ -139,7 +134,7 @@ float q4_q8_dot_avx2_msvc(const uint8_t* packed_row, const uint16_t* weight_scal
             bias -= combined * static_cast<float>(scalar_activation_sum);
         }
     }
-    return hsum256_ps(accumulator) - 8.0f * bias + scalar_total;
+    return hsum256_ps(accumulator) - static_cast<float>(kQ4UnsignedBias) * bias + scalar_total;
 }
 
 void q4_q8_dot4_avx2_msvc(const uint8_t* packed_row,
@@ -172,7 +167,7 @@ void q4_q8_dot4_avx2_msvc(const uint8_t* packed_row,
         }
     }
     for (size_t lane = 0; lane < 4; ++lane) {
-        output4[lane] = hsum256_ps(accumulator[lane]) - 8.0f * bias[lane];
+        output4[lane] = hsum256_ps(accumulator[lane]) - static_cast<float>(kQ4UnsignedBias) * bias[lane];
     }
 }
 
