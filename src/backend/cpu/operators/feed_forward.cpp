@@ -1,6 +1,7 @@
 #include "feed_forward.hpp"
 
 #include "common.hpp"
+#include "../kernels/math.hpp"
 #include "celeg/backend/cpu/elementwise.hpp"
 
 #include <chrono>
@@ -57,13 +58,14 @@ void execute_cpu_dense_feed_forward_token(
     const CpuCompiledModel::DenseFeedForwardWeights& weights) {
     auto& shared = context.shared;
     auto& workspace = context.workspace;
+    const CpuMathEngine& math = cpu_math_engine(shared.linear.isa());
     const int intermediate = intermediate_size(shared, layer);
     const auto started = Clock::now();
     shared.linear.gemv(weights.w13, workspace.normed.data(), workspace.gate_up.data());
     if (uses_gelu_tanh(shared, layer)) {
         cpu_gated_gelu_tanh(workspace.gate_up.data(), workspace.activated.data(), intermediate);
     } else {
-        cpu_swiglu(workspace.gate_up.data(), workspace.activated.data(), intermediate);
+        math.swiglu(workspace.gate_up.data(), workspace.activated.data(), intermediate);
     }
     shared.linear.gemv(weights.w2, workspace.activated.data(), workspace.mlp_output.data());
     if (context.session.phase == SessionPhase::Prefilling) {
@@ -77,6 +79,7 @@ void execute_cpu_dense_feed_forward_chunk(
     size_t rows, bool& normed_q8_ready) {
     auto& shared = context.shared;
     auto& workspace = context.workspace;
+    const CpuMathEngine& math = cpu_math_engine(shared.linear.isa());
     const int intermediate = intermediate_size(shared, layer);
     const auto started = Clock::now();
     cpu_chunk_layer_gemm(context, weights.w13,
@@ -93,7 +96,7 @@ void execute_cpu_dense_feed_forward_chunk(
         if (uses_gelu_tanh(shared, layer)) {
             cpu_gated_gelu_tanh(gate_up, activated, intermediate);
         } else {
-            cpu_swiglu(gate_up, activated, intermediate);
+            math.swiglu(gate_up, activated, intermediate);
         }
     });
     const auto output_started = Clock::now();
