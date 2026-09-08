@@ -31,6 +31,13 @@ if(TARGET celeg_cuda_backend)
         add_test(NAME cuda_kernels_test COMMAND cuda_kernels_test)
     endif()
 
+    add_executable(celeg-segmented-merge-benchmark
+        apps/benchmark/cuda/segmented_merge.cu)
+    target_include_directories(celeg-segmented-merge-benchmark PRIVATE
+        ${CELEG_CUDA_TEST_PRIVATE_INCLUDE_DIRS})
+    target_link_libraries(celeg-segmented-merge-benchmark PRIVATE
+        celeg_cuda_backend)
+
     foreach(test_name IN ITEMS
         cuda_bidirectional_attention_test
         cuda_block_sparse_attention_test
