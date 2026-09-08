@@ -1,5 +1,6 @@
 #include "celeg/backend/cpu/linear.hpp"
 #include "celeg/backend/cpu/kernel_backend.hpp"
+#include "linear_dispatch.hpp"
 
 #include "celeg/model/weights/quantization.hpp"
 
@@ -42,32 +43,6 @@ void quantize_gguf_rows(CpuThreadPool& pool, CpuIsa isa, const float* input,
     });
 }
 
-}
-
-enum class LinearStorageKind { Q4, Int8, Gguf, Bf16 };
-
-LinearStorageKind classify_weight(const CpuLinearWeight& weight) {
-    bool any_q4 = false;
-    bool any_int8 = false;
-    bool any_gguf = false;
-    bool any_bf16 = false;
-    for (const CpuLinearMatrix& segment : weight.segments) {
-        if (std::holds_alternative<Q4GroupMatrix>(segment)) any_q4 = true;
-        else if (std::holds_alternative<CpuInt8Matrix>(segment)) any_int8 = true;
-        else if (std::holds_alternative<CpuBf16Matrix>(segment)) any_bf16 = true;
-        else any_gguf = true;
-    }
-    if (any_q4 && !any_int8 && !any_gguf && !any_bf16) return LinearStorageKind::Q4;
-    if (any_int8 && !any_q4 && !any_gguf && !any_bf16) return LinearStorageKind::Int8;
-    if (any_gguf && !any_q4 && !any_int8 && !any_bf16) return LinearStorageKind::Gguf;
-    if (any_bf16 && !any_q4 && !any_int8 && !any_gguf) return LinearStorageKind::Bf16;
-    throw std::logic_error("mixed CPU linear storage (Q4/INT8/GGUF/BF16) is unsupported");
-}
-
-size_t segment_rows(const CpuLinearMatrix& segment) {
-    return std::visit([](const auto& matrix) {
-        return static_cast<size_t>(matrix.rows);
-    }, segment);
 }
 
 CpuLinearEngine::CpuLinearEngine(CpuIsa isa, CpuThreadPool& pool)
@@ -211,11 +186,11 @@ void CpuLinearEngine::embedding(const Q4GroupMatrix& table, int32_t token,
 }
 
 void CpuLinearEngine::gemv(const CpuLinearWeight& weight, const float* input,
-                            float* output, float beta) const {
+                           float* output, float beta) const {
     weight.validate();
     if (!input || !output) throw std::invalid_argument("null CPU GEMV buffer");
-    const LinearStorageKind kind = classify_weight(weight);
-    if (kind == LinearStorageKind::Q4) {
+    const detail::LinearStorageKind kind = detail::classify_linear_weight(weight);
+    if (kind == detail::LinearStorageKind::Q4) {
         size_t offset = 0;
         for (const CpuLinearMatrix& segment : weight.segments) {
             const Q4GroupMatrix& matrix = std::get<Q4GroupMatrix>(segment);
@@ -224,19 +199,19 @@ void CpuLinearEngine::gemv(const CpuLinearWeight& weight, const float* input,
         }
         return;
     }
-    if (kind == LinearStorageKind::Int8) {
+    if (kind == detail::LinearStorageKind::Int8) {
         size_t offset = 0;
         for (const CpuLinearMatrix& segment : weight.segments) {
             gemv_int8(std::get<CpuInt8Matrix>(segment), input, output + offset, beta);
-            offset += segment_rows(segment);
+            offset += detail::linear_segment_rows(segment);
         }
         return;
     }
-    if (kind == LinearStorageKind::Bf16) {
+    if (kind == detail::LinearStorageKind::Bf16) {
         size_t offset = 0;
         for (const CpuLinearMatrix& segment : weight.segments) {
             gemv_bf16(std::get<CpuBf16Matrix>(segment), input, output + offset, beta);
-            offset += segment_rows(segment);
+            offset += detail::linear_segment_rows(segment);
         }
         return;
     }
@@ -245,7 +220,7 @@ void CpuLinearEngine::gemv(const CpuLinearWeight& weight, const float* input,
     size_t offset = 0;
     for (const CpuLinearMatrix& segment : weight.segments) {
         gemv_gguf(std::get<GgmlMatrixView>(segment), activation, output + offset, beta);
-        offset += segment_rows(segment);
+        offset += detail::linear_segment_rows(segment);
     }
 }
 
@@ -348,14 +323,14 @@ void CpuLinearEngine::gemv_rows(const CpuLinearWeight& weight,
 }
 
 void CpuLinearEngine::gemm(const CpuLinearWeight& weight, const float* input,
-                            float* output, size_t rows, float beta) const {
+                           float* output, size_t rows, float beta) const {
     weight.validate();
     if ((!input || !output) && rows != 0) {
         throw std::invalid_argument("null CPU GEMM buffer");
     }
     if (rows == 0) return;
-    const LinearStorageKind kind = classify_weight(weight);
-    if (kind == LinearStorageKind::Q4) {
+    const detail::LinearStorageKind kind = detail::classify_linear_weight(weight);
+    if (kind == detail::LinearStorageKind::Q4) {
         size_t offset = 0;
         for (const CpuLinearMatrix& segment : weight.segments) {
             const Q4GroupMatrix& matrix = std::get<Q4GroupMatrix>(segment);
@@ -373,21 +348,21 @@ void CpuLinearEngine::gemm(const CpuLinearWeight& weight, const float* input,
         }
         return;
     }
-    if (kind == LinearStorageKind::Int8) {
+    if (kind == detail::LinearStorageKind::Int8) {
         size_t offset = 0;
         for (const CpuLinearMatrix& segment : weight.segments) {
             gemm_int8(std::get<CpuInt8Matrix>(segment), input, output, rows, beta,
                       weight.rows, offset);
-            offset += segment_rows(segment);
+            offset += detail::linear_segment_rows(segment);
         }
         return;
     }
-    if (kind == LinearStorageKind::Bf16) {
+    if (kind == detail::LinearStorageKind::Bf16) {
         size_t offset = 0;
         for (const CpuLinearMatrix& segment : weight.segments) {
             gemm_bf16(std::get<CpuBf16Matrix>(segment), input, output, rows, beta,
                       weight.rows, offset);
-            offset += segment_rows(segment);
+            offset += detail::linear_segment_rows(segment);
         }
         return;
     }
@@ -397,8 +372,8 @@ void CpuLinearEngine::gemm(const CpuLinearWeight& weight, const float* input,
 }
 
 void CpuLinearEngine::gemv_gguf(const GgmlMatrixView& matrix,
-                               std::span<const CpuQ8KBlock> activation,
-                               float* output, float beta) const {
+                                std::span<const CpuQ8KBlock> activation,
+                                float* output, float beta) const {
     const size_t grain = std::max<size_t>(
         1, matrix.rows / std::max<size_t>(1, pool_->size() * 8));
     pool_->parallel_for(0, matrix.rows, grain, [&](size_t begin, size_t end) {
@@ -420,6 +395,7 @@ void CpuLinearEngine::prepare_gguf_activation(
     }
     quantize_gguf_rows(*pool_, isa_, input, rows, cols, activation);
 }
+
 void CpuLinearEngine::gemm_gguf(std::span<const CpuQ8KBlock> activation,
                                 const CpuLinearWeight& weight, float* output,
                                 size_t rows, float beta) const {
@@ -579,8 +555,7 @@ void CpuLinearEngine::embedding(const CpuLinearWeight& table, int32_t token,
                 output[col] = bf16_bits_to_float(weights[col]);
             }
         } else {
-            ggml_decode_row(
-                std::get<GgmlMatrixView>(segment), row, output);
+            ggml_decode_row(std::get<GgmlMatrixView>(segment), row, output);
         }
         return;
     }
