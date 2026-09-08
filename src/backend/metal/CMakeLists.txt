@@ -9,12 +9,14 @@ set(CELEG_METAL_BACKEND_SOURCES
 set(CELEG_METAL_MODEL_SOURCES
     src/backend/metal/model/runtime/attention.mm
     src/backend/metal/model/runtime/attention_variant.cpp
+    src/backend/metal/model/runtime/command_scope.mm
     src/backend/metal/model/runtime/execution.mm
     src/backend/metal/model/runtime/feed_forward.mm
     src/backend/metal/model/runtime/initialization.mm
     src/backend/metal/model/runtime/mixer_registry.mm
     src/backend/metal/model/runtime/moe.mm
     src/backend/metal/model/runtime/moe_router.cpp
+    src/backend/metal/model/runtime/pipeline_cache.mm
     src/backend/metal/model/runtime/pipelines.mm
     src/backend/metal/model/runtime/profiling.cpp
     src/backend/metal/model/runtime/quant_registry.mm

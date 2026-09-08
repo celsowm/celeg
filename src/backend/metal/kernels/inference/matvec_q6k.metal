@@ -1,5 +1,5 @@
 /**
- * @brief matvec_q6k — split from vector.metal (full replace, Doxygen only).
+ * @brief matvec_q6k — split from vector.metal (full replace).
  */
 /**
  * @brief Per-lane slice of one 256-value Q6_K super-block.
@@ -174,12 +174,3 @@ void celeg_matvec_q6k_llama_core(device const uchar* weights, Input input, devic
     }
 }
 
-/**
- * @brief One 256-value Q4_K super-block: two fp16 scales, twelve scale bytes,
- * then 128 bytes of nibbles.
- */
-struct CelegQ4kBlock {
-    half d;
-    half dmin;
-    uchar scales[12];
-    uchar qs[128];

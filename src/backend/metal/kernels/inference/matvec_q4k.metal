@@ -1,5 +1,5 @@
 /**
- * @brief matvec_q4k — Q4_K family (generic + llama, 4/8 rows).
+ * @brief matvec_q4k — split from vector.metal (full replace).
  */
 /**
  * @brief One 256-value Q4_K super-block: two fp16 scales, twelve scale bytes,
