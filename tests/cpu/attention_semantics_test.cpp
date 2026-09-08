@@ -1,4 +1,5 @@
 #include "operators/attention.hpp"
+#include "kernels/math.hpp"
 #include "celeg/backend/cpu/rope.hpp"
 #include "celeg/backend/cpu/paged_kv.hpp"
 #include "support/assertions.hpp"
@@ -12,6 +13,10 @@ namespace {
 
 bool close(float actual, float expected, float tolerance = 1.0e-5f) {
     return std::abs(actual - expected) <= tolerance;
+}
+
+const celeg::CpuMathEngine& scalar_math() {
+    return celeg::cpu_math_engine(celeg::CpuIsa::Scalar);
 }
 
 void test_current_value_orthogonalization() {
@@ -143,8 +148,10 @@ void test_query_key_norm_uses_same_query_scale() {
     std::vector<float> normed_query = plain_query;
 
     const std::array<int32_t, 3> position{0, 0, 0};
-    celeg::apply_cpu_attention_qk(plain, weights, plain_query.data(), nullptr, nullptr, 0, position);
-    celeg::apply_cpu_attention_qk(normed, weights, normed_query.data(), nullptr, nullptr, 0, position);
+    celeg::apply_cpu_attention_qk(plain, weights, scalar_math(),
+                                  plain_query.data(), nullptr, nullptr, 0, position);
+    celeg::apply_cpu_attention_qk(normed, weights, scalar_math(),
+                                  normed_query.data(), nullptr, nullptr, 0, position);
 
     for (int i = 0; i < kWidth; ++i) {
         CELEG_TEST_CHECK(close(plain_query[i], (i % 2 == 0) ? 1.0f : -1.0f));
@@ -171,7 +178,8 @@ void test_query_only_norm_with_key_projection() {
     float query[] = {2.0f, 2.0f, 2.0f, 2.0f};
     float key[] = {3.0f, 3.0f, 3.0f, 3.0f};
     const std::array<int32_t, 3> position{0, 0, 0};
-    celeg::apply_cpu_attention_qk(layout, weights, query, key, nullptr, 0, position);
+    celeg::apply_cpu_attention_qk(layout, weights, scalar_math(),
+                                  query, key, nullptr, 0, position);
 
     for (float value : query) CELEG_TEST_CHECK(close(value, 1.0f));
     for (float value : key) CELEG_TEST_CHECK(close(value, 3.0f));
@@ -196,7 +204,8 @@ void test_key_only_norm_without_query_norm() {
     float query[] = {3.0f, 3.0f, 3.0f, 3.0f};
     float key[] = {2.0f, 2.0f, 2.0f, 2.0f};
     const std::array<int32_t, 3> position{0, 0, 0};
-    celeg::apply_cpu_attention_qk(layout, weights, query, key, nullptr, 0, position);
+    celeg::apply_cpu_attention_qk(layout, weights, scalar_math(),
+                                  query, key, nullptr, 0, position);
 
     for (float value : query) CELEG_TEST_CHECK(close(value, 3.0f));
     for (float value : key) CELEG_TEST_CHECK(close(value, 1.0f));
