@@ -12,6 +12,8 @@
 
 namespace celeg {
 
+struct CpuKernelBackend;
+
 struct CpuGroupedGemmJob {
     const CpuLinearWeight* weight = nullptr;
     size_t row_offset = 0;
@@ -20,7 +22,7 @@ struct CpuGroupedGemmJob {
 
 class CpuLinearEngine {
 public:
-    CpuLinearEngine(CpuIsa isa, CpuThreadPool& pool);
+    CpuLinearEngine(const CpuKernelBackend& backend, CpuThreadPool& pool);
 
     CpuIsa isa() const { return isa_; }
     void gemv(const Q4GroupMatrix& weight, const float* input, float* output,
