@@ -1,4 +1,5 @@
 #include "attention.hpp"
+#include "../kernels/math.hpp"
 #include "celeg/backend/cpu/rope.hpp"
 #include "celeg/model/position.hpp"
 #include "celeg/model/weights/quantization.hpp"
@@ -11,6 +12,7 @@ namespace celeg {
 
 void apply_cpu_attention_qk(const AttentionSpec& layout,
                             const CpuCompiledModel::AttentionWeights& weights,
+                            const CpuMathEngine& math,
                             float* query,
                             float* key,
                             float* value,
@@ -59,8 +61,8 @@ void apply_cpu_attention_qk(const AttentionSpec& layout,
                     data, norm_weight, heads, layout.head_dim, rope_position,
                     multi->sections, multi->interleaved, *rope, norm->epsilon);
             } else {
-                cpu_qk_norm_rope(data, norm_weight, heads, layout.head_dim,
-                                 scalar_position, *rope, norm->epsilon);
+                math.qk_norm_rope(data, norm_weight, heads, layout.head_dim,
+                                  scalar_position, *rope, norm->epsilon);
             }
             return;
         }
