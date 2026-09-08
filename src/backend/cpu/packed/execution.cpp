@@ -1,11 +1,11 @@
 #include "../detail/model_internal.hpp"
 #include "../operators/attention.hpp"
 #include "../operators/moe.hpp"
+#include "../kernels/math.hpp"
 #include "celeg/runtime/sampler.hpp"
 #include "celeg/backend/cpu/convolution.hpp"
 #include "celeg/backend/cpu/elementwise.hpp"
 #include "celeg/backend/cpu/gated_delta.hpp"
-#include "celeg/backend/cpu/normalization.hpp"
 #include "celeg/backend/cpu/model.hpp"
 
 #include <algorithm>
@@ -50,6 +50,7 @@ struct CpuCompiledModel::BatchScratch {
         SharedWeights& shared = *sessions.front()->shared;
         const size_t rows = sessions.size();
         const size_t hidden = static_cast<size_t>(shared.program.hidden);
+        const CpuMathEngine& math = cpu_math_engine(shared.linear.isa());
         workspace_.ensure(rows, shared.workspace_plan);
         auto parallel_for = [&](size_t count, const auto& body) {
             const size_t grain = std::max<size_t>(1, count / std::max<size_t>(1, shared.pool.size() * 4));
@@ -61,20 +62,20 @@ struct CpuCompiledModel::BatchScratch {
         auto rmsnorm_rows = [&](const float* input, const std::vector<float>& weight,
                                 float* output, size_t width, float epsilon) {
             rows_for([&](size_t row) {
-                cpu_rmsnorm(input + row * width, weight.data(), output + row * width,
-                            width, epsilon);
+                math.rmsnorm(input + row * width, weight.data(), output + row * width,
+                             width, epsilon);
             });
         };
         auto rmsnorm_rows_inplace = [&](float* values, const std::vector<float>& weight,
                                         size_t width, float epsilon) {
             rows_for([&](size_t row) {
-                cpu_rmsnorm_inplace(values + row * width, weight.data(), width,
-                                    epsilon);
+                math.rmsnorm_inplace(values + row * width, weight.data(), width,
+                                     epsilon);
             });
         };
         auto residual_rows = [&](float* values, const float* residual, size_t width) {
             rows_for([&](size_t row) {
-                cpu_residual_add(values + row * width, residual + row * width, width);
+                math.residual_add(values + row * width, residual + row * width, width);
             });
         };
 
@@ -111,9 +112,9 @@ struct CpuCompiledModel::BatchScratch {
                     if (input_plan.context_scale != 1.0f) {
                         for (size_t d = 0; d < input_size; ++d) values[d] *= input_plan.context_scale;
                     }
-                    cpu_rmsnorm_inplace(values,
-                                        shared.weight_store.per_layer_projection_norm.data(),
-                                        input_size, input_plan.norm_epsilon);
+                    math.rmsnorm_inplace(values,
+                                         shared.weight_store.per_layer_projection_norm.data(),
+                                         input_size, input_plan.norm_epsilon);
                     const float* token_input = token_values + static_cast<size_t>(layer) * input_size;
                     for (size_t d = 0; d < input_size; ++d) {
                         values[d] = (values[d] + token_input[d]) * input_plan.residual_scale;
@@ -481,9 +482,9 @@ struct CpuCompiledModel::BatchScratch {
                                            workspace_.moe_gathered_normed.data(),
                                            workspace_.moe_gathered_gate_up.data());
                 parallel_for(routes, [&](size_t route) {
-                    cpu_swiglu(workspace_.moe_gathered_gate_up.data() + route * 2ULL * intermediate,
-                               workspace_.moe_gathered_activated.data() + route * intermediate,
-                               intermediate);
+                    math.swiglu(workspace_.moe_gathered_gate_up.data() + route * 2ULL * intermediate,
+                                workspace_.moe_gathered_activated.data() + route * intermediate,
+                                intermediate);
                 });
                 workspace_.moe_gemm_jobs.clear();
                 for (int expert = 0; expert < experts; ++expert) {
@@ -511,11 +512,11 @@ struct CpuCompiledModel::BatchScratch {
                     layer_gemm(moe->shared_w13, workspace_.normed.data(),
                                workspace_.gate_up.data());
                     rows_for([&](size_t row) {
-                        cpu_swiglu(workspace_.gate_up.data() +
-                                       row * 2ULL * static_cast<size_t>(shared_intermediate),
-                                   workspace_.activated.data() +
-                                       row * static_cast<size_t>(shared_intermediate),
-                                   shared_intermediate);
+                        math.swiglu(workspace_.gate_up.data() +
+                                        row * 2ULL * static_cast<size_t>(shared_intermediate),
+                                    workspace_.activated.data() +
+                                        row * static_cast<size_t>(shared_intermediate),
+                                    shared_intermediate);
                     });
                     layer_gemm(moe->shared_w2, workspace_.activated.data(),
                                workspace_.shared_output.data());
@@ -548,7 +549,7 @@ struct CpuCompiledModel::BatchScratch {
                     if (dense->activation == ActivationKind::GeluTanh) {
                         cpu_gated_gelu_tanh(gate_up, activated, intermediate);
                     } else {
-                        cpu_swiglu(gate_up, activated, intermediate);
+                        math.swiglu(gate_up, activated, intermediate);
                     }
                 });
                 layer_gemm(dense_weights->w2, workspace_.activated.data(), workspace_.mlp_output.data());
@@ -610,9 +611,9 @@ struct CpuCompiledModel::BatchScratch {
         for (size_t row = 0; row < rows; ++row) {
             State& session = *sessions[row];
             if (compute_logits[row]) {
-                cpu_rmsnorm(workspace_.hidden.data() + row * hidden,
-                            shared.weight_store.final_norm.data(), workspace_.normed.data() + row * hidden,
-                            hidden, shared.program.final_norm.epsilon);
+                math.rmsnorm(workspace_.hidden.data() + row * hidden,
+                             shared.weight_store.final_norm.data(), workspace_.normed.data() + row * hidden,
+                             hidden, shared.program.final_norm.epsilon);
                 shared.linear.gemv(shared.tie_word_embeddings ? shared.weight_store.embedding :
                                     shared.weight_store.lm_head,
                                     workspace_.normed.data() + row * hidden,
