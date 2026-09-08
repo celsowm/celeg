@@ -1,6 +1,6 @@
 #pragma once
 
-#include "celeg/backend/cpu/kernels.hpp"
+#include "celeg/backend/cpu/linear.hpp"
 #include "celeg/backend/cpu/quantization.hpp"
 #include "celeg/backend/cpu/runtime_types.hpp"
 
