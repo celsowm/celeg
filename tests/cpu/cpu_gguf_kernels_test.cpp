@@ -1,5 +1,6 @@
 #include "celeg/backend/cpu/gguf.hpp"
-#include "celeg/backend/cpu/kernels.hpp"
+#include "celeg/backend/cpu/kernel_backend.hpp"
+#include "celeg/backend/cpu/linear.hpp"
 #include "celeg/backend/cpu/model.hpp"
 #include "celeg/checkpoint/formats/gguf.hpp"
 #include "support/assertions.hpp"
@@ -175,7 +176,10 @@ int main() {
     }
     const auto activation =
         celeg::cpu_quantize_q8k(input.data(), input.size(), celeg::CpuIsa::Scalar);
-    const celeg::CpuIsa isa = celeg::detect_cpu_capabilities().best_isa();
+    const celeg::CpuCapabilities caps = celeg::detect_cpu_capabilities();
+    const celeg::CpuKernelBackend& backend =
+        celeg::cpu_resolve_kernel_backend(celeg::CpuIsa::Auto, caps);
+    const celeg::CpuIsa isa = backend.isa;
     const auto optimized_activation =
         celeg::cpu_quantize_q8k(input.data(), input.size(), isa);
     CELEG_TEST_CHECK(optimized_activation.size() == activation.size());
@@ -473,7 +477,7 @@ int main() {
     CELEG_TEST_CHECK(composite.gguf_native());
 
     celeg::CpuThreadPool pool(4);
-    celeg::CpuLinearEngine linear(isa, pool);
+    celeg::CpuLinearEngine linear(backend, pool);
     std::vector<float> gemv(4);
     linear.gemv(composite, input.data(), gemv.data());
     CELEG_TEST_CHECK(std::abs(gemv[1] - gemv[0]) < 1e-4f);
