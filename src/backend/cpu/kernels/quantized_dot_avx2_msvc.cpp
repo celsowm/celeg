@@ -1,6 +1,7 @@
 #if defined(_MSC_VER) && (defined(_M_X64) || defined(_M_IX86))
 
 #include "quantized_dot_avx2_msvc.hpp"
+#include "q4_decode.hpp"
 
 #include "celeg/model/weights/quantization.hpp"
 
@@ -11,12 +12,6 @@
 
 namespace celeg::detail {
 namespace {
-
-inline int decode_q4(const uint8_t* packed, size_t col) {
-    const uint8_t byte = packed[col >> 1];
-    const uint8_t nibble = (col & 1U) == 0 ? byte & 0x0fU : byte >> 4;
-    return nibble >= 8U ? static_cast<int>(nibble) - 16 : static_cast<int>(nibble);
-}
 
 inline __m256i unpack_q4_biased(const uint8_t* packed) {
     const __m128i bytes = _mm_loadu_si128(reinterpret_cast<const __m128i*>(packed));
@@ -94,12 +89,12 @@ float q4_dot_avx2_msvc(const uint8_t* packed_row, const uint16_t* scales_bf16,
             group_total = _mm256_fmadd_ps(_mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(signed_bytes)), _mm256_loadu_ps(activation + col), group_total);
         }
         total = _mm256_fmadd_ps(group_total, scale, total);
-        for (; col < group_end; ++col) scalar_tail += static_cast<float>(decode_q4(packed_row, col)) * scale_val * activation[col];
+        for (; col < group_end; ++col) scalar_tail += static_cast<float>(decode_q4_signed_nibble(packed_row, col)) * scale_val * activation[col];
     }
     float result = hsum256_ps(total) + scalar_tail;
     for (; col < cols; ++col) {
         const size_t group = col / group_size;
-        result += static_cast<float>(decode_q4(packed_row, col)) * celeg::bf16_bits_to_float(scales_bf16[group]) * activation[col];
+        result += static_cast<float>(decode_q4_signed_nibble(packed_row, col)) * celeg::bf16_bits_to_float(scales_bf16[group]) * activation[col];
     }
     return result;
 }
@@ -131,7 +126,7 @@ float q4_q8_dot_avx2_msvc(const uint8_t* packed_row, const uint16_t* weight_scal
         int32_t scalar_dot = 0;
         int32_t scalar_activation_sum = 0;
         for (size_t col = simd_end; col < end; ++col) {
-            scalar_dot += decode_q4(packed_row, col) * static_cast<int32_t>(activation_q8[col]);
+            scalar_dot += decode_q4_signed_nibble(packed_row, col) * static_cast<int32_t>(activation_q8[col]);
             scalar_activation_sum += activation_q8[col];
         }
         if (scalar_dot != 0) scalar_total += static_cast<float>(scalar_dot) * combined;
