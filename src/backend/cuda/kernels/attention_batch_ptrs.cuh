@@ -93,7 +93,7 @@ __global__ void gqa_decode_strict_batch_ptrs_kernel(
             (static_cast<size_t>(token) * kv_heads + kv_head) * head_dim;
         const float dot = attention_dot(query, key, head_dim, warp_sums, &dot_total);
         if (lane == 0) {
-            const float score = rounded_bf16_float(rounded_bf16_float(dot) * scale);
+            const float score = strict_attention_score(dot, scale);
             maximum = fmaxf(maximum, score);
         }
         __syncthreads();
@@ -105,7 +105,7 @@ __global__ void gqa_decode_strict_batch_ptrs_kernel(
             (static_cast<size_t>(token) * kv_heads + kv_head) * head_dim;
         const float dot = attention_dot(query, key, head_dim, warp_sums, &dot_total);
         if (lane == 0) {
-            const float score = rounded_bf16_float(rounded_bf16_float(dot) * scale);
+            const float score = strict_attention_score(dot, scale);
             denominator += expf(score - maximum);
         }
         __syncthreads();
@@ -116,7 +116,7 @@ __global__ void gqa_decode_strict_batch_ptrs_kernel(
             (static_cast<size_t>(token) * kv_heads + kv_head) * head_dim;
         const float dot = attention_dot(query, key, head_dim, warp_sums, &dot_total);
         if (lane == 0) {
-            const float score = rounded_bf16_float(rounded_bf16_float(dot) * scale);
+            const float score = strict_attention_score(dot, scale);
             probability = rounded_bf16_float(expf(score - maximum) / denominator);
         }
         __syncthreads();
@@ -237,7 +237,7 @@ __global__ void gqa_decode_strict_int8_batch_ptrs_kernel(
         const float dot = attention_dot_int8(query, key, row_key_scales[scale_index],
                                              head_dim, warp_sums, &dot_total);
         if (lane == 0) {
-            const float score = rounded_bf16_float(rounded_bf16_float(dot) * scale);
+            const float score = strict_attention_score(dot, scale);
             maximum = fmaxf(maximum, score);
         }
         __syncthreads();
@@ -250,7 +250,7 @@ __global__ void gqa_decode_strict_int8_batch_ptrs_kernel(
         const float dot = attention_dot_int8(query, key, row_key_scales[scale_index],
                                              head_dim, warp_sums, &dot_total);
         if (lane == 0) {
-            const float score = rounded_bf16_float(rounded_bf16_float(dot) * scale);
+            const float score = strict_attention_score(dot, scale);
             denominator += expf(score - maximum);
         }
         __syncthreads();
@@ -262,7 +262,7 @@ __global__ void gqa_decode_strict_int8_batch_ptrs_kernel(
         const float dot = attention_dot_int8(query, key, row_key_scales[scale_index],
                                              head_dim, warp_sums, &dot_total);
         if (lane == 0) {
-            const float score = rounded_bf16_float(rounded_bf16_float(dot) * scale);
+            const float score = strict_attention_score(dot, scale);
             probability = rounded_bf16_float(expf(score - maximum) / denominator);
         }
         __syncthreads();
