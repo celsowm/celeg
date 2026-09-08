@@ -44,3 +44,7 @@ run_asan_qwen.bat
 # Benchmark duel harnesses (isolated A/B, not production)
 *_duel.metal
 **/*_duel.metal
+*_duel.mm
+**/*_duel.mm
+*_duel.py
+**/*_duel.py
