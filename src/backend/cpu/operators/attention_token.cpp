@@ -1,6 +1,6 @@
 #include "../detail/model_internal.hpp"
+#include "../kernels/math.hpp"
 #include "attention.hpp"
-#include "celeg/backend/cpu/normalization.hpp"
 
 #include <algorithm>
 #include <cstdlib>
@@ -50,6 +50,7 @@ void execute_cpu_attention_token(
     const CpuCompiledModel::AttentionWeights& attention,
     const CompiledLayerProgram& semantics,
     const std::array<int32_t, 3>& rope_position) {
+    const CpuMathEngine& math = cpu_math_engine(execution.shared.linear.isa());
     const AttentionSpec& layout =
         std::get<CompiledAttentionProgram>(semantics.mixer).semantics;
             if (layout.uses_external_memory()) {
@@ -87,9 +88,9 @@ void execute_cpu_attention_token(
                 if (factorized) {
                     execution.shared.linear.gemv(attention.latent_q_projection,
                         execution.workspace.normed.data(), execution.workspace.qkv.data());
-                    cpu_rmsnorm_inplace(execution.workspace.qkv.data(), attention.latent_q_norm.data(),
-                                        static_cast<size_t>(factorized->query_rank),
-                                        factorized->query_latent_norm.epsilon);
+                    math.rmsnorm_inplace(execution.workspace.qkv.data(), attention.latent_q_norm.data(),
+                                         static_cast<size_t>(factorized->query_rank),
+                                         factorized->query_latent_norm.epsilon);
                     execution.shared.linear.gemv(attention.latent_q_expansion,
                         execution.workspace.qkv.data(), execution.workspace.latent_projection.data());
                     query_content = execution.workspace.qkv.data();
@@ -127,9 +128,9 @@ void execute_cpu_attention_token(
                     std::copy(execution.workspace.latent_projection.data(),
                               execution.workspace.latent_projection.data() + latent.latent_rank,
                               execution.workspace.latent_key.data());
-                    cpu_rmsnorm_inplace(execution.workspace.latent_key.data(), attention.latent_k_norm.data(),
-                                        static_cast<size_t>(latent.latent_rank),
-                                        factorized->key_latent_norm.epsilon);
+                    math.rmsnorm_inplace(execution.workspace.latent_key.data(), attention.latent_k_norm.data(),
+                                         static_cast<size_t>(latent.latent_rank),
+                                         factorized->key_latent_norm.epsilon);
                     std::copy(execution.workspace.latent_key.data(),
                               execution.workspace.latent_key.data() + latent.latent_rank,
                               execution.workspace.latent_value.data());
