@@ -34,3 +34,27 @@ constexpr int kMaxHeadDimPerLane = 16;
 __device__ __forceinline__ float warp_broadcast_sum(float partial) {
     return __shfl_sync(0xffffffffu, warp_sum(partial), 0);
 }
+
+__device__ __forceinline__ float merge_segmented_attention_lane(
+    size_t base, int count, int lane, int head_dim,
+    const float* partial_max, const float* partial_denom,
+    const float* partial_accum) {
+    float global_max = -FLT_MAX;
+    for (int segment = 0; segment < count; ++segment) {
+        global_max = fmaxf(global_max, partial_max[base + segment]);
+    }
+    float denominator = 0.0f;
+    float accumulator = 0.0f;
+    for (int segment = 0; segment < count; ++segment) {
+        const float local_denom = partial_denom[base + segment];
+        if (local_denom == 0.0f) continue;
+        const float factor = expf(partial_max[base + segment] - global_max);
+        denominator += local_denom * factor;
+        if (lane < head_dim) {
+            const size_t accum_index =
+                (base + segment) * static_cast<size_t>(head_dim) + lane;
+            accumulator += partial_accum[accum_index] * factor;
+        }
+    }
+    return accumulator / denominator;
+}
