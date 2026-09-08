@@ -6,6 +6,7 @@
 #include "celeg/backend/cpu/isa.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <stdexcept>
 #include <vector>
@@ -103,6 +104,27 @@ CpuMathEngine::CpuMathEngine(const CpuKernelBackend& backend)
         swiglu_ = detail::cpu_swiglu_avx2_msvc;
     }
 #endif
+}
+
+const CpuMathEngine& cpu_math_engine(CpuIsa isa) {
+    static const std::array<CpuMathEngine, 11> engines = {
+        CpuMathEngine(cpu_kernel_backend(CpuIsa::Auto)),
+        CpuMathEngine(cpu_kernel_backend(CpuIsa::Scalar)),
+        CpuMathEngine(cpu_kernel_backend(CpuIsa::Avx2)),
+        CpuMathEngine(cpu_kernel_backend(CpuIsa::AvxVnni)),
+        CpuMathEngine(cpu_kernel_backend(CpuIsa::Avx512Vnni)),
+        CpuMathEngine(cpu_kernel_backend(CpuIsa::AmxInt8)),
+        CpuMathEngine(cpu_kernel_backend(CpuIsa::Neon)),
+        CpuMathEngine(cpu_kernel_backend(CpuIsa::DotProd)),
+        CpuMathEngine(cpu_kernel_backend(CpuIsa::I8mm)),
+        CpuMathEngine(cpu_kernel_backend(CpuIsa::Sve2)),
+        CpuMathEngine(cpu_kernel_backend(CpuIsa::Sme2)),
+    };
+    const size_t index = static_cast<size_t>(isa);
+    if (index >= engines.size()) {
+        throw std::invalid_argument("invalid resolved CPU ISA for math engine");
+    }
+    return engines[index];
 }
 
 void CpuMathEngine::rmsnorm(const float* input, const float* weight, float* output,
