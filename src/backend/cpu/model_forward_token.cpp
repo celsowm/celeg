@@ -1,6 +1,6 @@
 #include "detail/model_internal.hpp"
+#include "kernels/math.hpp"
 #include "celeg/backend/cpu/elementwise.hpp"
-#include "celeg/backend/cpu/normalization.hpp"
 #include "operators/attention.hpp"
 #include "operators/feed_forward.hpp"
 #include "operators/moe.hpp"
@@ -32,6 +32,7 @@ void CpuCompiledModel::forward_token(int32_t token, bool compute_logits,
     CpuExecutionContext execution{*shared, workspace_, session_};
     CpuRecurrentStateView recurrent_state{session_};
     CpuAttentionStateView attention_state{*this};
+    const CpuMathEngine& math = cpu_math_engine(shared->linear.isa());
     if (session_.position_value >= shared->max_context) {
         throw std::runtime_error("CPU context limit reached");
     }
@@ -55,9 +56,9 @@ void CpuCompiledModel::forward_token(int32_t token, bool compute_logits,
         for (float& value : workspace_.hidden) value *= shared->program.embedding_transform.multiplier;
     }
     if (shared->program.embedding_transform.post_norm) {
-        cpu_rmsnorm_inplace(workspace_.hidden.data(), shared->weight_store.embedding_norm.data(),
-                            shared->program.hidden,
-                            shared->program.embedding_transform.post_norm->epsilon);
+        math.rmsnorm_inplace(workspace_.hidden.data(), shared->weight_store.embedding_norm.data(),
+                             shared->program.hidden,
+                             shared->program.embedding_transform.post_norm->epsilon);
     }
     if (compute_logits) {
         celeg_debug_dump_hidden("layer_embed", workspace_.hidden.data(), shared->program.hidden);
@@ -78,7 +79,7 @@ void CpuCompiledModel::forward_token(int32_t token, bool compute_logits,
         for (int layer = 0; layer < plan.layer_count; ++layer) {
             float* context = workspace_.per_layer_context.data() +
                 static_cast<size_t>(layer) * static_cast<size_t>(plan.input_size);
-            cpu_rmsnorm_inplace(context,
+            math.rmsnorm_inplace(context,
                 shared->weight_store.per_layer_projection_norm.data(),
                 plan.input_size, plan.norm_epsilon);
             float* token_values = workspace_.per_layer_input.data() +
@@ -94,8 +95,8 @@ void CpuCompiledModel::forward_token(int32_t token, bool compute_logits,
         const CompiledLayerProgram& semantics = shared->program.layers[index];
         std::copy(workspace_.hidden.begin(), workspace_.hidden.end(), workspace_.residual.begin());
         if (semantics.mixer_norm.before.has_value()) {
-            cpu_rmsnorm(workspace_.hidden.data(), common.operator_norm.data(), workspace_.normed.data(),
-                        shared->program.hidden, semantics.mixer_norm.before->epsilon);
+            math.rmsnorm(workspace_.hidden.data(), common.operator_norm.data(), workspace_.normed.data(),
+                         shared->program.hidden, semantics.mixer_norm.before->epsilon);
         } else {
             std::copy(workspace_.hidden.begin(), workspace_.hidden.end(), workspace_.normed.begin());
         }
@@ -129,10 +130,10 @@ void CpuCompiledModel::forward_token(int32_t token, bool compute_logits,
             for (float& value : workspace_.hidden) value *= semantics.residual.multiplier;
         }
         if (semantics.mixer_norm.after.has_value()) {
-            cpu_rmsnorm_inplace(workspace_.hidden.data(), common.post_attention_norm.data(),
-                                shared->program.hidden, semantics.mixer_norm.after->epsilon);
+            math.rmsnorm_inplace(workspace_.hidden.data(), common.post_attention_norm.data(),
+                                 shared->program.hidden, semantics.mixer_norm.after->epsilon);
         }
-        cpu_residual_add(workspace_.hidden.data(), workspace_.residual.data(), shared->program.hidden);
+        math.residual_add(workspace_.hidden.data(), workspace_.residual.data(), shared->program.hidden);
         celeg_debug_dump_hidden(("layer_" + std::to_string(index) + "_pos" +
                                     std::to_string(session_.position_value) + "_mixout").c_str(),
                                 workspace_.hidden.data(), shared->program.hidden);
@@ -145,8 +146,8 @@ void CpuCompiledModel::forward_token(int32_t token, bool compute_logits,
         if (std::holds_alternative<std::monostate>(semantics.feed_forward)) continue;
 
         if (semantics.feed_forward_norm.before.has_value()) {
-            cpu_rmsnorm(workspace_.hidden.data(), common.ffn_norm.data(), workspace_.normed.data(),
-                        shared->program.hidden, semantics.feed_forward_norm.before->epsilon);
+            math.rmsnorm(workspace_.hidden.data(), common.ffn_norm.data(), workspace_.normed.data(),
+                         shared->program.hidden, semantics.feed_forward_norm.before->epsilon);
         } else {
             std::copy(workspace_.hidden.begin(), workspace_.hidden.end(), workspace_.normed.begin());
         }
@@ -161,20 +162,20 @@ void CpuCompiledModel::forward_token(int32_t token, bool compute_logits,
                 for (float& value : workspace_.mlp_output) value *= semantics.residual.multiplier;
             }
             if (semantics.feed_forward_norm.after.has_value()) {
-                cpu_rmsnorm_inplace(workspace_.mlp_output.data(), common.post_feed_forward_norm.data(),
-                                    shared->program.hidden, semantics.feed_forward_norm.after->epsilon);
+                math.rmsnorm_inplace(workspace_.mlp_output.data(), common.post_feed_forward_norm.data(),
+                                     shared->program.hidden, semantics.feed_forward_norm.after->epsilon);
             }
-            cpu_residual_add(workspace_.hidden.data(), workspace_.mlp_output.data(), shared->program.hidden);
+            math.residual_add(workspace_.hidden.data(), workspace_.mlp_output.data(), shared->program.hidden);
         } else if (dense) {
             execute_cpu_dense_feed_forward_token(execution, index, *dense);
             if (semantics.residual.multiplier != 1.0f) {
                 for (float& value : workspace_.mlp_output) value *= semantics.residual.multiplier;
             }
             if (semantics.feed_forward_norm.after.has_value()) {
-                cpu_rmsnorm_inplace(workspace_.mlp_output.data(), common.post_feed_forward_norm.data(),
-                                    shared->program.hidden, semantics.feed_forward_norm.after->epsilon);
+                math.rmsnorm_inplace(workspace_.mlp_output.data(), common.post_feed_forward_norm.data(),
+                                     shared->program.hidden, semantics.feed_forward_norm.after->epsilon);
             }
-            cpu_residual_add(workspace_.hidden.data(), workspace_.mlp_output.data(), shared->program.hidden);
+            math.residual_add(workspace_.hidden.data(), workspace_.mlp_output.data(), shared->program.hidden);
         } else {
             throw std::logic_error(
                 "CPU layer has non-monostate FFN semantics but no feed-forward weights");
@@ -197,11 +198,11 @@ void CpuCompiledModel::forward_token(int32_t token, bool compute_logits,
             }
             shared->linear.gemv(dense->per_layer_projection, workspace_.per_layer_gate.data(),
                                 workspace_.hidden.data());
-            cpu_rmsnorm_inplace(workspace_.hidden.data(), common.per_layer_input_norm.data(),
-                                shared->program.hidden, shared->program.per_layer_input.norm_epsilon);
+            math.rmsnorm_inplace(workspace_.hidden.data(), common.per_layer_input_norm.data(),
+                                 shared->program.hidden, shared->program.per_layer_input.norm_epsilon);
             // layer_scalar attenuates the whole hidden state, residual included
             // (HF Gemma4TextDecoderLayer: residual add, then `*= layer_scalar`).
-            cpu_residual_add(workspace_.hidden.data(), workspace_.residual.data(), shared->program.hidden);
+            math.residual_add(workspace_.hidden.data(), workspace_.residual.data(), shared->program.hidden);
             if (common.layer_scalar != 1.0f) {
                 for (float& value : workspace_.hidden) value *= common.layer_scalar;
             }
@@ -209,8 +210,8 @@ void CpuCompiledModel::forward_token(int32_t token, bool compute_logits,
         if (std::binary_search(shared->program.norm_after_layers.begin(),
                                shared->program.norm_after_layers.end(),
                                static_cast<int>(index))) {
-            cpu_rmsnorm_inplace(workspace_.hidden.data(), shared->weight_store.final_norm.data(),
-                                shared->program.hidden, shared->program.final_norm.epsilon);
+            math.rmsnorm_inplace(workspace_.hidden.data(), shared->weight_store.final_norm.data(),
+                                 shared->program.hidden, shared->program.final_norm.epsilon);
         }
         if (std::getenv("CELEG_DEBUG_HIDDEN_DIR")) {
             celeg_debug_dump_hidden(("layer_" + std::to_string(index) + "_pos" +
@@ -219,8 +220,8 @@ void CpuCompiledModel::forward_token(int32_t token, bool compute_logits,
         }
     }
     if (compute_logits) {
-        cpu_rmsnorm(workspace_.hidden.data(), shared->weight_store.final_norm.data(), workspace_.normed.data(),
-                    shared->program.hidden, shared->program.final_norm.epsilon);
+        math.rmsnorm(workspace_.hidden.data(), shared->weight_store.final_norm.data(), workspace_.normed.data(),
+                     shared->program.hidden, shared->program.final_norm.epsilon);
         celeg_debug_dump_hidden("layer_final_normed", workspace_.normed.data(), shared->program.hidden);
         shared->linear.gemv(shared->tie_word_embeddings ? shared->weight_store.embedding :
                             shared->weight_store.lm_head, workspace_.normed.data(), workspace_.logits.data());
