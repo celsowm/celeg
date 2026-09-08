@@ -96,8 +96,7 @@ __global__ void gqa_prefill_dynamic_sparse_kernel(
         const __nv_bfloat16* key = keys +
             (static_cast<size_t>(token) * kv_heads + kv_head) * head_dim;
         const float dot = attention_dot(q, key, head_dim, warp_sums, &dot_total);
-        if (lane == 0) maximum = fmaxf(
-            maximum, rounded_bf16_float(rounded_bf16_float(dot) * scale));
+        if (lane == 0) maximum = fmaxf(maximum, strict_attention_score(dot, scale));
         __syncthreads();
     }
 
@@ -110,7 +109,7 @@ __global__ void gqa_prefill_dynamic_sparse_kernel(
             (static_cast<size_t>(token) * kv_heads + kv_head) * head_dim;
         const float dot = attention_dot(q, key, head_dim, warp_sums, &dot_total);
         if (lane == 0) denominator += expf(
-            rounded_bf16_float(rounded_bf16_float(dot) * scale) - maximum);
+            strict_attention_score(dot, scale) - maximum);
         __syncthreads();
     }
 
@@ -122,8 +121,7 @@ __global__ void gqa_prefill_dynamic_sparse_kernel(
             (static_cast<size_t>(token) * kv_heads + kv_head) * head_dim;
         const float dot = attention_dot(q, key, head_dim, warp_sums, &dot_total);
         if (lane == 0) probability = rounded_bf16_float(expf(
-            rounded_bf16_float(rounded_bf16_float(dot) * scale) - maximum) /
-            denominator);
+            strict_attention_score(dot, scale) - maximum) / denominator);
         __syncthreads();
         if (lane < head_dim) {
             const __nv_bfloat16* value = values +
