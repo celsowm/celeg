@@ -1,5 +1,5 @@
 #include "operators/attention.hpp"
-#include "celeg/backend/cpu/kernels.hpp"
+#include "celeg/backend/cpu/rope.hpp"
 #include "celeg/backend/cpu/paged_kv.hpp"
 #include "support/assertions.hpp"
 
