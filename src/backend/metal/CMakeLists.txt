@@ -8,6 +8,7 @@ set(CELEG_METAL_BACKEND_SOURCES
 
 set(CELEG_METAL_MODEL_SOURCES
     src/backend/metal/model/runtime/attention.mm
+    src/backend/metal/model/runtime/attention_variant.cpp
     src/backend/metal/model/runtime/execution.mm
     src/backend/metal/model/runtime/feed_forward.mm
     src/backend/metal/model/runtime/initialization.mm

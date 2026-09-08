@@ -1,3 +1,4 @@
+#include "attention_variant.hpp"
 #include "detail.hpp"
 
 #include <algorithm>
@@ -305,8 +306,7 @@ void MetalModel::Impl::encode_attention(
         }
     }
 
-    const float attention_scale = 1.0f /
-        std::sqrt(static_cast<float>(layer.head_dim));
+    const float attention_scale = 1.0f / std::sqrt(static_cast<float>(layer.head_dim));
     const uint32_t sequence_length = position_value + 1;
     const uint32_t window_size = attention_window_size(attention);
     set_buffer(encoder, query_buffer, 0);
@@ -319,7 +319,6 @@ void MetalModel::Impl::encode_attention(
     set_bytes(encoder, &head_dim, sizeof(head_dim), 7);
     set_bytes(encoder, &attention_scale, sizeof(attention_scale), 8);
     set_bytes(encoder, &page_tokens, sizeof(page_tokens), 9);
-    std::string_view attention_kernel = "celeg_attention";
     if (relative) {
         const uint32_t bucket_count = static_cast<uint32_t>(relative->bucket_count);
         const uint32_t max_distance = static_cast<uint32_t>(relative->max_distance);
@@ -329,15 +328,14 @@ void MetalModel::Impl::encode_attention(
         set_bytes(encoder, &bucket_count, sizeof(bucket_count), 12);
         set_bytes(encoder, &max_distance, sizeof(max_distance), 13);
         set_bytes(encoder, &bidirectional, sizeof(bidirectional), 14);
-        attention_kernel = "celeg_attention_relative_bias";
     } else if (alibi) {
         set_bytes(encoder, &window_size, sizeof(window_size), 10);
         set_buffer(encoder, layer.alibi_slopes, 11);
-        attention_kernel = "celeg_attention_alibi";
     } else if (window_size > 0) {
         set_bytes(encoder, &window_size, sizeof(window_size), 10);
-        attention_kernel = "celeg_attention_sliding";
     }
+    const std::string_view attention_kernel =
+        select_decode_attention_kernel(relative != nullptr, alibi != nullptr, window_size);
     encode_attention_span(encoder, attention_kernel, query_heads, 1, head_dim);
 
     if (const auto* transform = attention_output_transform(attention)) {
@@ -592,7 +590,6 @@ void MetalModel::Impl::encode_attention_batch(
     }
 
     if (!tiled_encoded) {
-        std::string_view attention_kernel = "celeg_attention_batch";
         if (relative) {
             const uint32_t bucket_count = static_cast<uint32_t>(relative->bucket_count);
             const uint32_t max_distance = static_cast<uint32_t>(relative->max_distance);
@@ -602,15 +599,14 @@ void MetalModel::Impl::encode_attention_batch(
             set_bytes(encoder, &bucket_count, sizeof(bucket_count), 13);
             set_bytes(encoder, &max_distance, sizeof(max_distance), 14);
             set_bytes(encoder, &bidirectional, sizeof(bidirectional), 15);
-            attention_kernel = "celeg_attention_batch_relative_bias";
         } else if (alibi) {
             set_bytes(encoder, &window_size, sizeof(window_size), 11);
             set_buffer(encoder, layer.alibi_slopes, 12);
-            attention_kernel = "celeg_attention_batch_alibi";
         } else if (window_size > 0) {
             set_bytes(encoder, &window_size, sizeof(window_size), 11);
-            attention_kernel = "celeg_attention_batch_sliding";
         }
+        const std::string_view attention_kernel =
+            select_batch_attention_kernel(relative != nullptr, alibi != nullptr, window_size);
         encode_attention_span(encoder, attention_kernel, query_heads, rows, head_dim);
     }
 
