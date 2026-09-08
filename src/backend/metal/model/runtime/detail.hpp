@@ -6,6 +6,8 @@
 #include "celeg/model/program.hpp"
 #include "celeg/model/linear_operation.hpp"
 #include "celeg/model/weights/roles.hpp"
+#include "layer.hpp"
+#include "linear.hpp"
 #include "linear_bindings.hpp"
 #include "pipeline_cache.hpp"
 #include "profiling.hpp"
@@ -38,128 +40,14 @@ std::string request_name(std::span<const TensorRequest> requests,
 
 namespace celeg {
 
-/// @brief Kernel name and launch geometry for one matrix-vector binding.
-struct MetalMatvecKernel {
-    const char* name = nullptr;
-    uint32_t rows_per_threadgroup = 0;
-    uint32_t threads = 0;
-    uint32_t threadgroup_floats = 0;
-};
-
 struct MetalModel::Impl {
     using LinearStorage = metal_model_detail::MetalLinearStorage;
-
-    struct Linear {
-        id<MTLBuffer> buffer = nil;
-        uint32_t rows = 0;
-        uint32_t cols = 0;
-        uint32_t row_bytes = 0;
-        LinearStorage storage = LinearStorage::Float32;
-        std::optional<TensorRole> role;
-        int layer = -1;
-        /// @brief Memoized decode-matvec pipeline for this weight.
-        ///
-        /// The kernel selected by `matvec_kernel`/`swiglu_matvec_kernel` is a
-        /// pure function of the (storage, rows, cols) triple, which never
-        /// changes for a bound weight, so the lookup is resolved once and
-        /// reused. Single-threaded encode only; the cache owns the state.
-        mutable id<MTLComputePipelineState> cached_matvec_pipeline = nil;
-        mutable MetalMatvecKernel cached_matvec_geometry{nullptr, 0, 0, 0};
-        /// @brief Which selector resolved the memo: 1 = `matvec_kernel`,
-        /// 2 = `swiglu_matvec_kernel`. Each weight uses exactly one decode
-        /// matvec path; the tag keeps the memo sound even if that ever
-        /// changes (a tag mismatch simply re-resolves).
-        mutable uint8_t cached_matvec_path = 0;
-    };
+    using Linear = ::celeg::MetalLinear;
+    using Layer = ::celeg::MetalLayer;
 
     struct MetalKernelBinding {
         const char* generic = nullptr;
         const char* tuned = nullptr;
-    };
-
-    struct Layer {
-        enum class MixerKind : uint8_t {
-            Attention,
-            ShortConvolution,
-            GatedDelta,
-            Mamba2,
-        };
-
-        struct Expert {
-            std::string gate_name;
-            std::string up_name;
-            std::string down_name;
-        };
-
-        struct Moe {
-            RouterProgram router;
-            std::vector<float> router_weight;
-            std::vector<float> router_bias;
-            std::vector<Expert> experts;
-        };
-
-        id<MTLBuffer> operator_norm = nil;
-        id<MTLBuffer> ffn_norm = nil;
-        MixerKind mixer_kind = MixerKind::Attention;
-        int cache_length = 0;
-        int page_tokens = 16;
-        Linear mixer_in;
-        Linear mixer_out;
-        id<MTLBuffer> convolution_taps = nil;
-        id<MTLBuffer> recurrent_conv_weight = nil;
-        id<MTLBuffer> recurrent_conv_bias = nil;
-        id<MTLBuffer> recurrent_dt_bias = nil;
-        id<MTLBuffer> recurrent_a_log = nil;
-        id<MTLBuffer> recurrent_d = nil;
-        id<MTLBuffer> recurrent_norm = nil;
-        id<MTLBuffer> recurrent_conv_state = nil;
-        id<MTLBuffer> recurrent_state = nil;
-        int recurrent_conv_kernel = 0;
-        int recurrent_key_head_dim = 0;
-        int recurrent_value_head_dim = 0;
-        int recurrent_key_heads = 0;
-        int recurrent_value_heads = 0;
-        int recurrent_inner = 0;
-        int recurrent_state_size = 0;
-        int recurrent_group_count = 0;
-        bool recurrent_vector_decay = false;
-        bool recurrent_safe_decay = false;
-        float recurrent_decay_lower_bound = -5.0f;
-        bool recurrent_sigmoid_output_gate = false;
-        bool recurrent_a_log_needs_exp = true;
-        Linear recurrent_in;
-        Linear recurrent_qkv;
-        Linear recurrent_q;
-        Linear recurrent_k;
-        Linear recurrent_v;
-        Linear recurrent_z_weight;
-        Linear recurrent_b;
-        Linear recurrent_a;
-        Linear recurrent_out;
-        Linear query;
-        Linear key;
-        Linear value;
-        Linear attention_gate;
-        Linear attention_out;
-        id<MTLBuffer> query_norm = nil;
-        id<MTLBuffer> key_norm = nil;
-        id<MTLBuffer> key_cache = nil;
-        id<MTLBuffer> value_cache = nil;
-        id<MTLBuffer> alibi_slopes = nil;
-        id<MTLBuffer> relative_bias = nil;
-        int kv_owner_layer = -1;
-        int query_heads = 0;
-        int key_value_heads = 0;
-        int head_dim = 0;
-        float query_scale = 1.0f;
-        float rope_theta = 10000.0f;
-        float query_norm_epsilon = 1.0e-5f;
-        float key_norm_epsilon = 1.0e-5f;
-        Linear ffn_gate;
-        Linear ffn_up;
-        Linear ffn_down;
-        int intermediate = 0;
-        std::optional<Moe> moe;
     };
 
     std::string model_path;
