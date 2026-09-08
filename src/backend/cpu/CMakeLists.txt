@@ -28,7 +28,9 @@ set(CELEG_CPU_BACKEND_SOURCES
     src/backend/cpu/kernels/gguf/capabilities.cpp
     src/backend/cpu/kernels/gguf_avx2.cpp
     src/backend/cpu/kernels/linear.cpp
+    src/backend/cpu/kernels/linear_q4.cpp
     src/backend/cpu/kernels/linear_dense.cpp
+    src/backend/cpu/kernels/linear_gguf.cpp
     src/backend/cpu/kernels/linear_dispatch.cpp
     src/backend/cpu/kernels/elementwise.cpp
     src/backend/cpu/kernels/elementwise_avx2_msvc.cpp
