@@ -116,11 +116,11 @@ bool cpu_isa_compiled(CpuIsa isa) {
 }
 
 CpuIsa CpuCapabilities::best_isa() const {
-    if (supports(CpuIsa::Avx512Vnni) &&
+    if (fma && supports(CpuIsa::Avx512Vnni) &&
         cpu_isa_compiled(CpuIsa::Avx512Vnni)) {
         return CpuIsa::Avx512Vnni;
     }
-    if (supports(CpuIsa::AvxVnni) && cpu_isa_compiled(CpuIsa::AvxVnni)) {
+    if (fma && supports(CpuIsa::AvxVnni) && cpu_isa_compiled(CpuIsa::AvxVnni)) {
         return CpuIsa::AvxVnni;
     }
     if (supports(CpuIsa::Avx2) && fma && cpu_isa_compiled(CpuIsa::Avx2)) {
