@@ -48,7 +48,8 @@ __device__ __forceinline__ float merge_segmented_attention_lane(
     for (int segment = 0; segment < count; ++segment) {
         const float local_denom = partial_denom[base + segment];
         if (local_denom == 0.0f) continue;
-        const float factor = expf(partial_max[base + segment] - global_max);
+        const float factor = celeg::attention_semantics::partial_rescale(
+            partial_max[base + segment], global_max);
         denominator += local_denom * factor;
         if (lane < head_dim) {
             const size_t accum_index =
