@@ -1,3 +1,40 @@
+struct CelegOnlineTransition {
+    float maximum;
+    float denominator;
+    float previous_scale;
+    float current_scale;
+};
+
+CelegOnlineTransition celeg_online_transition(
+    float previous_maximum, float previous_denominator, float score) {
+    const float maximum = max(previous_maximum, score);
+    const float previous_scale = isfinite(previous_maximum)
+        ? exp(previous_maximum - maximum) : 0.0f;
+    const float current_scale = exp(score - maximum);
+    return CelegOnlineTransition{
+        maximum,
+        previous_denominator * previous_scale + current_scale,
+        previous_scale,
+        current_scale};
+}
+
+kernel void celeg_attention_online_semantics_probe(
+    device float* output [[buffer(0)]],
+    constant float& previous_maximum [[buffer(1)]],
+    constant float& previous_denominator [[buffer(2)]],
+    constant float& score [[buffer(3)]],
+    constant float& accumulator [[buffer(4)]],
+    constant float& value [[buffer(5)]]) {
+    const CelegOnlineTransition transition = celeg_online_transition(
+        previous_maximum, previous_denominator, score);
+    output[0] = transition.maximum;
+    output[1] = transition.denominator;
+    output[2] = transition.previous_scale;
+    output[3] = transition.current_scale;
+    output[4] = accumulator * transition.previous_scale +
+        value * transition.current_scale;
+}
+
 uint celeg_relative_position_bucket(int query_position,
                                     int key_position,
                                     uint bucket_count,
