@@ -1,6 +1,7 @@
 #include "kernel_common.cuh"
 
 #include "kernels/attention.hpp"
+#include "celeg/attention/bias_semantics.hpp"
 
 #include <algorithm>
 
