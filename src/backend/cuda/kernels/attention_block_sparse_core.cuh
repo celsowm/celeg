@@ -50,15 +50,13 @@ __device__ __forceinline__ void block_sparse_attention_row(
         }
         __syncthreads();
         if (lane < head_dim) {
-            accumulator += storage.weighted_value(
+            accumulator += storage.block_sparse_weighted_value(
                 *probability, token, kv_head, lane, head_dim);
         }
         __syncthreads();
     }
 
-    if (lane < head_dim) {
-        output[lane] = __float2bfloat16(accumulator);
-    }
+    if (lane < head_dim) output[lane] = __float2bfloat16(accumulator);
 }
 
 template <typename Storage, typename Positions>
