@@ -1,3 +1,35 @@
+uint celeg_gqa_kv_head(uint query_head, uint query_heads, uint kv_heads) {
+    return query_head / (query_heads / kv_heads);
+}
+
+uint celeg_sequence_length_from_query_position(uint query_position) {
+    return query_position + 1u;
+}
+
+uint celeg_query_position_from_sequence_length(uint sequence_length) {
+    return sequence_length - 1u;
+}
+
+float celeg_attention_scale(uint head_dim) {
+    return rsqrt(static_cast<float>(head_dim));
+}
+
+kernel void celeg_attention_micro_semantics_probe(
+    device uint* integers [[buffer(0)]],
+    device float* scale_out [[buffer(1)]],
+    constant uint& query_head [[buffer(2)]],
+    constant uint& query_heads [[buffer(3)]],
+    constant uint& kv_heads [[buffer(4)]],
+    constant uint& query_position [[buffer(5)]],
+    constant uint& head_dim [[buffer(6)]]) {
+    const uint sequence_length =
+        celeg_sequence_length_from_query_position(query_position);
+    integers[0] = celeg_gqa_kv_head(query_head, query_heads, kv_heads);
+    integers[1] = sequence_length;
+    integers[2] = celeg_query_position_from_sequence_length(sequence_length);
+    scale_out[0] = celeg_attention_scale(head_dim);
+}
+
 struct CelegMergeTransition {
     float maximum;
     float denominator;
@@ -213,7 +245,8 @@ kernel void celeg_attention_batch_relative_bias(
     uint simd_count [[simdgroups_per_threadgroup]],
     uint2 grid [[threadgroup_position_in_grid]]) {
     if (grid.x >= query_heads || grid.y >= rows) return;
-    const uint sequence_length = base_position + grid.y + 1;
+    const uint sequence_length = celeg_sequence_length_from_query_position(
+        base_position + grid.y);
     const uint start = window_size > 0 && sequence_length > window_size
         ? sequence_length - window_size : 0;
     const CelegAttentionRelativeBias bias{bias_values, bucket_count, max_distance,
