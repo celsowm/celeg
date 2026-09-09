@@ -56,7 +56,9 @@ __device__ __forceinline__ void block_sparse_attention_row(
         __syncthreads();
     }
 
-    if (lane < head_dim) output[lane] = __float2bfloat16(accumulator);
+    if (lane < head_dim) {
+        output[lane] = __float2bfloat16(accumulator);
+    }
 }
 
 template <typename Storage, typename Positions>
@@ -86,4 +88,17 @@ __global__ void gqa_block_sparse_kernel(
     block_sparse_attention_row(
         query_row, row_storage, output_row, query_position, kv_head, head_dim,
         pattern, warp_sums, &dot_total, &maximum, &denominator, &probability);
+}
+
+template <typename Storage, typename Positions>
+inline void launch_block_sparse(
+    const __nv_bfloat16* query, Storage storage, __nv_bfloat16* output,
+    Positions positions, int rows, const GqaGeometry& geometry,
+    GqaBlockSparsePattern pattern, cudaStream_t stream) {
+    const int threads = attention_threads(geometry.head_dim);
+    gqa_block_sparse_kernel<<<
+        rows * geometry.q_heads, threads, 0, stream>>>(
+        query, storage, output, positions, rows, geometry.q_heads,
+        geometry.kv_heads, geometry.head_dim, pattern);
+    CELEG_KERNEL_DEBUG_SYNC(stream);
 }
