@@ -4,6 +4,7 @@ foreach(test_name IN ITEMS
     attention_bias_semantics_test
     attention_bias_validation_test
     attention_norm_weight_plan_test
+    attention_online_semantics_test
     attention_pattern_semantics_test
     attention_semantic_capability_test
     attention_shared_kv_contract_test
