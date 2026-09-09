@@ -1,5 +1,6 @@
 #include "celeg/backend/cpu/paged_kv.hpp"
 #include "celeg/attention/bias_semantics.hpp"
+#include "celeg/attention/pattern_semantics.hpp"
 
 #include <algorithm>
 #include <type_traits>
@@ -7,32 +8,26 @@
 namespace celeg {
 
 bool CpuAttentionPattern::allows(int query_position, int key_position) const {
-    if (query_position < 0 || key_position < 0) return false;
     return std::visit([&](const auto& value) -> bool {
         using Pattern = std::decay_t<decltype(value)>;
         if constexpr (std::is_same_v<Pattern, FullCausalPattern>) {
-            return key_position <= query_position;
+            return attention_semantics::causal_visible(query_position, key_position);
         } else if constexpr (std::is_same_v<Pattern, SlidingWindowPattern>) {
-            return key_position <= query_position &&
-                   key_position >= query_position - value.window + 1;
+            return attention_semantics::sliding_window_visible(
+                query_position, key_position, value.window);
         } else if constexpr (std::is_same_v<Pattern, BidirectionalPattern>) {
-            return true;
+            return query_position >= 0 && key_position >= 0;
         } else if constexpr (std::is_same_v<Pattern, PrefixLmPattern>) {
-            return query_position < value.prefix_length
-                ? key_position < value.prefix_length
-                : key_position <= query_position;
+            return attention_semantics::prefix_lm_visible(
+                query_position, key_position, value.prefix_length);
         } else if constexpr (std::is_same_v<Pattern, BlockSparsePattern>) {
-            const int query_block = query_position / value.block_size;
-            const int key_block = key_position / value.block_size;
-            if (key_block < value.global_blocks) return key_block <= query_block;
-            return key_block <= query_block &&
-                   key_block >= query_block - value.local_blocks + 1;
+            return attention_semantics::block_sparse_visible(
+                query_position, key_position, value.block_size,
+                value.local_blocks, value.global_blocks);
         } else if constexpr (std::is_same_v<Pattern, DynamicSparsePattern>) {
-            const int query_block = query_position / value.block_size;
-            const int key_block = key_position / value.block_size;
-            if (key_block > query_block) return false;
-            if (key_block == query_block) return true;
-            return key_block < value.max_selected_blocks;
+            return attention_semantics::dynamic_sparse_visible(
+                query_position, key_position, value.block_size,
+                value.max_selected_blocks);
         } else {
             static_assert(always_false_v<Pattern>, "unhandled attention pattern variant");
         }
@@ -46,8 +41,8 @@ bool CpuAttentionPattern::may_read_future(int query_position,
         if constexpr (std::is_same_v<Pattern, BidirectionalPattern>) {
             return true;
         } else if constexpr (std::is_same_v<Pattern, PrefixLmPattern>) {
-            return query_position < value.prefix_length &&
-                   value.prefix_length < sequence_length;
+            return attention_semantics::prefix_lm_may_read_future(
+                query_position, sequence_length, value.prefix_length);
         } else if constexpr (std::is_same_v<Pattern, FullCausalPattern> ||
                              std::is_same_v<Pattern, SlidingWindowPattern> ||
                              std::is_same_v<Pattern, BlockSparsePattern> ||
@@ -63,7 +58,8 @@ int CpuAttentionPattern::first_candidate(int query_position) const {
     return std::visit([&](const auto& value) -> int {
         using Pattern = std::decay_t<decltype(value)>;
         if constexpr (std::is_same_v<Pattern, SlidingWindowPattern>) {
-            return std::max(0, query_position - value.window + 1);
+            return attention_semantics::sliding_window_first_candidate(
+                query_position, value.window);
         } else if constexpr (std::is_same_v<Pattern, FullCausalPattern> ||
                              std::is_same_v<Pattern, BidirectionalPattern> ||
                              std::is_same_v<Pattern, PrefixLmPattern> ||
