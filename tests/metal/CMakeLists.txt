@@ -5,6 +5,7 @@ if(TARGET celeg_metal_backend)
 
     foreach(test_name IN ITEMS
         metal_attention_bias_semantics_test
+        metal_attention_pattern_semantics_test
         metal_attention_gate_test
         metal_device_test
         metal_inference_test
