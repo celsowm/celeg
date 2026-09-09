@@ -61,7 +61,9 @@ __global__ void gqa_online_attention_kernel(
     const int query_position = positions.value(row);
     const int sequence_length = query_position + 1;
     const int first_token = sliding_window > 0
-        ? max(0, sequence_length - sliding_window) : 0;
+        ? celeg::attention_semantics::sliding_window_first_candidate(
+              query_position, sliding_window)
+        : 0;
     const int kv_head = head / (q_heads / kv_heads);
     const __nv_bfloat16* query_row = query +
         (static_cast<size_t>(row) * q_heads + head) * head_dim;
