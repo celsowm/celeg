@@ -56,6 +56,19 @@ Metal mirrors are acceptable only when they are covered by cross-backend conform
 
 Do not introduce a new Metal semantic formula without adding it to the corresponding conformance contract.
 
+### Remaining mechanical Metal cleanup
+
+The production `celeg_attention_span()` path in `common.metal` still spells out the online-softmax recurrence and simdgroup partial-state rescaling locally, while the tested `celeg_online_transition()` and `celeg_partial_rescale()` mirrors currently live with the conformance probes.
+
+This is still a DRY residue, but it is mechanical rather than a semantic design question. The safe follow-up is:
+
+1. move the MSL online/merge helpers into `common.metal`;
+2. make `celeg_attention_span()` consume them;
+3. leave simdgroup/threadgroup scheduling unchanged;
+4. keep the existing conformance probes calling those same production helpers.
+
+That change should not modify arithmetic grouping beyond replacing identical scalar formulas.
+
 ## Remaining semantic decision: DynamicSparsePattern
 
 `DynamicSparsePattern` still needs an explicit architectural decision before further DRY refactoring.
