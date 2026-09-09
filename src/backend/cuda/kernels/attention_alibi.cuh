@@ -1,321 +1,24 @@
 
-__device__ __forceinline__ float alibi_score(float dot, float scale,
-                                             const float* slopes,
-                                             int head, int query_position,
-                                             int key_position) {
-    return dot * scale - slopes[head] *
-        static_cast<float>(query_position - key_position);
-}
+/** @brief ALiBi score policy for the shared warp-online attention core. */
+struct AlibiScorePolicy {
+    const float* slopes;
 
-__global__ void gqa_alibi_contiguous_kernel(
-    const __nv_bfloat16* q, const __nv_bfloat16* key_cache,
-    const __nv_bfloat16* value_cache, __nv_bfloat16* out,
-    const int32_t* position, const float* slopes, int rows, bool prefill,
-    int q_heads, int kv_heads, int head_dim, int sliding_window) {
-    const int flat = blockIdx.x;
-    const int row = flat / q_heads;
-    const int head = flat % q_heads;
-    if (row >= rows) return;
-    const int query_position = prefill ? row : *position;
-    const int seq_len = query_position + 1;
-    const int first = sliding_window > 0 ? max(0, seq_len - sliding_window) : 0;
-    const int kv_head = head / (q_heads / kv_heads);
-    const __nv_bfloat16* query = q +
-        (static_cast<size_t>(row) * q_heads + head) * head_dim;
-    const float scale = rsqrtf(static_cast<float>(head_dim));
-    float running_max = -FLT_MAX;
-    float denominator = 0.0f;
-    float accumulator[kMaxHeadDimPerLane];
-#pragma unroll
-    for (int i = 0; i < kMaxHeadDimPerLane; ++i) accumulator[i] = 0.0f;
-    const int lane = threadIdx.x;
-    for (int token = first; token < seq_len; ++token) {
-        const size_t base = (static_cast<size_t>(token) * kv_heads + kv_head) * head_dim;
-        float partial = 0.0f;
-        for (int d = lane; d < head_dim; d += 32) {
-            partial += bf16_float(query[d]) * bf16_float(key_cache[base + d]);
-        }
-        const float score = alibi_score(warp_broadcast_sum(partial), scale,
-                                        slopes, head, query_position, token);
-        const float next_max = fmaxf(running_max, score);
-        const float alpha = expf(running_max - next_max);
-        const float beta = expf(score - next_max);
-        denominator = denominator * alpha + beta;
-        const __nv_bfloat16* value = value_cache + base;
-        int index = 0;
-        for (int d = lane; d < head_dim; d += 32, ++index) {
-            accumulator[index] = accumulator[index] * alpha +
-                bf16_float(value[d]) * beta;
-        }
-        running_max = next_max;
+    __device__ __forceinline__ float score(
+        float dot, float scale, int head, int query_position,
+        int key_position) const {
+        return dot * scale - slopes[head] *
+            static_cast<float>(query_position - key_position);
     }
-    __nv_bfloat16* output = out +
-        (static_cast<size_t>(row) * q_heads + head) * head_dim;
-    int index = 0;
-    for (int d = lane; d < head_dim; d += 32, ++index) {
-        output[d] = __float2bfloat16(accumulator[index] / denominator);
-    }
-}
-
-__global__ void gqa_alibi_contiguous_int8_kernel(
-    const __nv_bfloat16* q, const int8_t* key_cache, const int8_t* value_cache,
-    const float* key_scales, const float* value_scales, __nv_bfloat16* out,
-    const int32_t* position, const float* slopes, int rows, bool prefill,
-    int q_heads, int kv_heads, int head_dim, int sliding_window) {
-    const int flat = blockIdx.x;
-    const int row = flat / q_heads;
-    const int head = flat % q_heads;
-    if (row >= rows) return;
-    const int query_position = prefill ? row : *position;
-    const int seq_len = query_position + 1;
-    const int first = sliding_window > 0 ? max(0, seq_len - sliding_window) : 0;
-    const int kv_head = head / (q_heads / kv_heads);
-    const __nv_bfloat16* query = q +
-        (static_cast<size_t>(row) * q_heads + head) * head_dim;
-    const float scale = rsqrtf(static_cast<float>(head_dim));
-    float running_max = -FLT_MAX;
-    float denominator = 0.0f;
-    float accumulator[kMaxHeadDimPerLane];
-#pragma unroll
-    for (int i = 0; i < kMaxHeadDimPerLane; ++i) accumulator[i] = 0.0f;
-    const int lane = threadIdx.x;
-    for (int token = first; token < seq_len; ++token) {
-        const size_t scale_index = static_cast<size_t>(token) * kv_heads + kv_head;
-        const int8_t* key = key_cache + scale_index * head_dim;
-        float partial = 0.0f;
-        for (int d = lane; d < head_dim; d += 32) {
-            partial += bf16_float(query[d]) * static_cast<float>(key[d]) *
-                key_scales[scale_index];
-        }
-        const float score = alibi_score(warp_broadcast_sum(partial), scale,
-                                        slopes, head, query_position, token);
-        const float next_max = fmaxf(running_max, score);
-        const float alpha = expf(running_max - next_max);
-        const float beta = expf(score - next_max);
-        denominator = denominator * alpha + beta;
-        const int8_t* value = value_cache + scale_index * head_dim;
-        int index = 0;
-        for (int d = lane; d < head_dim; d += 32, ++index) {
-            accumulator[index] = accumulator[index] * alpha +
-                static_cast<float>(value[d]) * value_scales[scale_index] * beta;
-        }
-        running_max = next_max;
-    }
-    __nv_bfloat16* output = out +
-        (static_cast<size_t>(row) * q_heads + head) * head_dim;
-    int index = 0;
-    for (int d = lane; d < head_dim; d += 32, ++index) {
-        output[d] = __float2bfloat16(accumulator[index] / denominator);
-    }
-}
-
-__global__ void gqa_alibi_ptr_kernel(
-    const __nv_bfloat16* q, const __nv_bfloat16* const* keys,
-    const __nv_bfloat16* const* values, __nv_bfloat16* out,
-    const int32_t* positions, const float* slopes, int rows, int q_heads,
-    int kv_heads, int head_dim, int sliding_window) {
-    const int flat = blockIdx.x;
-    const int row = flat / q_heads;
-    const int head = flat % q_heads;
-    if (row >= rows) return;
-    const int query_position = positions[row];
-    const int seq_len = query_position + 1;
-    const int first = sliding_window > 0 ? max(0, seq_len - sliding_window) : 0;
-    const int kv_head = head / (q_heads / kv_heads);
-    const __nv_bfloat16* query = q +
-        (static_cast<size_t>(row) * q_heads + head) * head_dim;
-    const __nv_bfloat16* row_keys = keys[row];
-    const __nv_bfloat16* row_values = values[row];
-    const float scale = rsqrtf(static_cast<float>(head_dim));
-    float running_max = -FLT_MAX, denominator = 0.0f;
-    float accumulator[kMaxHeadDimPerLane];
-#pragma unroll
-    for (int i = 0; i < kMaxHeadDimPerLane; ++i) accumulator[i] = 0.0f;
-    const int lane = threadIdx.x;
-    for (int token = first; token < seq_len; ++token) {
-        const size_t base = (static_cast<size_t>(token) * kv_heads + kv_head) * head_dim;
-        float partial = 0.0f;
-        for (int d = lane; d < head_dim; d += 32)
-            partial += bf16_float(query[d]) * bf16_float(row_keys[base + d]);
-        const float score = alibi_score(warp_broadcast_sum(partial), scale,
-                                        slopes, head, query_position, token);
-        const float next_max = fmaxf(running_max, score);
-        const float alpha = expf(running_max - next_max);
-        const float beta = expf(score - next_max);
-        denominator = denominator * alpha + beta;
-        int index = 0;
-        for (int d = lane; d < head_dim; d += 32, ++index)
-            accumulator[index] = accumulator[index] * alpha +
-                bf16_float(row_values[base + d]) * beta;
-        running_max = next_max;
-    }
-    __nv_bfloat16* output = out +
-        (static_cast<size_t>(row) * q_heads + head) * head_dim;
-    int index = 0;
-    for (int d = lane; d < head_dim; d += 32, ++index)
-        output[d] = __float2bfloat16(accumulator[index] / denominator);
-}
-
-__global__ void gqa_alibi_int8_ptr_kernel(
-    const __nv_bfloat16* q, const int8_t* const* keys,
-    const int8_t* const* values, const float* const* key_scales,
-    const float* const* value_scales, __nv_bfloat16* out,
-    const int32_t* positions, const float* slopes, int rows, int q_heads,
-    int kv_heads, int head_dim, int sliding_window) {
-    const int flat = blockIdx.x;
-    const int row = flat / q_heads;
-    const int head = flat % q_heads;
-    if (row >= rows) return;
-    const int query_position = positions[row];
-    const int seq_len = query_position + 1;
-    const int first = sliding_window > 0 ? max(0, seq_len - sliding_window) : 0;
-    const int kv_head = head / (q_heads / kv_heads);
-    const __nv_bfloat16* query = q +
-        (static_cast<size_t>(row) * q_heads + head) * head_dim;
-    const int8_t* row_keys = keys[row];
-    const int8_t* row_values = values[row];
-    const float* row_key_scales = key_scales[row];
-    const float* row_value_scales = value_scales[row];
-    const float scale = rsqrtf(static_cast<float>(head_dim));
-    float running_max = -FLT_MAX, denominator = 0.0f;
-    float accumulator[kMaxHeadDimPerLane];
-#pragma unroll
-    for (int i = 0; i < kMaxHeadDimPerLane; ++i) accumulator[i] = 0.0f;
-    const int lane = threadIdx.x;
-    for (int token = first; token < seq_len; ++token) {
-        const size_t si = static_cast<size_t>(token) * kv_heads + kv_head;
-        float partial = 0.0f;
-        for (int d = lane; d < head_dim; d += 32)
-            partial += bf16_float(query[d]) * static_cast<float>(row_keys[si * head_dim + d]) * row_key_scales[si];
-        const float score = alibi_score(warp_broadcast_sum(partial), scale,
-                                        slopes, head, query_position, token);
-        const float next_max = fmaxf(running_max, score);
-        const float alpha = expf(running_max - next_max);
-        const float beta = expf(score - next_max);
-        denominator = denominator * alpha + beta;
-        int index = 0;
-        for (int d = lane; d < head_dim; d += 32, ++index)
-            accumulator[index] = accumulator[index] * alpha +
-                static_cast<float>(row_values[si * head_dim + d]) * row_value_scales[si] * beta;
-        running_max = next_max;
-    }
-    __nv_bfloat16* output = out +
-        (static_cast<size_t>(row) * q_heads + head) * head_dim;
-    int index = 0;
-    for (int d = lane; d < head_dim; d += 32, ++index)
-        output[d] = __float2bfloat16(accumulator[index] / denominator);
-}
-
-__global__ void gqa_alibi_paged_kernel(
-    const __nv_bfloat16* q, const __nv_bfloat16* key_pool,
-    const __nv_bfloat16* value_pool, const uint32_t* tables, int stride,
-    __nv_bfloat16* out, const int32_t* positions, const float* slopes,
-    int rows, int slot, int page_tokens, size_t page_elements,
-    size_t layer_offset, int q_heads, int kv_heads, int head_dim,
-    int sliding_window) {
-    const int flat = blockIdx.x, row = flat / q_heads, head = flat % q_heads;
-    if (row >= rows) return;
-    const int query_position = positions[row], seq_len = query_position + 1;
-    const int first = sliding_window > 0 ? max(0, seq_len - sliding_window) : 0;
-    const int kv_head = head / (q_heads / kv_heads), lane = threadIdx.x;
-    const __nv_bfloat16* query = q +
-        (static_cast<size_t>(row) * q_heads + head) * head_dim;
-    const float scale = rsqrtf(static_cast<float>(head_dim));
-    float running_max = -FLT_MAX, denominator = 0.0f;
-    float accumulator[kMaxHeadDimPerLane];
-#pragma unroll
-    for (int i = 0; i < kMaxHeadDimPerLane; ++i) accumulator[i] = 0.0f;
-    for (int token = first; token < seq_len; ++token) {
-        const uint32_t page = tables[static_cast<size_t>(row) * stride + token / page_tokens];
-        const int in_page = token % page_tokens;
-        float partial = 0.0f;
-        for (int d = lane; d < head_dim; d += 32) {
-            const size_t offset = paged_vector_offset(page, slot, in_page, kv_head, d,
-                page_tokens, page_elements, layer_offset, kv_heads, head_dim);
-            partial += bf16_float(query[d]) * bf16_float(key_pool[offset]);
-        }
-        const float score = alibi_score(warp_broadcast_sum(partial), scale,
-                                        slopes, head, query_position, token);
-        const float next_max = fmaxf(running_max, score);
-        const float alpha = expf(running_max - next_max);
-        const float beta = expf(score - next_max);
-        denominator = denominator * alpha + beta;
-        int index = 0;
-        for (int d = lane; d < head_dim; d += 32, ++index) {
-            const size_t offset = paged_vector_offset(page, slot, in_page, kv_head, d,
-                page_tokens, page_elements, layer_offset, kv_heads, head_dim);
-            accumulator[index] = accumulator[index] * alpha +
-                bf16_float(value_pool[offset]) * beta;
-        }
-        running_max = next_max;
-    }
-    __nv_bfloat16* output = out +
-        (static_cast<size_t>(row) * q_heads + head) * head_dim;
-    int index = 0;
-    for (int d = lane; d < head_dim; d += 32, ++index)
-        output[d] = __float2bfloat16(accumulator[index] / denominator);
-}
-
-__global__ void gqa_alibi_paged_int8_kernel(
-    const __nv_bfloat16* q, const int8_t* key_pool, const int8_t* value_pool,
-    const float* key_scales, const float* value_scales,
-    const uint32_t* tables, int stride, __nv_bfloat16* out,
-    const int32_t* positions, const float* slopes, int rows, int slot,
-    int page_tokens, size_t page_elements, size_t layer_offset,
-    size_t page_scale_elements, size_t layer_scale_offset, int q_heads,
-    int kv_heads, int head_dim, int sliding_window) {
-    const int flat = blockIdx.x, row = flat / q_heads, head = flat % q_heads;
-    if (row >= rows) return;
-    const int query_position = positions[row], seq_len = query_position + 1;
-    const int first = sliding_window > 0 ? max(0, seq_len - sliding_window) : 0;
-    const int kv_head = head / (q_heads / kv_heads), lane = threadIdx.x;
-    const __nv_bfloat16* query = q +
-        (static_cast<size_t>(row) * q_heads + head) * head_dim;
-    const float scale = rsqrtf(static_cast<float>(head_dim));
-    float running_max = -FLT_MAX, denominator = 0.0f;
-    float accumulator[kMaxHeadDimPerLane];
-#pragma unroll
-    for (int i = 0; i < kMaxHeadDimPerLane; ++i) accumulator[i] = 0.0f;
-    for (int token = first; token < seq_len; ++token) {
-        const uint32_t page = tables[static_cast<size_t>(row) * stride + token / page_tokens];
-        const int in_page = token % page_tokens;
-        const size_t so = paged_scale_offset(page, slot, in_page, kv_head,
-            page_tokens, page_scale_elements, layer_scale_offset, kv_heads);
-        const float key_scale = key_scales[so];
-        float partial = 0.0f;
-        for (int d = lane; d < head_dim; d += 32) {
-            const size_t offset = paged_vector_offset(page, slot, in_page, kv_head, d,
-                page_tokens, page_elements, layer_offset, kv_heads, head_dim);
-            partial += bf16_float(query[d]) * static_cast<float>(key_pool[offset]) * key_scale;
-        }
-        const float score = alibi_score(warp_broadcast_sum(partial), scale,
-                                        slopes, head, query_position, token);
-        const float next_max = fmaxf(running_max, score);
-        const float alpha = expf(running_max - next_max);
-        const float beta = expf(score - next_max);
-        denominator = denominator * alpha + beta;
-        const float value_scale = value_scales[so];
-        int index = 0;
-        for (int d = lane; d < head_dim; d += 32, ++index) {
-            const size_t offset = paged_vector_offset(page, slot, in_page, kv_head, d,
-                page_tokens, page_elements, layer_offset, kv_heads, head_dim);
-            accumulator[index] = accumulator[index] * alpha +
-                static_cast<float>(value_pool[offset]) * value_scale * beta;
-        }
-        running_max = next_max;
-    }
-    __nv_bfloat16* output = out +
-        (static_cast<size_t>(row) * q_heads + head) * head_dim;
-    int index = 0;
-    for (int d = lane; d < head_dim; d += 32, ++index)
-        output[d] = __float2bfloat16(accumulator[index] / denominator);
-}
+};
 
 void launch_gqa_decode_alibi_device(const GqaContiguousArgs& args) {
     const GqaGeometry& g = args.geometry;
-    gqa_alibi_contiguous_kernel<<<g.q_heads, 32, 0, args.stream>>>(
-        args.query, args.kv.keys, args.kv.values, args.out,
-        args.extent.position, args.alibi_slopes, 1, false,
+    const OnlineContiguousBf16Storage storage{
+        args.kv.keys, args.kv.values, g.kv_heads};
+    gqa_online_attention_kernel<<<g.q_heads, 32, 0, args.stream>>>(
+        args.query, storage, args.out,
+        OnlineSinglePosition{args.extent.position},
+        AlibiScorePolicy{args.alibi_slopes}, 1,
         g.q_heads, g.kv_heads, g.head_dim, g.sliding_window);
     CELEG_KERNEL_DEBUG_SYNC(args.stream);
 }
@@ -323,19 +26,24 @@ void launch_gqa_decode_alibi_device(const GqaContiguousArgs& args) {
 void launch_gqa_prefill_alibi(const GqaContiguousArgs& args) {
     const GqaGeometry& g = args.geometry;
     const int rows = args.extent.rows;
-    gqa_alibi_contiguous_kernel<<<rows * g.q_heads, 32, 0, args.stream>>>(
-        args.query, args.kv.keys, args.kv.values, args.out, nullptr,
-        args.alibi_slopes, rows, true,
+    const OnlineContiguousBf16Storage storage{
+        args.kv.keys, args.kv.values, g.kv_heads};
+    gqa_online_attention_kernel<<<rows * g.q_heads, 32, 0, args.stream>>>(
+        args.query, storage, args.out, OnlinePrefillPosition{},
+        AlibiScorePolicy{args.alibi_slopes}, rows,
         g.q_heads, g.kv_heads, g.head_dim, g.sliding_window);
     CELEG_KERNEL_DEBUG_SYNC(args.stream);
 }
 
 void launch_gqa_decode_alibi_int8_device(const GqaContiguousInt8Args& args) {
     const GqaGeometry& g = args.geometry;
-    gqa_alibi_contiguous_int8_kernel<<<g.q_heads, 32, 0, args.stream>>>(
-        args.query, args.kv.keys, args.kv.values, args.kv.key_scales,
-        args.kv.value_scales, args.out, args.extent.position,
-        args.alibi_slopes, 1, false,
+    const OnlineContiguousInt8Storage storage{
+        args.kv.keys, args.kv.values, args.kv.key_scales,
+        args.kv.value_scales, g.kv_heads};
+    gqa_online_attention_kernel<<<g.q_heads, 32, 0, args.stream>>>(
+        args.query, storage, args.out,
+        OnlineSinglePosition{args.extent.position},
+        AlibiScorePolicy{args.alibi_slopes}, 1,
         g.q_heads, g.kv_heads, g.head_dim, g.sliding_window);
     CELEG_KERNEL_DEBUG_SYNC(args.stream);
 }
@@ -343,39 +51,49 @@ void launch_gqa_decode_alibi_int8_device(const GqaContiguousInt8Args& args) {
 void launch_gqa_prefill_alibi_int8(const GqaContiguousInt8Args& args) {
     const GqaGeometry& g = args.geometry;
     const int rows = args.extent.rows;
-    gqa_alibi_contiguous_int8_kernel<<<rows * g.q_heads, 32, 0, args.stream>>>(
-        args.query, args.kv.keys, args.kv.values, args.kv.key_scales,
-        args.kv.value_scales, args.out, nullptr, args.alibi_slopes, rows, true,
+    const OnlineContiguousInt8Storage storage{
+        args.kv.keys, args.kv.values, args.kv.key_scales,
+        args.kv.value_scales, g.kv_heads};
+    gqa_online_attention_kernel<<<rows * g.q_heads, 32, 0, args.stream>>>(
+        args.query, storage, args.out, OnlinePrefillPosition{},
+        AlibiScorePolicy{args.alibi_slopes}, rows,
         g.q_heads, g.kv_heads, g.head_dim, g.sliding_window);
     CELEG_KERNEL_DEBUG_SYNC(args.stream);
 }
 
 void launch_gqa_decode_alibi_batch_ptrs(const GqaBatchPtrArgs& args) {
     const GqaGeometry& g = args.geometry;
-    gqa_alibi_ptr_kernel<<<args.rows * g.q_heads, 32, 0, args.stream>>>(
-        args.query, args.kv.keys, args.kv.values, args.out, args.positions,
-        args.alibi_slopes, args.rows,
+    const OnlinePtrBf16Storage storage{
+        args.kv.keys, args.kv.values, g.kv_heads};
+    gqa_online_attention_kernel<<<args.rows * g.q_heads, 32, 0, args.stream>>>(
+        args.query, storage, args.out, OnlineBatchPositions{args.positions},
+        AlibiScorePolicy{args.alibi_slopes}, args.rows,
         g.q_heads, g.kv_heads, g.head_dim, g.sliding_window);
     CELEG_KERNEL_DEBUG_SYNC(args.stream);
 }
 
 void launch_gqa_decode_alibi_int8_batch_ptrs(const GqaBatchPtrInt8Args& args) {
     const GqaGeometry& g = args.geometry;
-    gqa_alibi_int8_ptr_kernel<<<args.rows * g.q_heads, 32, 0, args.stream>>>(
-        args.query, args.kv.keys, args.kv.values, args.kv.key_scales,
-        args.kv.value_scales, args.out, args.positions, args.alibi_slopes,
-        args.rows, g.q_heads, g.kv_heads, g.head_dim, g.sliding_window);
+    const OnlinePtrInt8Storage storage{
+        args.kv.keys, args.kv.values, args.kv.key_scales,
+        args.kv.value_scales, g.kv_heads};
+    gqa_online_attention_kernel<<<args.rows * g.q_heads, 32, 0, args.stream>>>(
+        args.query, storage, args.out, OnlineBatchPositions{args.positions},
+        AlibiScorePolicy{args.alibi_slopes}, args.rows,
+        g.q_heads, g.kv_heads, g.head_dim, g.sliding_window);
     CELEG_KERNEL_DEBUG_SYNC(args.stream);
 }
 
 void launch_gqa_decode_alibi_paged_batch(const GqaPagedArgs& args) {
     const GqaGeometry& g = args.geometry;
     const PagedKvIndex& index = args.index;
-    gqa_alibi_paged_kernel<<<args.rows * g.q_heads, 32, 0, args.stream>>>(
-        args.query, args.kv.keys, args.kv.values, index.page_tables,
-        index.page_table_stride, args.out, args.positions, args.alibi_slopes,
-        args.rows, index.attention_slot, index.page_tokens,
-        index.page_vector_elements, index.layer_vector_offset,
+    const OnlinePagedBf16Storage storage{
+        args.kv.keys, args.kv.values, index.page_tables,
+        index.page_table_stride, index.attention_slot, index.page_tokens,
+        index.page_vector_elements, index.layer_vector_offset, g.kv_heads};
+    gqa_online_attention_kernel<<<args.rows * g.q_heads, 32, 0, args.stream>>>(
+        args.query, storage, args.out, OnlineBatchPositions{args.positions},
+        AlibiScorePolicy{args.alibi_slopes}, args.rows,
         g.q_heads, g.kv_heads, g.head_dim, g.sliding_window);
     CELEG_KERNEL_DEBUG_SYNC(args.stream);
 }
@@ -384,13 +102,15 @@ void launch_gqa_decode_alibi_int8_paged_batch(const GqaPagedInt8Args& args) {
     const GqaGeometry& g = args.geometry;
     const PagedKvIndex& index = args.index;
     const PagedKvScaleIndex& scales = args.scale_index;
-    gqa_alibi_paged_int8_kernel<<<args.rows * g.q_heads, 32, 0, args.stream>>>(
-        args.query, args.kv.keys, args.kv.values, args.kv.key_scales,
+    const OnlinePagedInt8Storage storage{
+        args.kv.keys, args.kv.values, args.kv.key_scales,
         args.kv.value_scales, index.page_tables, index.page_table_stride,
-        args.out, args.positions, args.alibi_slopes, args.rows,
         index.attention_slot, index.page_tokens, index.page_vector_elements,
         index.layer_vector_offset, scales.page_scale_elements,
-        scales.layer_scale_offset,
+        scales.layer_scale_offset, g.kv_heads};
+    gqa_online_attention_kernel<<<args.rows * g.q_heads, 32, 0, args.stream>>>(
+        args.query, storage, args.out, OnlineBatchPositions{args.positions},
+        AlibiScorePolicy{args.alibi_slopes}, args.rows,
         g.q_heads, g.kv_heads, g.head_dim, g.sliding_window);
     CELEG_KERNEL_DEBUG_SYNC(args.stream);
 }
