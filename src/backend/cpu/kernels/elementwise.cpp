@@ -28,6 +28,14 @@ bool uses_avx2_math(CpuIsa isa) {
            isa == CpuIsa::Avx512Vnni || isa == CpuIsa::AmxInt8;
 }
 
+/** @brief Scalar GELU tanh approximation shared by gated and in-place paths. */
+float gelu_tanh_value(float value) {
+    constexpr float k = 0.7978845608028654f;
+    constexpr float c = 0.044715f;
+    return 0.5f * value *
+        (1.0f + std::tanh(k * (value + c * value * value * value)));
+}
+
 void cpu_rmsnorm_scalar(const float* input, const float* weight, float* output,
                         size_t width, float eps) {
     double sum = 0.0;
@@ -181,12 +189,8 @@ void cpu_swiglu(const float* gate_up, float* output, size_t count) {
 }
 
 void cpu_gated_gelu_tanh(const float* gate_up, float* output, size_t count) {
-    constexpr float k = 0.7978845608028654f;
-    constexpr float c = 0.044715f;
     for (size_t i = 0; i < count; ++i) {
-        const float x = gate_up[i];
-        const float gelu = 0.5f * x * (1.0f + std::tanh(k * (x + c * x * x * x)));
-        output[i] = gelu * gate_up[count + i];
+        output[i] = gelu_tanh_value(gate_up[i]) * gate_up[count + i];
     }
 }
 
@@ -199,12 +203,7 @@ void cpu_relu2(const float* input, float* output, size_t count) {
 }
 
 void cpu_gelu_tanh(float* data, size_t count) {
-    constexpr float k = 0.7978845608028654f;
-    constexpr float c = 0.044715f;
-    for (size_t i = 0; i < count; ++i) {
-        const float x = data[i];
-        data[i] = 0.5f * x * (1.0f + std::tanh(k * (x + c * x * x * x)));
-    }
+    for (size_t i = 0; i < count; ++i) data[i] = gelu_tanh_value(data[i]);
 }
 
 }
