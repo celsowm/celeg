@@ -4,6 +4,7 @@
 #include "celeg/backend/cpu/isa.hpp"
 #include "celeg/attention/online_semantics.hpp"
 #include "celeg/attention/merge_semantics.hpp"
+#include "celeg/attention/micro_semantics.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -188,13 +189,14 @@ void cpu_gqa_decode_paged(const float* q, const CpuKvPagePool& pool, std::span<c
     if (pages.size() < required_pages) throw std::invalid_argument("paged GQA page table is incomplete");
     if (pool.key_width() != static_cast<size_t>(kv_heads * head_dim) || pool.value_width() != static_cast<size_t>(kv_heads * head_dim))
         throw std::invalid_argument("paged GQA KV width mismatch");
-    const int queries_per_kv = q_heads / kv_heads;
-    const float scale = 1.0f / std::sqrt(static_cast<float>(head_dim));
-    if (query_position < 0) query_position = sequence_length - 1;
+    const float scale = attention_semantics::attention_scale(head_dim);
+    if (query_position < 0) {
+        query_position = attention_semantics::query_position_from_sequence_length(sequence_length);
+    }
     if (query_position >= sequence_length) throw std::invalid_argument("paged attention query position is out of range");
     const int first_token = pattern.first_candidate(query_position);
     for (int qh = 0; qh < q_heads; ++qh) {
-        const int kvh = qh / queries_per_kv;
+        const int kvh = attention_semantics::gqa_kv_head(qh, q_heads, kv_heads);
         const float* query = q + static_cast<size_t>(qh) * head_dim;
         float* destination = output + static_cast<size_t>(qh) * head_dim;
         std::fill(destination, destination + head_dim, 0.0f);
@@ -230,13 +232,12 @@ void cpu_gqa_decode_paged_parallel(const float* q, const CpuKvPagePool& pool, st
     const size_t task_count = static_cast<size_t>(q_heads) * tiles;
     std::vector<PartialAttention> partial(task_count);
     std::vector<float> accumulators(task_count * static_cast<size_t>(head_dim), 0.0f);
-    const int queries_per_kv = q_heads / kv_heads;
-    const float scale = 1.0f / std::sqrt(static_cast<float>(head_dim));
+    const float scale = attention_semantics::attention_scale(head_dim);
     thread_pool.parallel_for(0, task_count, 1, [&](size_t begin, size_t end) {
         for (size_t task = begin; task < end; ++task) {
             const int qh = static_cast<int>(task / tiles);
             const size_t tile = task % tiles;
-            const int kvh = qh / queries_per_kv;
+            const int kvh = attention_semantics::gqa_kv_head(qh, q_heads, kv_heads);
             const float* query = q + static_cast<size_t>(qh) * head_dim;
             float* accumulator = accumulators.data() + task * static_cast<size_t>(head_dim);
             PartialAttention& state = partial[task];
@@ -246,7 +247,9 @@ void cpu_gqa_decode_paged_parallel(const float* q, const CpuKvPagePool& pool, st
                 const int first_token = static_cast<int>(page_index * pool.page_tokens());
                 const int tokens_in_page = std::min<int>(static_cast<int>(pool.page_tokens()), sequence_length - first_token);
                 update_online(query, qh, kvh, head_dim, scale, pool, pages[page_index], 0, tokens_in_page,
-                              first_token, sequence_length - 1, pattern, bias, accumulator, state);
+                              first_token,
+                              attention_semantics::query_position_from_sequence_length(sequence_length),
+                              pattern, bias, accumulator, state);
             }
         }
     });
@@ -287,7 +290,9 @@ void cpu_latent_attention_decode_paged(const float* query_content, const float* 
     const size_t required_pages = (static_cast<size_t>(sequence_length) + pool.page_tokens() - 1) / pool.page_tokens();
     if (pages.size() < required_pages) throw std::invalid_argument("latent page table is incomplete");
     if (rope_head_dim != 0 && !query_rope) throw std::invalid_argument("latent rotary query is required");
-    if (query_position < 0) query_position = sequence_length - 1;
+    if (query_position < 0) {
+        query_position = attention_semantics::query_position_from_sequence_length(sequence_length);
+    }
     if (query_position >= sequence_length) throw std::invalid_argument("latent query position is out of range");
     const int first_token = pattern.first_candidate(query_position);
     for (int qh = 0; qh < query_heads; ++qh) {
