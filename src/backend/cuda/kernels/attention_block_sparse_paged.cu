@@ -6,6 +6,7 @@
 namespace celeg {
 #include "paged_kv_offsets.cuh"
 #include "attention_common.cuh"
+#include "attention_block_sparse_core.cuh"
 
 namespace {
 
@@ -157,60 +158,24 @@ __global__ void gqa_decode_block_sparse_paged_kernel(
     const int row = flat / q_heads;
     const int query_head = flat % q_heads;
     if (row >= rows) return;
-    const int lane = threadIdx.x;
+
     const int kv_head = query_head / (q_heads / kv_heads);
-    const int query_row = positions[row];
+    const int query_position = positions[row];
     const __nv_bfloat16* q = query +
         (static_cast<size_t>(row) * q_heads + query_head) * head_dim;
+    __nv_bfloat16* output = out +
+        (static_cast<size_t>(row) * q_heads + query_head) * head_dim;
     const auto row_storage = storage.row(row);
-    const float scale = rsqrtf(static_cast<float>(head_dim));
+
     __shared__ float warp_sums[32];
     __shared__ float dot_total;
     __shared__ float maximum;
     __shared__ float denominator;
     __shared__ float probability;
 
-    if (lane == 0) maximum = -FLT_MAX;
-    __syncthreads();
-    for (int token = 0; token <= query_row; ++token) {
-        if (!attention_block_sparse_visible(query_row, token, pattern)) continue;
-        const float dot = row_storage.dot(
-            q, token, kv_head, head_dim, warp_sums, &dot_total);
-        if (lane == 0) maximum = fmaxf(
-            maximum, rounded_bf16_float(rounded_bf16_float(dot) * scale));
-        __syncthreads();
-    }
-
-    if (lane == 0) denominator = 0.0f;
-    __syncthreads();
-    for (int token = 0; token <= query_row; ++token) {
-        if (!attention_block_sparse_visible(query_row, token, pattern)) continue;
-        const float dot = row_storage.dot(
-            q, token, kv_head, head_dim, warp_sums, &dot_total);
-        if (lane == 0) denominator += expf(
-            rounded_bf16_float(rounded_bf16_float(dot) * scale) - maximum);
-        __syncthreads();
-    }
-
-    float accumulator = 0.0f;
-    for (int token = 0; token <= query_row; ++token) {
-        if (!attention_block_sparse_visible(query_row, token, pattern)) continue;
-        const float dot = row_storage.dot(
-            q, token, kv_head, head_dim, warp_sums, &dot_total);
-        if (lane == 0) probability = rounded_bf16_float(expf(
-            rounded_bf16_float(rounded_bf16_float(dot) * scale) - maximum) /
-            denominator);
-        __syncthreads();
-        if (lane < head_dim) {
-            accumulator += row_storage.weighted_value(
-                probability, token, kv_head, lane, head_dim);
-        }
-        __syncthreads();
-    }
-    if (lane < head_dim) {
-        out[(static_cast<size_t>(row) * q_heads + query_head) * head_dim + lane] =
-            __float2bfloat16(accumulator);
-    }
+    block_sparse_attention_row(
+        q, row_storage, output, query_position, kv_head, head_dim, pattern,
+        warp_sums, &dot_total, &maximum, &denominator, &probability);
 }
 
 }

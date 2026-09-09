@@ -5,6 +5,7 @@
 
 namespace celeg {
 #include "attention_common.cuh"
+#include "attention_block_sparse_core.cuh"
 
 namespace {
 
@@ -17,12 +18,11 @@ __global__ void gqa_decode_block_sparse_kernel(
     if (query_head >= q_heads) return;
 
     const int query_position = *position;
-    const int seq_len = query_position + 1;
-    const int lane = threadIdx.x;
     const int kv_head = query_head / (q_heads / kv_heads);
     const __nv_bfloat16* q = query +
         static_cast<size_t>(query_head) * head_dim;
-    const float scale = rsqrtf(static_cast<float>(head_dim));
+    __nv_bfloat16* output = out +
+        static_cast<size_t>(query_head) * head_dim;
 
     __shared__ float warp_sums[32];
     __shared__ float dot_total;
@@ -30,53 +30,9 @@ __global__ void gqa_decode_block_sparse_kernel(
     __shared__ float denominator;
     __shared__ float probability;
 
-    if (lane == 0) maximum = -FLT_MAX;
-    __syncthreads();
-    for (int token = 0; token < seq_len; ++token) {
-        if (!attention_block_sparse_visible(query_position, token, pattern)) continue;
-        const float dot = storage.dot(
-            q, token, kv_head, head_dim, warp_sums, &dot_total);
-        if (lane == 0) {
-            const float score = rounded_bf16_float(rounded_bf16_float(dot) * scale);
-            maximum = fmaxf(maximum, score);
-        }
-        __syncthreads();
-    }
-
-    if (lane == 0) denominator = 0.0f;
-    __syncthreads();
-    for (int token = 0; token < seq_len; ++token) {
-        if (!attention_block_sparse_visible(query_position, token, pattern)) continue;
-        const float dot = storage.dot(
-            q, token, kv_head, head_dim, warp_sums, &dot_total);
-        if (lane == 0) {
-            const float score = rounded_bf16_float(rounded_bf16_float(dot) * scale);
-            denominator += expf(score - maximum);
-        }
-        __syncthreads();
-    }
-
-    float accumulator = 0.0f;
-    for (int token = 0; token < seq_len; ++token) {
-        if (!attention_block_sparse_visible(query_position, token, pattern)) continue;
-        const float dot = storage.dot(
-            q, token, kv_head, head_dim, warp_sums, &dot_total);
-        if (lane == 0) {
-            const float score = rounded_bf16_float(rounded_bf16_float(dot) * scale);
-            probability = rounded_bf16_float(expf(score - maximum) / denominator);
-        }
-        __syncthreads();
-        if (lane < head_dim) {
-            accumulator += probability *
-                storage.value(token, kv_head, lane, head_dim);
-        }
-        __syncthreads();
-    }
-
-    if (lane < head_dim) {
-        out[static_cast<size_t>(query_head) * head_dim + lane] =
-            __float2bfloat16(accumulator);
-    }
+    block_sparse_attention_row(
+        q, storage, output, query_position, kv_head, head_dim, pattern,
+        warp_sums, &dot_total, &maximum, &denominator, &probability);
 }
 
 }

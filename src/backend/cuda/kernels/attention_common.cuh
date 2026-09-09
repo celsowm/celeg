@@ -43,6 +43,12 @@ struct ContiguousBf16AttentionStorage {
             (static_cast<size_t>(token) * kv_heads + kv_head) * head_dim;
         return bf16_float(value_ptr[dimension]);
     }
+
+    __device__ __forceinline__ float weighted_value(
+        float probability, int token, int kv_head, int dimension,
+        int head_dim) const {
+        return probability * value(token, kv_head, dimension, head_dim);
+    }
 };
 
 struct ContiguousInt8AttentionStorage {
@@ -66,6 +72,12 @@ struct ContiguousInt8AttentionStorage {
         const size_t scale_index = static_cast<size_t>(token) * kv_heads + kv_head;
         const int8_t* value_ptr = values + scale_index * head_dim;
         return static_cast<float>(value_ptr[dimension]) * value_scales[scale_index];
+    }
+
+    __device__ __forceinline__ float weighted_value(
+        float probability, int token, int kv_head, int dimension,
+        int head_dim) const {
+        return probability * value(token, kv_head, dimension, head_dim);
     }
 };
 
