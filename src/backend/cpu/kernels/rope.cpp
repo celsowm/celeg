@@ -2,6 +2,7 @@
 
 #include "celeg/backend/cpu/rope.hpp"
 #include "celeg/model/position.hpp"
+#include "celeg/model/rope_geometry.hpp"
 
 #include <array>
 #include <cmath>
@@ -21,14 +22,6 @@
 namespace celeg {
 namespace {
 
-std::pair<int, int> rope_pair_indices(int pair, int pair_count,
-                                     RopePairingKind pairing) {
-    if (pairing == RopePairingKind::AdjacentPairs) {
-        return {2 * pair, 2 * pair + 1};
-    }
-    return {pair, pair_count + pair};
-}
-
 void validate_qk_norm_rope_arguments(float* data, const float* norm_weight,
                                      int heads, int head_dim, int position) {
     if (!data || !norm_weight || heads <= 0 || head_dim <= 0 ||
@@ -40,7 +33,7 @@ void validate_qk_norm_rope_arguments(float* data, const float* norm_weight,
 void build_rope_tables(const RopePositionSpec& rope, int rotary_dim, int position,
                        std::vector<float>& cos_vals,
                        std::vector<float>& sin_vals) {
-    const int half = rotary_dim / 2;
+    const int half = rope_geometry::rotary_pairs(rotary_dim);
     cos_vals.resize(static_cast<size_t>(half));
     sin_vals.resize(static_cast<size_t>(half));
     for (int d = 0; d < half; ++d) {
@@ -56,7 +49,7 @@ void apply_qk_norm_rope_scalar(float* data, const float* norm_weight,
                                const float* cos_vals, const float* sin_vals,
                                int heads, int head_dim, int rotary_dim,
                                RopePairingKind pairing, float eps) {
-    const int half = rotary_dim / 2;
+    const int half = rope_geometry::rotary_pairs(rotary_dim);
     for (int head = 0; head < heads; ++head) {
         float* vector = data + static_cast<size_t>(head) * head_dim;
         double sum = 0.0;
@@ -65,7 +58,8 @@ void apply_qk_norm_rope_scalar(float* data, const float* norm_weight,
         }
         const float inv = 1.0f / std::sqrt(static_cast<float>(sum / head_dim) + eps);
         for (int pair = 0; pair < half; ++pair) {
-            const auto [first, second] = rope_pair_indices(pair, half, pairing);
+            const auto [first, second] = rope_geometry::pair_components(
+                pair, half, pairing);
             const float a = vector[first] * inv * norm_weight[first];
             const float b = vector[second] * inv * norm_weight[second];
             vector[first] = a * cos_vals[pair] - b * sin_vals[pair];
@@ -189,7 +183,7 @@ void cpu_rope(float* data, int heads, int head_dim, int position,
         throw std::invalid_argument("invalid RoPE arguments");
     }
     const int rotary_dim = static_cast<int>(static_cast<float>(head_dim) * rope.rotary_fraction);
-    const int half = rotary_dim / 2;
+    const int half = rope_geometry::rotary_pairs(rotary_dim);
     std::vector<float> cos_vals(static_cast<size_t>(half));
     std::vector<float> sin_vals(static_cast<size_t>(half));
     for (int pair = 0; pair < half; ++pair) {
@@ -202,7 +196,8 @@ void cpu_rope(float* data, int heads, int head_dim, int position,
     for (int head = 0; head < heads; ++head) {
         float* row = data + static_cast<size_t>(head) * head_dim;
         for (int pair = 0; pair < half; ++pair) {
-            const auto [first, second] = rope_pair_indices(pair, half, rope.pairing);
+            const auto [first, second] = rope_geometry::pair_components(
+                pair, half, rope.pairing);
             const float x0 = row[first];
             const float x1 = row[second];
             row[first] = x0 * cos_vals[static_cast<size_t>(pair)] -
@@ -214,14 +209,6 @@ void cpu_rope(float* data, int heads, int head_dim, int position,
 }
 
 namespace {
-
-int mrope_axis_for_pair(int pair, const std::array<int, 3>& sections,
-                        bool interleaved) {
-    if (interleaved) return pair % 3;
-    if (pair < sections[0]) return 0;
-    if (pair < sections[0] + sections[1]) return 1;
-    return 2;
-}
 
 void validate_mrope(int head_dim, const std::array<int, 3>& sections,
                     float rope_theta, float rotary_fraction,
@@ -235,7 +222,8 @@ void validate_mrope(int head_dim, const std::array<int, 3>& sections,
         throw std::invalid_argument("M-RoPE currently requires split-half pairing");
     }
     const int rotary_dim = static_cast<int>(static_cast<float>(head_dim) * rotary_fraction);
-    if ((rotary_dim % 2) != 0 || sections[0] + sections[1] + sections[2] != rotary_dim / 2) {
+    if ((rotary_dim % 2) != 0 || sections[0] + sections[1] + sections[2] !=
+            rope_geometry::rotary_pairs(rotary_dim)) {
         throw std::invalid_argument("MRoPE sections do not match rotary dimension");
     }
 }
@@ -253,11 +241,12 @@ void cpu_qk_norm_rope_mrope(float* data, const float* norm_weight,
     validate_mrope(head_dim, sections, static_cast<float>(rope.theta),
                    static_cast<float>(rope.rotary_fraction), rope.pairing);
     const int rotary_dim = static_cast<int>(static_cast<float>(head_dim) * rope.rotary_fraction);
-    const int pairs = rotary_dim / 2;
+    const int pairs = rope_geometry::rotary_pairs(rotary_dim);
     std::vector<float> cos_values(static_cast<size_t>(pairs));
     std::vector<float> sin_values(static_cast<size_t>(pairs));
     for (int pair = 0; pair < pairs; ++pair) {
-        const int axis = mrope_axis_for_pair(pair, sections, interleaved);
+        const int axis = rope_geometry::mrope_axis_for_pair(
+            pair, sections[0], sections[1], interleaved);
         const float frequency = static_cast<float>(rope_frequency(
             rope, pair, rotary_dim, positions[static_cast<size_t>(axis)]));
         const float angle = static_cast<float>(positions[static_cast<size_t>(axis)]) * frequency;
@@ -272,12 +261,14 @@ void cpu_qk_norm_rope_mrope(float* data, const float* norm_weight,
         const float inv = 1.0f / std::sqrt(static_cast<float>(sum * inv_dim) + eps);
         for (int d = 0; d < head_dim; ++d) row[d] *= inv * norm_weight[d];
         for (int pair = 0; pair < pairs; ++pair) {
-            const float a = row[pair];
-            const float b = row[pairs + pair];
-            row[pair] = a * cos_values[static_cast<size_t>(pair)] -
-                        b * sin_values[static_cast<size_t>(pair)];
-            row[pairs + pair] = b * cos_values[static_cast<size_t>(pair)] +
-                                a * sin_values[static_cast<size_t>(pair)];
+            const auto [first, second] = rope_geometry::pair_components(
+                pair, pairs, RopePairingKind::SplitHalf);
+            const float a = row[first];
+            const float b = row[second];
+            row[first] = a * cos_values[static_cast<size_t>(pair)] -
+                         b * sin_values[static_cast<size_t>(pair)];
+            row[second] = b * cos_values[static_cast<size_t>(pair)] +
+                          a * sin_values[static_cast<size_t>(pair)];
         }
     }
 }
@@ -290,11 +281,12 @@ void cpu_rope_mrope(float* data, int heads, int head_dim,
     validate_mrope(head_dim, sections, static_cast<float>(rope.theta),
                    static_cast<float>(rope.rotary_fraction), rope.pairing);
     const int rotary_dim = static_cast<int>(static_cast<float>(head_dim) * rope.rotary_fraction);
-    const int pairs = rotary_dim / 2;
+    const int pairs = rope_geometry::rotary_pairs(rotary_dim);
     std::vector<float> cos_values(static_cast<size_t>(pairs));
     std::vector<float> sin_values(static_cast<size_t>(pairs));
     for (int pair = 0; pair < pairs; ++pair) {
-        const int axis = mrope_axis_for_pair(pair, sections, interleaved);
+        const int axis = rope_geometry::mrope_axis_for_pair(
+            pair, sections[0], sections[1], interleaved);
         const float frequency = static_cast<float>(rope_frequency(
             rope, pair, rotary_dim, positions[static_cast<size_t>(axis)]));
         const float angle = static_cast<float>(positions[static_cast<size_t>(axis)]) * frequency;
@@ -304,12 +296,14 @@ void cpu_rope_mrope(float* data, int heads, int head_dim,
     for (int head = 0; head < heads; ++head) {
         float* row = data + static_cast<size_t>(head) * head_dim;
         for (int pair = 0; pair < pairs; ++pair) {
-            const float a = row[pair];
-            const float b = row[pairs + pair];
-            row[pair] = a * cos_values[static_cast<size_t>(pair)] -
-                        b * sin_values[static_cast<size_t>(pair)];
-            row[pairs + pair] = b * cos_values[static_cast<size_t>(pair)] +
-                                a * sin_values[static_cast<size_t>(pair)];
+            const auto [first, second] = rope_geometry::pair_components(
+                pair, pairs, RopePairingKind::SplitHalf);
+            const float a = row[first];
+            const float b = row[second];
+            row[first] = a * cos_values[static_cast<size_t>(pair)] -
+                         b * sin_values[static_cast<size_t>(pair)];
+            row[second] = b * cos_values[static_cast<size_t>(pair)] +
+                          a * sin_values[static_cast<size_t>(pair)];
         }
     }
 }
