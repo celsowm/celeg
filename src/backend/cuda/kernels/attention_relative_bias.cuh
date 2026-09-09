@@ -51,11 +51,11 @@ struct RelativeBiasScorePolicy {
 void launch_gqa_decode_relative_device(const GqaContiguousArgs& args) {
     const GqaGeometry& g = args.geometry;
     const auto& bias = args.relative_bias;
-    const OnlineContiguousBf16Storage storage{
+    const ContiguousBf16AttentionStorage storage{
         args.kv.keys, args.kv.values, g.kv_heads};
     gqa_online_attention_kernel<<<g.q_heads, 32, 0, args.stream>>>(
         args.query, storage, args.out,
-        OnlineSinglePosition{args.extent.position},
+        AttentionSinglePosition{args.extent.position},
         RelativeBiasScorePolicy{
             bias.values, bias.bucket_count, bias.max_distance,
             bias.bidirectional},
@@ -67,10 +67,10 @@ void launch_gqa_prefill_relative(const GqaContiguousArgs& args) {
     const GqaGeometry& g = args.geometry;
     const auto& bias = args.relative_bias;
     const int rows = args.extent.rows;
-    const OnlineContiguousBf16Storage storage{
+    const ContiguousBf16AttentionStorage storage{
         args.kv.keys, args.kv.values, g.kv_heads};
     gqa_online_attention_kernel<<<rows * g.q_heads, 32, 0, args.stream>>>(
-        args.query, storage, args.out, OnlinePrefillPosition{},
+        args.query, storage, args.out, AttentionPrefillPosition{},
         RelativeBiasScorePolicy{
             bias.values, bias.bucket_count, bias.max_distance,
             bias.bidirectional},
@@ -81,12 +81,12 @@ void launch_gqa_prefill_relative(const GqaContiguousArgs& args) {
 void launch_gqa_decode_relative_int8_device(const GqaContiguousInt8Args& args) {
     const GqaGeometry& g = args.geometry;
     const auto& bias = args.relative_bias;
-    const OnlineContiguousInt8Storage storage{
+    const ContiguousInt8AttentionStorage storage{
         args.kv.keys, args.kv.values, args.kv.key_scales,
         args.kv.value_scales, g.kv_heads};
     gqa_online_attention_kernel<<<g.q_heads, 32, 0, args.stream>>>(
         args.query, storage, args.out,
-        OnlineSinglePosition{args.extent.position},
+        AttentionSinglePosition{args.extent.position},
         RelativeBiasScorePolicy{
             bias.values, bias.bucket_count, bias.max_distance,
             bias.bidirectional},
@@ -98,11 +98,11 @@ void launch_gqa_prefill_relative_int8(const GqaContiguousInt8Args& args) {
     const GqaGeometry& g = args.geometry;
     const auto& bias = args.relative_bias;
     const int rows = args.extent.rows;
-    const OnlineContiguousInt8Storage storage{
+    const ContiguousInt8AttentionStorage storage{
         args.kv.keys, args.kv.values, args.kv.key_scales,
         args.kv.value_scales, g.kv_heads};
     gqa_online_attention_kernel<<<rows * g.q_heads, 32, 0, args.stream>>>(
-        args.query, storage, args.out, OnlinePrefillPosition{},
+        args.query, storage, args.out, AttentionPrefillPosition{},
         RelativeBiasScorePolicy{
             bias.values, bias.bucket_count, bias.max_distance,
             bias.bidirectional},
@@ -113,10 +113,10 @@ void launch_gqa_prefill_relative_int8(const GqaContiguousInt8Args& args) {
 void launch_gqa_decode_relative_batch_ptrs(const GqaBatchPtrArgs& args) {
     const GqaGeometry& g = args.geometry;
     const auto& bias = args.relative_bias;
-    const OnlinePtrBf16Storage storage{
+    const PointerBf16AttentionStorage storage{
         args.kv.keys, args.kv.values, g.kv_heads};
     gqa_online_attention_kernel<<<args.rows * g.q_heads, 32, 0, args.stream>>>(
-        args.query, storage, args.out, OnlineBatchPositions{args.positions},
+        args.query, storage, args.out, AttentionBatchPositions{args.positions},
         RelativeBiasScorePolicy{
             bias.values, bias.bucket_count, bias.max_distance,
             bias.bidirectional},
@@ -127,11 +127,11 @@ void launch_gqa_decode_relative_batch_ptrs(const GqaBatchPtrArgs& args) {
 void launch_gqa_decode_relative_int8_batch_ptrs(const GqaBatchPtrInt8Args& args) {
     const GqaGeometry& g = args.geometry;
     const auto& bias = args.relative_bias;
-    const OnlinePtrInt8Storage storage{
+    const PointerInt8AttentionStorage storage{
         args.kv.keys, args.kv.values, args.kv.key_scales,
         args.kv.value_scales, g.kv_heads};
     gqa_online_attention_kernel<<<args.rows * g.q_heads, 32, 0, args.stream>>>(
-        args.query, storage, args.out, OnlineBatchPositions{args.positions},
+        args.query, storage, args.out, AttentionBatchPositions{args.positions},
         RelativeBiasScorePolicy{
             bias.values, bias.bucket_count, bias.max_distance,
             bias.bidirectional},
@@ -143,12 +143,12 @@ void launch_gqa_decode_relative_paged_batch(const GqaPagedArgs& args) {
     const GqaGeometry& g = args.geometry;
     const PagedKvIndex& index = args.index;
     const auto& bias = args.relative_bias;
-    const OnlinePagedBf16Storage storage{
+    const PagedBf16AttentionStorage storage{
         args.kv.keys, args.kv.values, index.page_tables,
         index.page_table_stride, index.attention_slot, index.page_tokens,
         index.page_vector_elements, index.layer_vector_offset, g.kv_heads};
     gqa_online_attention_kernel<<<args.rows * g.q_heads, 32, 0, args.stream>>>(
-        args.query, storage, args.out, OnlineBatchPositions{args.positions},
+        args.query, storage, args.out, AttentionBatchPositions{args.positions},
         RelativeBiasScorePolicy{
             bias.values, bias.bucket_count, bias.max_distance,
             bias.bidirectional},
@@ -161,14 +161,14 @@ void launch_gqa_decode_relative_int8_paged_batch(const GqaPagedInt8Args& args) {
     const PagedKvIndex& index = args.index;
     const PagedKvScaleIndex& scales = args.scale_index;
     const auto& bias = args.relative_bias;
-    const OnlinePagedInt8Storage storage{
+    const PagedInt8AttentionStorage storage{
         args.kv.keys, args.kv.values, args.kv.key_scales,
         args.kv.value_scales, index.page_tables, index.page_table_stride,
         index.attention_slot, index.page_tokens, index.page_vector_elements,
         index.layer_vector_offset, scales.page_scale_elements,
         scales.layer_scale_offset, g.kv_heads};
     gqa_online_attention_kernel<<<args.rows * g.q_heads, 32, 0, args.stream>>>(
-        args.query, storage, args.out, OnlineBatchPositions{args.positions},
+        args.query, storage, args.out, AttentionBatchPositions{args.positions},
         RelativeBiasScorePolicy{
             bias.values, bias.bucket_count, bias.max_distance,
             bias.bidirectional},
