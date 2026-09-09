@@ -1,33 +1,3 @@
-uint celeg_relative_position_bucket(int query_position,
-                                    int key_position,
-                                    uint bucket_count,
-                                    uint max_distance,
-                                    uint bidirectional) {
-    const int relative_position = key_position - query_position;
-    const uint directional_buckets = bidirectional != 0 ? bucket_count / 2 : bucket_count;
-    const bool positive = bidirectional != 0 && relative_position > 0;
-    const uint distance = bidirectional != 0
-        ? static_cast<uint>(abs(relative_position))
-        : static_cast<uint>(max(-relative_position, 0));
-    const uint max_exact = directional_buckets / 2;
-    uint bucket = 0;
-    if (distance < max_exact) {
-        bucket = distance;
-    } else {
-        const float denominator = log(
-            static_cast<float>(max(max_distance, max_exact + 1)) /
-            static_cast<float>(max(max_exact, 1u)));
-        const float logarithmic = denominator == 0.0f ? 0.0f : log(
-            static_cast<float>(max(distance, max_exact)) /
-            static_cast<float>(max(max_exact, 1u))) / denominator;
-        bucket = max_exact + static_cast<uint>(
-            logarithmic * static_cast<float>(directional_buckets - max_exact));
-        bucket = min(bucket, directional_buckets - 1);
-    }
-    if (positive) bucket += directional_buckets;
-    return bucket;
-}
-
 float celeg_relative_position_bias(device const float* values,
                                    uint head,
                                    int query_position,
