@@ -1,6 +1,7 @@
 foreach(test_name IN ITEMS
     architecture_resolution_test
     attention_backend_capabilities_test
+    attention_bias_semantics_test
     attention_bias_validation_test
     attention_norm_weight_plan_test
     attention_semantic_capability_test
@@ -30,6 +31,8 @@ target_include_directories(layer_inference_rule_test PRIVATE src/model)
 target_sources(model_compiler_test PRIVATE
     src/backend/cpu/compiler.cpp
     src/backend/cuda/compiler.cpp)
+target_sources(attention_bias_semantics_test PRIVATE
+    src/backend/cpu/memory/attention_policy.cpp)
 target_sources(cpu_attention_semantic_capability_test PRIVATE
     src/backend/cpu/compiler.cpp)
 target_include_directories(cuda_packed_attention_capability_test PRIVATE
