@@ -18,6 +18,52 @@ float celeg_attention_scale(uint head_dim) {
     return rsqrt(static_cast<float>(head_dim));
 }
 
+struct CelegMergeTransition {
+    float maximum;
+    float denominator;
+    float destination_scale;
+    float source_scale;
+};
+
+float celeg_partial_rescale(float partial_maximum, float global_maximum) {
+    return exp(partial_maximum - global_maximum);
+}
+
+CelegMergeTransition celeg_merge_pair(
+    float destination_maximum, float destination_denominator,
+    float source_maximum, float source_denominator) {
+    const float maximum = max(destination_maximum, source_maximum);
+    const float destination_scale = isfinite(destination_maximum)
+        ? celeg_partial_rescale(destination_maximum, maximum) : 0.0f;
+    const float source_scale = celeg_partial_rescale(source_maximum, maximum);
+    return CelegMergeTransition{
+        maximum,
+        destination_denominator * destination_scale +
+            source_denominator * source_scale,
+        destination_scale,
+        source_scale};
+}
+
+struct CelegOnlineTransition {
+    float maximum;
+    float denominator;
+    float previous_scale;
+    float current_scale;
+};
+
+CelegOnlineTransition celeg_online_transition(
+    float previous_maximum, float previous_denominator, float score) {
+    const float maximum = max(previous_maximum, score);
+    const float previous_scale = isfinite(previous_maximum)
+        ? exp(previous_maximum - maximum) : 0.0f;
+    const float current_scale = exp(score - maximum);
+    return CelegOnlineTransition{
+        maximum,
+        previous_denominator * previous_scale + current_scale,
+        previous_scale,
+        current_scale};
+}
+
 bool celeg_attention_causal_visible(int query_position, int key_position) {
     return query_position >= 0 && key_position >= 0 && key_position <= query_position;
 }
@@ -193,18 +239,18 @@ void celeg_attention_span(device const float* query,
         }
         const float score = simd_sum(partial) * span.scale +
             bias.value(span.head, span.query_position, position);
-        const float updated = max(maximum, score);
-        const float correction = exp(maximum - updated);
-        const float weight = exp(score - updated);
-        denominator = denominator * correction + weight;
+        const CelegOnlineTransition transition = celeg_online_transition(
+            maximum, denominator, score);
+        denominator = transition.denominator;
         for (uint slot = 0; slot < kCelegAttentionSlots; ++slot) {
             const uint dimension = lane + slot * 32u;
             if (dimension < head_dim) {
-                accumulator[slot] = accumulator[slot] * correction +
-                    weight * value_cache[key_base + dimension];
+                accumulator[slot] =
+                    accumulator[slot] * transition.previous_scale +
+                    transition.current_scale * value_cache[key_base + dimension];
             }
         }
-        maximum = updated;
+        maximum = transition.maximum;
     }
 
     threadgroup float* shared_maximum = shared;
@@ -229,7 +275,8 @@ void celeg_attention_span(device const float* query,
     }
     float total = 0.0f;
     for (uint group = 0; group < simd_count; ++group) {
-        total += shared_denominator[group] * exp(shared_maximum[group] - global_maximum);
+        total += shared_denominator[group] *
+            celeg_partial_rescale(shared_maximum[group], global_maximum);
     }
     for (uint slot = 0; slot < kCelegAttentionSlots; ++slot) {
         const uint dimension = lane + slot * 32u;
@@ -237,7 +284,7 @@ void celeg_attention_span(device const float* query,
         float value = 0.0f;
         for (uint group = 0; group < simd_count; ++group) {
             value += shared_accumulator[group * head_dim + dimension] *
-                exp(shared_maximum[group] - global_maximum);
+                celeg_partial_rescale(shared_maximum[group], global_maximum);
         }
         output[span.output_base + dimension] = value / total;
     }

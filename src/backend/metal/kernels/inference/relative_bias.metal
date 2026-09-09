@@ -14,32 +14,6 @@ kernel void celeg_attention_micro_semantics_probe(
     scale_out[0] = celeg_attention_scale(head_dim);
 }
 
-struct CelegMergeTransition {
-    float maximum;
-    float denominator;
-    float destination_scale;
-    float source_scale;
-};
-
-float celeg_partial_rescale(float partial_maximum, float global_maximum) {
-    return exp(partial_maximum - global_maximum);
-}
-
-CelegMergeTransition celeg_merge_pair(
-    float destination_maximum, float destination_denominator,
-    float source_maximum, float source_denominator) {
-    const float maximum = max(destination_maximum, source_maximum);
-    const float destination_scale = isfinite(destination_maximum)
-        ? celeg_partial_rescale(destination_maximum, maximum) : 0.0f;
-    const float source_scale = celeg_partial_rescale(source_maximum, maximum);
-    return CelegMergeTransition{
-        maximum,
-        destination_denominator * destination_scale +
-            source_denominator * source_scale,
-        destination_scale,
-        source_scale};
-}
-
 kernel void celeg_attention_merge_semantics_probe(
     device float* output [[buffer(0)]],
     constant float& destination_maximum [[buffer(1)]],
@@ -59,26 +33,6 @@ kernel void celeg_attention_merge_semantics_probe(
     output[4] = destination_accumulator * transition.destination_scale +
         source_accumulator * transition.source_scale;
     output[5] = celeg_partial_rescale(source_maximum, global_maximum);
-}
-
-struct CelegOnlineTransition {
-    float maximum;
-    float denominator;
-    float previous_scale;
-    float current_scale;
-};
-
-CelegOnlineTransition celeg_online_transition(
-    float previous_maximum, float previous_denominator, float score) {
-    const float maximum = max(previous_maximum, score);
-    const float previous_scale = isfinite(previous_maximum)
-        ? exp(previous_maximum - maximum) : 0.0f;
-    const float current_scale = exp(score - maximum);
-    return CelegOnlineTransition{
-        maximum,
-        previous_denominator * previous_scale + current_scale,
-        previous_scale,
-        current_scale};
 }
 
 kernel void celeg_attention_online_semantics_probe(
