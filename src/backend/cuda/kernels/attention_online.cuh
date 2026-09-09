@@ -27,18 +27,19 @@ __device__ __forceinline__ void online_attention_row(
         }
         const float score = score_policy.score(
             warp_broadcast_sum(partial), scale, head, query_position, token);
-        const float next_max = fmaxf(running_max, score);
-        const float alpha = expf(running_max - next_max);
-        const float beta = expf(score - next_max);
-        denominator = denominator * alpha + beta;
+        const auto transition = celeg::attention_semantics::online_transition(
+            running_max, denominator, score);
+        denominator = transition.denominator;
         int index = 0;
         for (int dimension = lane; dimension < head_dim;
              dimension += 32, ++index) {
-            accumulator[index] = accumulator[index] * alpha +
+            accumulator[index] =
+                accumulator[index] * transition.previous_scale +
                 storage.weighted_value(
-                    beta, token, kv_head, dimension, head_dim);
+                    transition.current_scale, token, kv_head, dimension,
+                    head_dim);
         }
-        running_max = next_max;
+        running_max = transition.maximum;
     }
 
     int index = 0;
