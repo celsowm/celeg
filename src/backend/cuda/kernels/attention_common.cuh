@@ -33,6 +33,14 @@ struct ContiguousBf16AttentionStorage {
         return *this;
     }
 
+    __device__ __forceinline__ float dot_term(
+        float query_value, int token, int kv_head, int dimension,
+        int head_dim) const {
+        const size_t base =
+            (static_cast<size_t>(token) * kv_heads + kv_head) * head_dim;
+        return query_value * bf16_float(keys[base + dimension]);
+    }
+
     __device__ __forceinline__ float dot(
         const __nv_bfloat16* query, int token, int kv_head, int head_dim,
         float* warp_sums, float* dot_total) const {
@@ -66,6 +74,14 @@ struct ContiguousInt8AttentionStorage {
         return *this;
     }
 
+    __device__ __forceinline__ float dot_term(
+        float query_value, int token, int kv_head, int dimension,
+        int head_dim) const {
+        const size_t scale_index = static_cast<size_t>(token) * kv_heads + kv_head;
+        return query_value * static_cast<float>(
+            keys[scale_index * head_dim + dimension]) * key_scales[scale_index];
+    }
+
     __device__ __forceinline__ float dot(
         const __nv_bfloat16* query, int token, int kv_head, int head_dim,
         float* warp_sums, float* dot_total) const {
@@ -86,6 +102,29 @@ struct ContiguousInt8AttentionStorage {
         float probability, int token, int kv_head, int dimension,
         int head_dim) const {
         return probability * value(token, kv_head, dimension, head_dim);
+    }
+};
+
+struct PointerBf16AttentionStorage {
+    const __nv_bfloat16* const* keys;
+    const __nv_bfloat16* const* values;
+    int kv_heads;
+
+    __device__ __forceinline__ ContiguousBf16AttentionStorage row(int index) const {
+        return {keys[index], values[index], kv_heads};
+    }
+};
+
+struct PointerInt8AttentionStorage {
+    const int8_t* const* keys;
+    const int8_t* const* values;
+    const float* const* key_scales;
+    const float* const* value_scales;
+    int kv_heads;
+
+    __device__ __forceinline__ ContiguousInt8AttentionStorage row(int index) const {
+        return {keys[index], values[index], key_scales[index],
+                value_scales[index], kv_heads};
     }
 };
 

@@ -2,54 +2,6 @@
 
 #include "paged_kv_offsets.cuh"
 
-/** @brief Contiguous BF16 KV row used by warp-online attention. */
-struct OnlineContiguousBf16Row {
-    const __nv_bfloat16* keys;
-    const __nv_bfloat16* values;
-    int kv_heads;
-
-    __device__ __forceinline__ float dot_term(
-        float query_value, int token, int kv_head, int dimension,
-        int head_dim) const {
-        const size_t base =
-            (static_cast<size_t>(token) * kv_heads + kv_head) * head_dim;
-        return query_value * bf16_float(keys[base + dimension]);
-    }
-
-    __device__ __forceinline__ float weighted_value(
-        float weight, int token, int kv_head, int dimension,
-        int head_dim) const {
-        const size_t base =
-            (static_cast<size_t>(token) * kv_heads + kv_head) * head_dim;
-        return bf16_float(values[base + dimension]) * weight;
-    }
-};
-
-/** @brief Contiguous INT8 KV row preserving scale multiplication order. */
-struct OnlineContiguousInt8Row {
-    const int8_t* keys;
-    const int8_t* values;
-    const float* key_scales;
-    const float* value_scales;
-    int kv_heads;
-
-    __device__ __forceinline__ float dot_term(
-        float query_value, int token, int kv_head, int dimension,
-        int head_dim) const {
-        const size_t scale_index = static_cast<size_t>(token) * kv_heads + kv_head;
-        return query_value * static_cast<float>(
-            keys[scale_index * head_dim + dimension]) * key_scales[scale_index];
-    }
-
-    __device__ __forceinline__ float weighted_value(
-        float weight, int token, int kv_head, int dimension,
-        int head_dim) const {
-        const size_t scale_index = static_cast<size_t>(token) * kv_heads + kv_head;
-        return static_cast<float>(values[scale_index * head_dim + dimension]) *
-            value_scales[scale_index] * weight;
-    }
-};
-
 /** @brief Paged BF16 KV row used by warp-online attention. */
 struct OnlinePagedBf16Row {
     const __nv_bfloat16* key_pool;
@@ -130,51 +82,6 @@ struct OnlinePagedInt8Row {
     }
 };
 
-struct OnlineContiguousBf16Storage {
-    const __nv_bfloat16* keys;
-    const __nv_bfloat16* values;
-    int kv_heads;
-
-    __device__ __forceinline__ OnlineContiguousBf16Row row(int) const {
-        return {keys, values, kv_heads};
-    }
-};
-
-struct OnlineContiguousInt8Storage {
-    const int8_t* keys;
-    const int8_t* values;
-    const float* key_scales;
-    const float* value_scales;
-    int kv_heads;
-
-    __device__ __forceinline__ OnlineContiguousInt8Row row(int) const {
-        return {keys, values, key_scales, value_scales, kv_heads};
-    }
-};
-
-struct OnlinePtrBf16Storage {
-    const __nv_bfloat16* const* keys;
-    const __nv_bfloat16* const* values;
-    int kv_heads;
-
-    __device__ __forceinline__ OnlineContiguousBf16Row row(int index) const {
-        return {keys[index], values[index], kv_heads};
-    }
-};
-
-struct OnlinePtrInt8Storage {
-    const int8_t* const* keys;
-    const int8_t* const* values;
-    const float* const* key_scales;
-    const float* const* value_scales;
-    int kv_heads;
-
-    __device__ __forceinline__ OnlineContiguousInt8Row row(int index) const {
-        return {keys[index], values[index], key_scales[index],
-                value_scales[index], kv_heads};
-    }
-};
-
 struct OnlinePagedBf16Storage {
     const __nv_bfloat16* keys;
     const __nv_bfloat16* values;
@@ -218,19 +125,13 @@ struct OnlinePagedInt8Storage {
     }
 };
 
-struct OnlinePrefillPosition {
-    __device__ __forceinline__ int value(int row) const { return row; }
-};
-
-struct OnlineSinglePosition {
-    const int32_t* position;
-    __device__ __forceinline__ int value(int) const { return *position; }
-};
-
-struct OnlineBatchPositions {
-    const int32_t* positions;
-    __device__ __forceinline__ int value(int row) const { return positions[row]; }
-};
+using OnlineContiguousBf16Storage = ContiguousBf16AttentionStorage;
+using OnlineContiguousInt8Storage = ContiguousInt8AttentionStorage;
+using OnlinePtrBf16Storage = PointerBf16AttentionStorage;
+using OnlinePtrInt8Storage = PointerInt8AttentionStorage;
+using OnlinePrefillPosition = AttentionPrefillPosition;
+using OnlineSinglePosition = AttentionSinglePosition;
+using OnlineBatchPositions = AttentionBatchPositions;
 
 /**
  * @brief Runs one warp-online attention row with storage and score policies.
