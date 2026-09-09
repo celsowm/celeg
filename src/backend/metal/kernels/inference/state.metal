@@ -1,3 +1,27 @@
+/**
+ * @brief Reduces one threadgroup's squared norm and returns the inverse RMS scale.
+ */
+inline float celeg_rms_inverse(
+    float sum,
+    uint width,
+    float epsilon,
+    uint index,
+    uint lane,
+    uint simd,
+    threadgroup float* partial,
+    threadgroup float* inverse) {
+    const float reduced = simd_sum(sum);
+    if (lane == 0) partial[simd] = reduced;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    if (index == 0) {
+        float total = 0.0f;
+        for (uint group = 0; group < 8; ++group) total += partial[group];
+        *inverse = rsqrt(total / static_cast<float>(width) + epsilon);
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    return *inverse;
+}
+
 kernel void celeg_rmsnorm(device const float* input [[buffer(0)]],
                           device const float* weight [[buffer(1)]],
                           device float* output [[buffer(2)]],
@@ -10,16 +34,11 @@ kernel void celeg_rmsnorm(device const float* input [[buffer(0)]],
     for (uint i = index; i < width; i += 256) sum += input[i] * input[i];
     threadgroup float partial[8];
     threadgroup float inverse;
-    const float reduced = simd_sum(sum);
-    if (lane == 0) partial[simd] = reduced;
-    threadgroup_barrier(mem_flags::mem_threadgroup);
-    if (index == 0) {
-        float total = 0.0f;
-        for (uint group = 0; group < 8; ++group) total += partial[group];
-        inverse = rsqrt(total / static_cast<float>(width) + epsilon);
+    const float rms_inverse = celeg_rms_inverse(
+        sum, width, epsilon, index, lane, simd, partial, &inverse);
+    for (uint i = index; i < width; i += 256) {
+        output[i] = input[i] * rms_inverse * weight[i];
     }
-    threadgroup_barrier(mem_flags::mem_threadgroup);
-    for (uint i = index; i < width; i += 256) output[i] = input[i] * inverse * weight[i];
 }
 
 kernel void celeg_rmsnorm_save(device const float* input [[buffer(0)]],
@@ -35,18 +54,11 @@ kernel void celeg_rmsnorm_save(device const float* input [[buffer(0)]],
     for (uint i = index; i < width; i += 256) sum += input[i] * input[i];
     threadgroup float partial[8];
     threadgroup float inverse;
-    const float reduced = simd_sum(sum);
-    if (lane == 0) partial[simd] = reduced;
-    threadgroup_barrier(mem_flags::mem_threadgroup);
-    if (index == 0) {
-        float total = 0.0f;
-        for (uint group = 0; group < 8; ++group) total += partial[group];
-        inverse = rsqrt(total / static_cast<float>(width) + epsilon);
-    }
-    threadgroup_barrier(mem_flags::mem_threadgroup);
+    const float rms_inverse = celeg_rms_inverse(
+        sum, width, epsilon, index, lane, simd, partial, &inverse);
     for (uint i = index; i < width; i += 256) {
         residual[i] = input[i];
-        output[i] = input[i] * inverse * weight[i];
+        output[i] = input[i] * rms_inverse * weight[i];
     }
 }
 
@@ -69,19 +81,12 @@ kernel void celeg_residual_rmsnorm(
     }
     threadgroup float partial[8];
     threadgroup float inverse;
-    const float reduced = simd_sum(sum);
-    if (lane == 0) partial[simd] = reduced;
-    threadgroup_barrier(mem_flags::mem_threadgroup);
-    if (index == 0) {
-        float total = 0.0f;
-        for (uint group = 0; group < 8; ++group) total += partial[group];
-        inverse = rsqrt(total / static_cast<float>(width) + epsilon);
-    }
-    threadgroup_barrier(mem_flags::mem_threadgroup);
+    const float rms_inverse = celeg_rms_inverse(
+        sum, width, epsilon, index, lane, simd, partial, &inverse);
     for (uint i = index; i < width; i += 256) {
         const float value = input[i] * multiplier + residual[i];
         output[i] = value;
-        normed[i] = value * inverse * weight[i];
+        normed[i] = value * rms_inverse * weight[i];
     }
 }
 
@@ -105,20 +110,13 @@ kernel void celeg_residual_rmsnorm_save(
     }
     threadgroup float partial[8];
     threadgroup float inverse;
-    const float reduced = simd_sum(sum);
-    if (lane == 0) partial[simd] = reduced;
-    threadgroup_barrier(mem_flags::mem_threadgroup);
-    if (index == 0) {
-        float total = 0.0f;
-        for (uint group = 0; group < 8; ++group) total += partial[group];
-        inverse = rsqrt(total / static_cast<float>(width) + epsilon);
-    }
-    threadgroup_barrier(mem_flags::mem_threadgroup);
+    const float rms_inverse = celeg_rms_inverse(
+        sum, width, epsilon, index, lane, simd, partial, &inverse);
     for (uint i = index; i < width; i += 256) {
         const float value = input[i] * multiplier + residual[i];
         output[i] = value;
         next_residual[i] = value;
-        normed[i] = value * inverse * weight[i];
+        normed[i] = value * rms_inverse * weight[i];
     }
 }
 
