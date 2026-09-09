@@ -60,3 +60,32 @@ __device__ __forceinline__ void block_sparse_attention_row(
         output[lane] = __float2bfloat16(accumulator);
     }
 }
+
+template <typename Storage, typename Positions>
+__global__ void gqa_block_sparse_kernel(
+    const __nv_bfloat16* query, Storage storage, __nv_bfloat16* output,
+    Positions positions, int rows, int q_heads, int kv_heads, int head_dim,
+    GqaBlockSparsePattern pattern) {
+    const int flat = blockIdx.x;
+    const int row = flat / q_heads;
+    const int query_head = flat % q_heads;
+    if (row >= rows || query_head >= q_heads) return;
+
+    const int query_position = positions.value(row);
+    const int kv_head = query_head / (q_heads / kv_heads);
+    const __nv_bfloat16* query_row = query +
+        (static_cast<size_t>(row) * q_heads + query_head) * head_dim;
+    __nv_bfloat16* output_row = output +
+        (static_cast<size_t>(row) * q_heads + query_head) * head_dim;
+    const auto row_storage = storage.row(row);
+
+    __shared__ float warp_sums[32];
+    __shared__ float dot_total;
+    __shared__ float maximum;
+    __shared__ float denominator;
+    __shared__ float probability;
+
+    block_sparse_attention_row(
+        query_row, row_storage, output_row, query_position, kv_head, head_dim,
+        pattern, warp_sums, &dot_total, &maximum, &denominator, &probability);
+}

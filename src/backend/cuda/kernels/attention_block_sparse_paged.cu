@@ -149,35 +149,6 @@ struct PagedBlockSparseInt8Storage {
     }
 };
 
-template <typename Storage>
-__global__ void gqa_decode_block_sparse_paged_kernel(
-    const __nv_bfloat16* query, Storage storage, __nv_bfloat16* out,
-    const int32_t* positions, int rows, int q_heads, int kv_heads,
-    int head_dim, GqaBlockSparsePattern pattern) {
-    const int flat = blockIdx.x;
-    const int row = flat / q_heads;
-    const int query_head = flat % q_heads;
-    if (row >= rows) return;
-
-    const int kv_head = query_head / (q_heads / kv_heads);
-    const int query_position = positions[row];
-    const __nv_bfloat16* q = query +
-        (static_cast<size_t>(row) * q_heads + query_head) * head_dim;
-    __nv_bfloat16* output = out +
-        (static_cast<size_t>(row) * q_heads + query_head) * head_dim;
-    const auto row_storage = storage.row(row);
-
-    __shared__ float warp_sums[32];
-    __shared__ float dot_total;
-    __shared__ float maximum;
-    __shared__ float denominator;
-    __shared__ float probability;
-
-    block_sparse_attention_row(
-        q, row_storage, output, query_position, kv_head, head_dim, pattern,
-        warp_sums, &dot_total, &maximum, &denominator, &probability);
-}
-
 }
 
 void launch_gqa_decode_block_sparse_paged(
@@ -188,10 +159,10 @@ void launch_gqa_decode_block_sparse_paged(
         args.index.page_table_stride, args.index.attention_slot,
         args.index.page_tokens, args.index.page_vector_elements,
         args.index.layer_vector_offset, args.geometry.kv_heads};
-    gqa_decode_block_sparse_paged_kernel<<<
+    gqa_block_sparse_kernel<<<
         args.rows * args.geometry.q_heads, threads, 0, args.stream>>>(
-        args.query, storage, args.out, args.positions, args.rows,
-        args.geometry.q_heads, args.geometry.kv_heads,
+        args.query, storage, args.out, AttentionBatchPositions{args.positions},
+        args.rows, args.geometry.q_heads, args.geometry.kv_heads,
         args.geometry.head_dim, pattern);
     CELEG_KERNEL_DEBUG_SYNC(args.stream);
 }
@@ -206,10 +177,10 @@ void launch_gqa_decode_block_sparse_int8_paged(
         args.index.page_tokens, args.index.page_vector_elements,
         args.index.layer_vector_offset, args.scale_index.page_scale_elements,
         args.scale_index.layer_scale_offset, args.geometry.kv_heads};
-    gqa_decode_block_sparse_paged_kernel<<<
+    gqa_block_sparse_kernel<<<
         args.rows * args.geometry.q_heads, threads, 0, args.stream>>>(
-        args.query, storage, args.out, args.positions, args.rows,
-        args.geometry.q_heads, args.geometry.kv_heads,
+        args.query, storage, args.out, AttentionBatchPositions{args.positions},
+        args.rows, args.geometry.q_heads, args.geometry.kv_heads,
         args.geometry.head_dim, pattern);
     CELEG_KERNEL_DEBUG_SYNC(args.stream);
 }

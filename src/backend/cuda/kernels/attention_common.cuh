@@ -29,6 +29,10 @@ struct ContiguousBf16AttentionStorage {
     const __nv_bfloat16* values;
     int kv_heads;
 
+    __device__ __forceinline__ ContiguousBf16AttentionStorage row(int) const {
+        return *this;
+    }
+
     __device__ __forceinline__ float dot(
         const __nv_bfloat16* query, int token, int kv_head, int head_dim,
         float* warp_sums, float* dot_total) const {
@@ -58,6 +62,10 @@ struct ContiguousInt8AttentionStorage {
     const float* value_scales;
     int kv_heads;
 
+    __device__ __forceinline__ ContiguousInt8AttentionStorage row(int) const {
+        return *this;
+    }
+
     __device__ __forceinline__ float dot(
         const __nv_bfloat16* query, int token, int kv_head, int head_dim,
         float* warp_sums, float* dot_total) const {
@@ -79,6 +87,20 @@ struct ContiguousInt8AttentionStorage {
         int head_dim) const {
         return probability * value(token, kv_head, dimension, head_dim);
     }
+};
+
+struct AttentionPrefillPosition {
+    __device__ __forceinline__ int value(int row) const { return row; }
+};
+
+struct AttentionSinglePosition {
+    const int32_t* position;
+    __device__ __forceinline__ int value(int) const { return *position; }
+};
+
+struct AttentionBatchPositions {
+    const int32_t* positions;
+    __device__ __forceinline__ int value(int row) const { return positions[row]; }
 };
 
 __device__ __forceinline__ bool attention_block_sparse_visible(
