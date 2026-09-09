@@ -1,3 +1,5 @@
+#include "celeg/model/rope_geometry.hpp"
+
 __global__ void rope_strict_kernel(__nv_bfloat16* data,
                                    const __nv_bfloat16* rope_cos,
                                    const __nv_bfloat16* rope_sin,
@@ -287,12 +289,10 @@ __global__ void dynamic_qk_norm_rope_kernel(
     const int position = mode == 2 ? row :
         resolved_position(position_value, position_pointer, mode == 1);
     for (int i = threadIdx.x; i < rotary_pairs; i += blockDim.x) {
-        /// AdjacentPairs rotates consecutive components (2i, 2i+1), matching
-        /// llama.cpp's "normal" RoPE and the row order its conversion writes;
-        /// SplitHalf rotates (i, rotary_pairs + i), the NEOX/HuggingFace order.
-        const int low = pairing == RopePairingKind::AdjacentPairs ? 2 * i : i;
-        const int high = pairing == RopePairingKind::AdjacentPairs
-            ? 2 * i + 1 : rotary_pairs + i;
+        const auto components = rope_geometry::pair_components(
+            i, rotary_pairs, pairing);
+        const int low = components.first;
+        const int high = components.second;
         const float a = bf16_float(vector[low]) * inv *
             (normalize ? bf16_float(norm_weight[low]) : 1.0f);
         const float b = bf16_float(vector[high]) * inv *
@@ -325,7 +325,9 @@ void launch_dynamic_qk_norm_rope(
     float rope_theta, float rotary_fraction, float eps, bool normalize,
     CudaRopeScaling scaling, RopePairingKind pairing, cudaStream_t stream) {
     const int threads = attention_threads(head_dim);
-    const int pairs = static_cast<int>(static_cast<float>(head_dim) * rotary_fraction) / 2;
+    const int rotary_dimension = static_cast<int>(
+        static_cast<float>(head_dim) * rotary_fraction);
+    const int pairs = rope_geometry::rotary_pairs(rotary_dimension);
     const float query_attention_scale = scaling.kind == 3
         ? scaling.attention_factor * scaling.attention_factor
         : 1.0f;
@@ -348,7 +350,9 @@ void launch_dynamic_qk_norm_rope_device(
     float rope_theta, float rotary_fraction, float eps, bool normalize,
     CudaRopeScaling scaling, RopePairingKind pairing, cudaStream_t stream) {
     const int threads = attention_threads(head_dim);
-    const int pairs = static_cast<int>(static_cast<float>(head_dim) * rotary_fraction) / 2;
+    const int rotary_dimension = static_cast<int>(
+        static_cast<float>(head_dim) * rotary_fraction);
+    const int pairs = rope_geometry::rotary_pairs(rotary_dimension);
     const float query_attention_scale = scaling.kind == 3
         ? scaling.attention_factor * scaling.attention_factor
         : 1.0f;
@@ -371,7 +375,9 @@ void launch_dynamic_qk_norm_rope_prefill(
     float rope_theta, float rotary_fraction, float eps, bool normalize,
     CudaRopeScaling scaling, RopePairingKind pairing, cudaStream_t stream) {
     const int threads = attention_threads(head_dim);
-    const int pairs = static_cast<int>(static_cast<float>(head_dim) * rotary_fraction) / 2;
+    const int rotary_dimension = static_cast<int>(
+        static_cast<float>(head_dim) * rotary_fraction);
+    const int pairs = rope_geometry::rotary_pairs(rotary_dimension);
     const float query_attention_scale = scaling.kind == 3
         ? scaling.attention_factor * scaling.attention_factor
         : 1.0f;
@@ -385,12 +391,6 @@ void launch_dynamic_qk_norm_rope_prefill(
             rope_theta, pairs, eps, normalize, scaling, 1.0f, pairing);
     }
     CELEG_KERNEL_DEBUG_SYNC(stream);
-}
-
-__device__ __forceinline__ int mrope_axis_for_pair_device(
-    int pair, int section0, int section1, bool interleaved) {
-    if (interleaved) return pair % 3;
-    return pair < section0 ? 0 : (pair < section0 + section1 ? 1 : 2);
 }
 
 __global__ void dynamic_mrope_qk_norm_rope_kernel(
@@ -422,19 +422,22 @@ __global__ void dynamic_mrope_qk_norm_rope_kernel(
     }
     __syncthreads();
     for (int i = threadIdx.x; i < rotary_pairs; i += blockDim.x) {
-        const int axis = mrope_axis_for_pair_device(i, section0, section1, interleaved);
+        const int axis = rope_geometry::mrope_axis_for_pair(
+            i, section0, section1, interleaved);
         const float position = static_cast<float>(positions[axis]);
         const float frequency = cuda_rope::scaled_frequency(
             theta, i, 2 * rotary_pairs, static_cast<int>(position), scaling);
         const float angle = position * frequency;
-        const float a = bf16_float(vector[i]) * inv *
-            (normalize ? bf16_float(norm_weight[i]) : 1.0f);
-        const float b = bf16_float(vector[rotary_pairs + i]) * inv *
-            (normalize ? bf16_float(norm_weight[rotary_pairs + i]) : 1.0f);
+        const auto components = rope_geometry::pair_components(
+            i, rotary_pairs, RopePairingKind::SplitHalf);
+        const float a = bf16_float(vector[components.first]) * inv *
+            (normalize ? bf16_float(norm_weight[components.first]) : 1.0f);
+        const float b = bf16_float(vector[components.second]) * inv *
+            (normalize ? bf16_float(norm_weight[components.second]) : 1.0f);
         const float c = cosf(angle);
         const float s = sinf(angle);
-        vector[i] = __float2bfloat16(a * c - b * s);
-        vector[rotary_pairs + i] = __float2bfloat16(b * c + a * s);
+        vector[components.first] = __float2bfloat16(a * c - b * s);
+        vector[components.second] = __float2bfloat16(b * c + a * s);
     }
     if (normalize) {
         for (int i = threadIdx.x + 2 * rotary_pairs; i < head_dim; i += blockDim.x) {
@@ -458,7 +461,9 @@ void launch_dynamic_mrope_qk_norm_rope(
     bool interleaved, float rope_theta, float rotary_fraction, float eps,
     bool normalize, CudaRopeScaling scaling, cudaStream_t stream) {
     const int threads = attention_threads(head_dim);
-    const int pairs = static_cast<int>(static_cast<float>(head_dim) * rotary_fraction) / 2;
+    const int rotary_dimension = static_cast<int>(
+        static_cast<float>(head_dim) * rotary_fraction);
+    const int pairs = rope_geometry::rotary_pairs(rotary_dimension);
     const float query_attention_scale = scaling.kind == 3
         ? scaling.attention_factor * scaling.attention_factor
         : 1.0f;
