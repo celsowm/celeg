@@ -8,16 +8,6 @@ namespace celeg {
 
 namespace {
 
-__device__ __forceinline__ bool block_sparse_decode_visible(
-    int query_position, int token, const GqaBlockSparsePattern& pattern) {
-    if (token > query_position) return false;
-    const int query_block = query_position / pattern.block_size;
-    const int token_block = token / pattern.block_size;
-    if (token_block < pattern.global_blocks) return true;
-    const int local_start = max(0, query_block - pattern.local_blocks + 1);
-    return token_block >= local_start && token_block <= query_block;
-}
-
 template <typename Storage>
 __global__ void gqa_decode_block_sparse_kernel(
     const __nv_bfloat16* query, Storage storage, __nv_bfloat16* out,
@@ -43,7 +33,7 @@ __global__ void gqa_decode_block_sparse_kernel(
     if (lane == 0) maximum = -FLT_MAX;
     __syncthreads();
     for (int token = 0; token < seq_len; ++token) {
-        if (!block_sparse_decode_visible(query_position, token, pattern)) continue;
+        if (!attention_block_sparse_visible(query_position, token, pattern)) continue;
         const float dot = storage.dot(
             q, token, kv_head, head_dim, warp_sums, &dot_total);
         if (lane == 0) {
@@ -56,7 +46,7 @@ __global__ void gqa_decode_block_sparse_kernel(
     if (lane == 0) denominator = 0.0f;
     __syncthreads();
     for (int token = 0; token < seq_len; ++token) {
-        if (!block_sparse_decode_visible(query_position, token, pattern)) continue;
+        if (!attention_block_sparse_visible(query_position, token, pattern)) continue;
         const float dot = storage.dot(
             q, token, kv_head, head_dim, warp_sums, &dot_total);
         if (lane == 0) {
@@ -68,7 +58,7 @@ __global__ void gqa_decode_block_sparse_kernel(
 
     float accumulator = 0.0f;
     for (int token = 0; token < seq_len; ++token) {
-        if (!block_sparse_decode_visible(query_position, token, pattern)) continue;
+        if (!attention_block_sparse_visible(query_position, token, pattern)) continue;
         const float dot = storage.dot(
             q, token, kv_head, head_dim, warp_sums, &dot_total);
         if (lane == 0) {
