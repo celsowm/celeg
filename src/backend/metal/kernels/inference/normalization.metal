@@ -24,19 +24,12 @@ kernel void celeg_residual_rmsnorm_batch_cached(
 
     threadgroup float partial[8];
     threadgroup float inverse;
-    const float reduced = simd_sum(sum);
-    if (lane == 0) partial[simd] = reduced;
-    threadgroup_barrier(mem_flags::mem_threadgroup);
-    if (index == 0) {
-        float total = 0.0f;
-        for (uint group = 0; group < 8; ++group) total += partial[group];
-        inverse = rsqrt(total / static_cast<float>(width) + epsilon);
-    }
-    threadgroup_barrier(mem_flags::mem_threadgroup);
+    const float rms_inverse = celeg_rms_inverse(
+        sum, width, epsilon, index, lane, simd, partial, &inverse);
 
     for (uint i = index; i < width; i += 256) {
         const float value = cached[i];
         output[base + i] = value;
-        normed[base + i] = value * inverse * weight[i];
+        normed[base + i] = value * rms_inverse * weight[i];
     }
 }
