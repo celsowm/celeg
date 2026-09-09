@@ -1,7 +1,7 @@
 #include "celeg/backend/cpu/paged_kv.hpp"
+#include "celeg/attention/bias_semantics.hpp"
 
 #include <algorithm>
-#include <cmath>
 #include <type_traits>
 
 namespace celeg {
@@ -102,31 +102,14 @@ float score_relative_bias(const CpuRelativeBiasView& relative, int query_head,
     if (query_head < 0) {
         throw std::invalid_argument("relative position bias query head is out of range");
     }
-    const int relative_position = key_position - query_position;
-    const int bucket_count = relative.bidirectional
+    const int directional_bucket_count = relative.bidirectional
         ? relative.bucket_count / 2 : relative.bucket_count;
-    if (bucket_count <= 0) {
+    if (directional_bucket_count <= 0) {
         throw std::invalid_argument("relative position bias bucket count is invalid");
     }
-    const bool positive = relative.bidirectional && relative_position > 0;
-    const int distance = relative.bidirectional
-        ? std::abs(relative_position) : std::max(-relative_position, 0);
-    const int max_exact = bucket_count / 2;
-    int bucket = 0;
-    if (distance < max_exact) {
-        bucket = distance;
-    } else {
-        const float denominator = std::log(
-            static_cast<float>(std::max(relative.max_distance, max_exact + 1)) /
-            static_cast<float>(std::max(max_exact, 1)));
-        const float logarithmic = denominator == 0.0f ? 0.0f : std::log(
-            static_cast<float>(std::max(distance, max_exact)) /
-            static_cast<float>(std::max(max_exact, 1))) / denominator;
-        bucket = max_exact + static_cast<int>(
-            logarithmic * static_cast<float>(bucket_count - max_exact));
-        bucket = std::min(bucket, bucket_count - 1);
-    }
-    if (positive) bucket += bucket_count;
+    const int bucket = attention_semantics::relative_position_bucket(
+        query_position, key_position, relative.bucket_count,
+        relative.max_distance, relative.bidirectional);
     return relative.values[static_cast<size_t>(query_head) *
                            static_cast<size_t>(relative.bucket_count) +
                            static_cast<size_t>(bucket)];
@@ -137,8 +120,9 @@ float score_alibi_bias(const CpuAlibiBiasView& alibi, int query_head,
     if (query_head < 0 || static_cast<size_t>(query_head) >= alibi.slope_count) {
         throw std::invalid_argument("ALiBi query head is out of range");
     }
-    return -alibi.slopes[static_cast<size_t>(query_head)] *
-        static_cast<float>(std::abs(query_position - key_position));
+    return attention_semantics::alibi_bias(
+        alibi.slopes[static_cast<size_t>(query_head)],
+        query_position, key_position);
 }
 
 }
