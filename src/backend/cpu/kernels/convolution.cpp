@@ -4,6 +4,26 @@
 #include <stdexcept>
 
 namespace celeg {
+namespace {
+
+float cpu_conv_channel_step(const float* projected_bcx, const float* weight,
+                            float* state, int hidden, int cache_length,
+                            int position, size_t channel) {
+    const int cursor = position % cache_length;
+    const float b = projected_bcx[channel];
+    const float c = projected_bcx[hidden + channel];
+    const float x = projected_bcx[2 * hidden + channel];
+    state[static_cast<size_t>(cursor) * hidden + channel] = b * x;
+    float conv = 0.0f;
+    for (int tap = 0; tap < cache_length; ++tap) {
+        const int slot = (cursor + 1 + tap) % cache_length;
+        conv += state[static_cast<size_t>(slot) * hidden + channel] *
+            weight[static_cast<size_t>(tap) * hidden + channel];
+    }
+    return c * conv;
+}
+
+}
 
 void cpu_conv_decode(const float* projected_bcx, const float* weight,
                      float* state, float* output, int hidden,
@@ -12,19 +32,10 @@ void cpu_conv_decode(const float* projected_bcx, const float* weight,
         cache_length <= 0 || position < 0) {
         throw std::invalid_argument("invalid ShortConv arguments");
     }
-    const int cursor = position % cache_length;
     for (int channel = 0; channel < hidden; ++channel) {
-        const float b = projected_bcx[channel];
-        const float c = projected_bcx[hidden + channel];
-        const float x = projected_bcx[2 * hidden + channel];
-        state[static_cast<size_t>(cursor) * hidden + channel] = b * x;
-        float conv = 0.0f;
-        for (int tap = 0; tap < cache_length; ++tap) {
-            const int slot = (cursor + 1 + tap) % cache_length;
-            conv += state[static_cast<size_t>(slot) * hidden + channel] *
-                weight[static_cast<size_t>(tap) * hidden + channel];
-        }
-        output[channel] = c * conv;
+        output[channel] = cpu_conv_channel_step(
+            projected_bcx, weight, state, hidden, cache_length, position,
+            static_cast<size_t>(channel));
     }
 }
 
@@ -44,17 +55,9 @@ void cpu_conv_prefill(const float* projected_bcx, const float* weight,
             for (size_t row = 0; row < rows; ++row) {
                 const float* projected = projected_bcx + row * 3ULL * hidden;
                 const int position = base_position + static_cast<int>(row);
-                const int cursor = position % cache_length;
-                state[static_cast<size_t>(cursor) * hidden + channel] =
-                    projected[channel] * projected[2 * hidden + channel];
-                float conv = 0.0f;
-                for (int tap = 0; tap < cache_length; ++tap) {
-                    const int slot = (cursor + 1 + tap) % cache_length;
-                    conv += state[static_cast<size_t>(slot) * hidden + channel] *
-                        weight[static_cast<size_t>(tap) * hidden + channel];
-                }
                 output[row * static_cast<size_t>(hidden) + channel] =
-                    projected[hidden + channel] * conv;
+                    cpu_conv_channel_step(projected, weight, state, hidden,
+                                          cache_length, position, channel);
             }
         }
     });
