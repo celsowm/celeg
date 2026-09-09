@@ -1,19 +1,3 @@
-uint celeg_gqa_kv_head(uint query_head, uint query_heads, uint kv_heads) {
-    return query_head / (query_heads / kv_heads);
-}
-
-uint celeg_sequence_length_from_query_position(uint query_position) {
-    return query_position + 1u;
-}
-
-uint celeg_query_position_from_sequence_length(uint sequence_length) {
-    return sequence_length - 1u;
-}
-
-float celeg_attention_scale(uint head_dim) {
-    return rsqrt(static_cast<float>(head_dim));
-}
-
 kernel void celeg_attention_micro_semantics_probe(
     device uint* integers [[buffer(0)]],
     device float* scale_out [[buffer(1)]],
@@ -210,8 +194,9 @@ kernel void celeg_attention_relative_bias(
     uint simd [[simdgroup_index_in_threadgroup]],
     uint simd_count [[simdgroups_per_threadgroup]],
     uint2 grid [[threadgroup_position_in_grid]]) {
-    const uint start = window_size > 0 && sequence_length > window_size
-        ? sequence_length - window_size : 0;
+    const uint query_position = celeg_query_position_from_sequence_length(sequence_length);
+    const uint start = window_size > 0
+        ? celeg_attention_sliding_first_candidate(query_position, window_size) : 0;
     if (grid.x >= query_heads) return;
     const CelegAttentionRelativeBias bias{bias_values, bucket_count, max_distance,
                                           bidirectional};
@@ -245,10 +230,10 @@ kernel void celeg_attention_batch_relative_bias(
     uint simd_count [[simdgroups_per_threadgroup]],
     uint2 grid [[threadgroup_position_in_grid]]) {
     if (grid.x >= query_heads || grid.y >= rows) return;
-    const uint sequence_length = celeg_sequence_length_from_query_position(
-        base_position + grid.y);
-    const uint start = window_size > 0 && sequence_length > window_size
-        ? sequence_length - window_size : 0;
+    const uint query_position = base_position + grid.y;
+    const uint sequence_length = celeg_sequence_length_from_query_position(query_position);
+    const uint start = window_size > 0
+        ? celeg_attention_sliding_first_candidate(query_position, window_size) : 0;
     const CelegAttentionRelativeBias bias{bias_values, bucket_count, max_distance,
                                           bidirectional};
     celeg_attention_span(query, key_cache, value_cache, output,
