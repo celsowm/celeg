@@ -5,6 +5,7 @@
  * The runtime source is assembled by CMake in this same order. Keeping the
  * includes here also lets Metal tooling inspect the complete shader locally.
  */
+#include "inference/bias_semantics.metal"
 #include "inference/common.metal"
 #include "inference/dense_matvec_rows.metal"
 #include "inference/state.metal"
