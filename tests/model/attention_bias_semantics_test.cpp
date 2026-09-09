@@ -4,13 +4,15 @@
 
 #include <array>
 #include <cmath>
+#include <utility>
 
 namespace {
 
 void alibi_matches_canonical_semantics() {
     constexpr std::array<float, 2> slopes{0.5f, 0.125f};
-    const celeg::CpuAttentionBias bias = celeg::CpuAttentionBias::lower(
-        celeg::AlibiBiasSpec{{slopes.begin(), slopes.end()}});
+    celeg::AlibiBiasSpec alibi;
+    alibi.slopes.assign(slopes.begin(), slopes.end());
+    const celeg::CpuAttentionBias bias = celeg::CpuAttentionBias::lower(alibi);
 
     for (int head = 0; head < 2; ++head) {
         for (const auto [query, key] :
