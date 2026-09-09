@@ -26,6 +26,8 @@ __global__ void gqa_relative_bidirectional_prefill_kernel(
     const __nv_bfloat16* query = q +
         (static_cast<size_t>(row) * q_heads + head) * head_dim;
     const float scale = rsqrtf(static_cast<float>(head_dim));
+    const RelativeBiasScorePolicy score_policy{
+        bias, bucket_count, max_distance, bidirectional};
     float running_max = -FLT_MAX;
     float denominator = 0.0f;
     float accumulator[kMaxHeadDimPerLane];
@@ -41,9 +43,8 @@ __global__ void gqa_relative_bidirectional_prefill_kernel(
             partial += bf16_float(query[d]) * relative_bidirectional_cache_value(
                 key_cache, base + static_cast<size_t>(d), key_scales, scale_index);
         }
-        const float score = relative_bias_score(
-            warp_broadcast_sum(partial), scale, bias, bucket_count,
-            max_distance, bidirectional, head, query_position, token);
+        const float score = score_policy.score(
+            warp_broadcast_sum(partial), scale, head, query_position, token);
         const float next_max = fmaxf(running_max, score);
         const float alpha = expf(running_max - next_max);
         const float beta = expf(score - next_max);
