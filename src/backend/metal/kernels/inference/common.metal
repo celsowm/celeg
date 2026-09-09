@@ -2,6 +2,37 @@
 
 using namespace metal;
 
+bool celeg_attention_causal_visible(int query_position, int key_position) {
+    return query_position >= 0 && key_position >= 0 && key_position <= query_position;
+}
+
+uint celeg_attention_sliding_first_candidate(uint query_position, uint window_size) {
+    if (window_size == 0) return 0;
+    const uint sequence_length = query_position + 1;
+    return sequence_length > window_size ? sequence_length - window_size : 0;
+}
+
+bool celeg_attention_sliding_visible(int query_position, int key_position,
+                                     uint window_size) {
+    if (!celeg_attention_causal_visible(query_position, key_position)) return false;
+    if (window_size == 0) return true;
+    return static_cast<uint>(key_position) >=
+        celeg_attention_sliding_first_candidate(
+            static_cast<uint>(query_position), window_size);
+}
+
+kernel void celeg_attention_pattern_semantics_probe(
+    device uint* output [[buffer(0)]],
+    constant int& query_position [[buffer(1)]],
+    constant int& key_position [[buffer(2)]],
+    constant uint& window_size [[buffer(3)]]) {
+    output[0] = celeg_attention_causal_visible(query_position, key_position) ? 1u : 0u;
+    output[1] = celeg_attention_sliding_first_candidate(
+        static_cast<uint>(max(query_position, 0)), window_size);
+    output[2] = celeg_attention_sliding_visible(
+        query_position, key_position, window_size) ? 1u : 0u;
+}
+
 float celeg_bf16_to_float(ushort bits) {
     return as_type<float>(static_cast<uint>(bits) << 16);
 }
@@ -108,17 +139,6 @@ struct CelegAttentionSpan {
     float scale;
 };
 
-/**
- * @brief Attention for a single query row over an unbounded key/value history.
- *
- * One threadgroup serves one `(row, head)` pair. The simdgroups partition the
- * key positions and each keeps a running `(maximum, denominator, accumulator)`
- * triple that is rescaled whenever a larger score appears, so no score array is
- * materialized, `exp` is evaluated once per position rather than once per
- * position and dimension, and the sequence length is bounded only by the KV
- * cache. Simdgroup 0 merges the partial triples through @p shared, which must
- * provide `2 * simdgroups + simdgroups * head_dim` floats.
- */
 template <typename Bias>
 void celeg_attention_span(device const float* query,
                           device const float* key_cache,
@@ -207,7 +227,6 @@ void celeg_attention_span(device const float* query,
     }
 }
 
-/// @brief Builds the span a decode threadgroup attends for.
 CelegAttentionSpan celeg_attention_decode_span(uint head, uint query_heads, uint key_heads,
                                                uint head_dim, uint sequence_length,
                                                uint start, uint page_tokens, float scale) {
@@ -226,7 +245,6 @@ CelegAttentionSpan celeg_attention_decode_span(uint head, uint query_heads, uint
     return span;
 }
 
-/// @brief Builds the span a batched-prefill threadgroup attends for.
 CelegAttentionSpan celeg_attention_batch_span(uint head, uint row, uint base_position,
                                               uint query_heads, uint key_heads,
                                               uint head_dim, uint start_window,
@@ -267,7 +285,7 @@ kernel void celeg_attention_sliding(
     uint simd_count [[simdgroups_per_threadgroup]],
     uint2 grid [[threadgroup_position_in_grid]]) {
     if (grid.x >= query_heads) return;
-    const uint start = sequence_length > window_size ? sequence_length - window_size : 0;
+    const uint start = celeg_attention_sliding_first_candidate(sequence_length - 1, window_size);
     celeg_attention_span(query, key_cache, value_cache, output,
                          celeg_attention_decode_span(grid.x, query_heads, key_heads,
                                                      head_dim, sequence_length, start,
@@ -295,7 +313,7 @@ kernel void celeg_attention_batch_sliding(
     uint2 grid [[threadgroup_position_in_grid]]) {
     if (grid.x >= query_heads || grid.y >= rows) return;
     const uint sequence_length = base_position + grid.y + 1;
-    const uint start = sequence_length > window_size ? sequence_length - window_size : 0;
+    const uint start = celeg_attention_sliding_first_candidate(sequence_length - 1, window_size);
     celeg_attention_span(query, key_cache, value_cache, output,
                          celeg_attention_batch_span(grid.x, grid.y, base_position,
                                                     query_heads, key_heads, head_dim,
@@ -322,8 +340,8 @@ kernel void celeg_attention_alibi(
     uint simd_count [[simdgroups_per_threadgroup]],
     uint2 grid [[threadgroup_position_in_grid]]) {
     if (grid.x >= query_heads) return;
-    const uint start = window_size > 0 && sequence_length > window_size
-        ? sequence_length - window_size : 0;
+    const uint start = window_size > 0
+        ? celeg_attention_sliding_first_candidate(sequence_length - 1, window_size) : 0;
     celeg_attention_span(query, key_cache, value_cache, output,
                          celeg_attention_decode_span(grid.x, query_heads, key_heads,
                                                      head_dim, sequence_length, start,
@@ -352,8 +370,8 @@ kernel void celeg_attention_batch_alibi(
     uint2 grid [[threadgroup_position_in_grid]]) {
     if (grid.x >= query_heads || grid.y >= rows) return;
     const uint sequence_length = base_position + grid.y + 1;
-    const uint start = window_size > 0 && sequence_length > window_size
-        ? sequence_length - window_size : 0;
+    const uint start = window_size > 0
+        ? celeg_attention_sliding_first_candidate(sequence_length - 1, window_size) : 0;
     celeg_attention_span(query, key_cache, value_cache, output,
                          celeg_attention_batch_span(grid.x, grid.y, base_position,
                                                     query_heads, key_heads, head_dim,
