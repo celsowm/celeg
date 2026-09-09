@@ -3,6 +3,7 @@
 #include "kernels/attention.hpp"
 #include "celeg/attention/bias_semantics.hpp"
 #include "celeg/attention/online_semantics.hpp"
+#include "celeg/attention/merge_semantics.hpp"
 
 #include <algorithm>
 
