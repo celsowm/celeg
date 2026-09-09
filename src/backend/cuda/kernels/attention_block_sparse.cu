@@ -18,51 +18,6 @@ __device__ __forceinline__ bool block_sparse_visible(
     return token_block >= local_start && token_block <= query_block;
 }
 
-struct BlockSparseBf16Storage {
-    const __nv_bfloat16* keys;
-    const __nv_bfloat16* values;
-    int kv_heads;
-
-    __device__ __forceinline__ float dot(
-        const __nv_bfloat16* query, int token, int kv_head, int head_dim,
-        float* warp_sums, float* dot_total) const {
-        const __nv_bfloat16* key = keys +
-            (static_cast<size_t>(token) * kv_heads + kv_head) * head_dim;
-        return attention_dot(query, key, head_dim, warp_sums, dot_total);
-    }
-
-    __device__ __forceinline__ float value(
-        int token, int kv_head, int dimension, int head_dim) const {
-        const __nv_bfloat16* value_ptr = values +
-            (static_cast<size_t>(token) * kv_heads + kv_head) * head_dim;
-        return bf16_float(value_ptr[dimension]);
-    }
-};
-
-struct BlockSparseInt8Storage {
-    const int8_t* keys;
-    const int8_t* values;
-    const float* key_scales;
-    const float* value_scales;
-    int kv_heads;
-
-    __device__ __forceinline__ float dot(
-        const __nv_bfloat16* query, int token, int kv_head, int head_dim,
-        float* warp_sums, float* dot_total) const {
-        const size_t scale_index = static_cast<size_t>(token) * kv_heads + kv_head;
-        const int8_t* key = keys + scale_index * head_dim;
-        return attention_dot_int8(
-            query, key, key_scales[scale_index], head_dim, warp_sums, dot_total);
-    }
-
-    __device__ __forceinline__ float value(
-        int token, int kv_head, int dimension, int head_dim) const {
-        const size_t scale_index = static_cast<size_t>(token) * kv_heads + kv_head;
-        const int8_t* value_ptr = values + scale_index * head_dim;
-        return static_cast<float>(value_ptr[dimension]) * value_scales[scale_index];
-    }
-};
-
 template <typename Storage>
 __global__ void gqa_prefill_block_sparse_kernel(
     const __nv_bfloat16* query, Storage storage, __nv_bfloat16* out, int rows,
@@ -138,7 +93,7 @@ __global__ void gqa_prefill_block_sparse_kernel(
 void launch_gqa_prefill_block_sparse(
     const GqaContiguousArgs& args, GqaBlockSparsePattern pattern) {
     const int threads = attention_threads(args.geometry.head_dim);
-    const BlockSparseBf16Storage storage{
+    const ContiguousBf16AttentionStorage storage{
         args.kv.keys, args.kv.values, args.geometry.kv_heads};
     gqa_prefill_block_sparse_kernel<<<
         args.extent.rows * args.geometry.q_heads, threads, 0, args.stream>>>(
@@ -151,7 +106,7 @@ void launch_gqa_prefill_block_sparse(
 void launch_gqa_prefill_block_sparse_int8(
     const GqaContiguousInt8Args& args, GqaBlockSparsePattern pattern) {
     const int threads = attention_threads(args.geometry.head_dim);
-    const BlockSparseInt8Storage storage{
+    const ContiguousInt8AttentionStorage storage{
         args.kv.keys, args.kv.values, args.kv.key_scales,
         args.kv.value_scales, args.geometry.kv_heads};
     gqa_prefill_block_sparse_kernel<<<
