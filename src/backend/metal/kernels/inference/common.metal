@@ -2,13 +2,29 @@
 
 using namespace metal;
 
+uint celeg_gqa_kv_head(uint query_head, uint query_heads, uint kv_heads) {
+    return query_head / (query_heads / kv_heads);
+}
+
+uint celeg_sequence_length_from_query_position(uint query_position) {
+    return query_position + 1u;
+}
+
+uint celeg_query_position_from_sequence_length(uint sequence_length) {
+    return sequence_length - 1u;
+}
+
+float celeg_attention_scale(uint head_dim) {
+    return rsqrt(static_cast<float>(head_dim));
+}
+
 bool celeg_attention_causal_visible(int query_position, int key_position) {
     return query_position >= 0 && key_position >= 0 && key_position <= query_position;
 }
 
 uint celeg_attention_sliding_first_candidate(uint query_position, uint window_size) {
     if (window_size == 0) return 0;
-    const uint sequence_length = query_position + 1;
+    const uint sequence_length = celeg_sequence_length_from_query_position(query_position);
     return sequence_length > window_size ? sequence_length - window_size : 0;
 }
 
@@ -234,12 +250,12 @@ CelegAttentionSpan celeg_attention_decode_span(uint head, uint query_heads, uint
     span.query_base = static_cast<size_t>(head) * head_dim;
     span.output_base = span.query_base;
     span.head = head;
-    span.key_head = head / (query_heads / key_heads);
+    span.key_head = celeg_gqa_kv_head(head, query_heads, key_heads);
     span.key_heads = key_heads;
     span.head_dim = head_dim;
     span.sequence_length = sequence_length;
     span.start = start;
-    span.query_position = sequence_length - 1;
+    span.query_position = celeg_query_position_from_sequence_length(sequence_length);
     span.page_tokens = page_tokens;
     span.scale = scale;
     return span;
@@ -256,10 +272,10 @@ CelegAttentionSpan celeg_attention_batch_span(uint head, uint row, uint base_pos
         static_cast<size_t>(head) * head_dim;
     span.output_base = span.query_base;
     span.head = head;
-    span.key_head = head / (query_heads / key_heads);
+    span.key_head = celeg_gqa_kv_head(head, query_heads, key_heads);
     span.key_heads = key_heads;
     span.head_dim = head_dim;
-    span.sequence_length = query_position + 1;
+    span.sequence_length = celeg_sequence_length_from_query_position(query_position);
     span.start = start_window;
     span.query_position = query_position;
     span.page_tokens = page_tokens;
@@ -285,7 +301,8 @@ kernel void celeg_attention_sliding(
     uint simd_count [[simdgroups_per_threadgroup]],
     uint2 grid [[threadgroup_position_in_grid]]) {
     if (grid.x >= query_heads) return;
-    const uint start = celeg_attention_sliding_first_candidate(sequence_length - 1, window_size);
+    const uint start = celeg_attention_sliding_first_candidate(
+        celeg_query_position_from_sequence_length(sequence_length), window_size);
     celeg_attention_span(query, key_cache, value_cache, output,
                          celeg_attention_decode_span(grid.x, query_heads, key_heads,
                                                      head_dim, sequence_length, start,
@@ -312,8 +329,9 @@ kernel void celeg_attention_batch_sliding(
     uint simd_count [[simdgroups_per_threadgroup]],
     uint2 grid [[threadgroup_position_in_grid]]) {
     if (grid.x >= query_heads || grid.y >= rows) return;
-    const uint sequence_length = base_position + grid.y + 1;
-    const uint start = celeg_attention_sliding_first_candidate(sequence_length - 1, window_size);
+    const uint query_position = base_position + grid.y;
+    const uint sequence_length = celeg_sequence_length_from_query_position(query_position);
+    const uint start = celeg_attention_sliding_first_candidate(query_position, window_size);
     celeg_attention_span(query, key_cache, value_cache, output,
                          celeg_attention_batch_span(grid.x, grid.y, base_position,
                                                     query_heads, key_heads, head_dim,
@@ -340,8 +358,9 @@ kernel void celeg_attention_alibi(
     uint simd_count [[simdgroups_per_threadgroup]],
     uint2 grid [[threadgroup_position_in_grid]]) {
     if (grid.x >= query_heads) return;
+    const uint query_position = celeg_query_position_from_sequence_length(sequence_length);
     const uint start = window_size > 0
-        ? celeg_attention_sliding_first_candidate(sequence_length - 1, window_size) : 0;
+        ? celeg_attention_sliding_first_candidate(query_position, window_size) : 0;
     celeg_attention_span(query, key_cache, value_cache, output,
                          celeg_attention_decode_span(grid.x, query_heads, key_heads,
                                                      head_dim, sequence_length, start,
@@ -369,9 +388,10 @@ kernel void celeg_attention_batch_alibi(
     uint simd_count [[simdgroups_per_threadgroup]],
     uint2 grid [[threadgroup_position_in_grid]]) {
     if (grid.x >= query_heads || grid.y >= rows) return;
-    const uint sequence_length = base_position + grid.y + 1;
+    const uint query_position = base_position + grid.y;
+    const uint sequence_length = celeg_sequence_length_from_query_position(query_position);
     const uint start = window_size > 0
-        ? celeg_attention_sliding_first_candidate(sequence_length - 1, window_size) : 0;
+        ? celeg_attention_sliding_first_candidate(query_position, window_size) : 0;
     celeg_attention_span(query, key_cache, value_cache, output,
                          celeg_attention_batch_span(grid.x, grid.y, base_position,
                                                     query_heads, key_heads, head_dim,
