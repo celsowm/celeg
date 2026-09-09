@@ -1,5 +1,6 @@
 #include "kernel_common.cuh"
 #include "kernels/attention.hpp"
+#include "celeg/attention/dynamic_sparse_semantics.hpp"
 #include "celeg/attention/micro_semantics.hpp"
 
 #include <cfloat>
@@ -10,35 +11,6 @@ namespace celeg {
 namespace {
 
 constexpr int kMaxDynamicSparseBlocks = 32;
-
-__device__ __forceinline__ bool selected_block(
-    int block, const int* blocks, int count) {
-    for (int i = 0; i < count; ++i) {
-        if (blocks[i] == block) return true;
-    }
-    return false;
-}
-
-__device__ __forceinline__ void insert_top_block(
-    int candidate_block, float candidate_score,
-    int* blocks, float* scores, int count) {
-    int slot = -1;
-    float minimum = FLT_MAX;
-    for (int i = 0; i < count; ++i) {
-        if (blocks[i] < 0) {
-            slot = i;
-            break;
-        }
-        if (scores[i] < minimum) {
-            minimum = scores[i];
-            slot = i;
-        }
-    }
-    if (slot >= 0 && (blocks[slot] < 0 || candidate_score > scores[slot])) {
-        blocks[slot] = candidate_block;
-        scores[slot] = candidate_score;
-    }
-}
 
 __global__ void gqa_prefill_dynamic_sparse_kernel(
     const __nv_bfloat16* query, const __nv_bfloat16* keys,
@@ -68,16 +40,19 @@ __global__ void gqa_prefill_dynamic_sparse_kernel(
 
     if (lane < pattern.max_selected_blocks) {
         selected[lane] = -1;
-        selected_scores[lane] = -FLT_MAX;
+        selected_scores[lane] = attention_semantics::dynamic_sparse_lowest_score();
     }
     __syncthreads();
 
-    const int query_block = query_row / pattern.block_size;
+    const int query_block = attention_semantics::dynamic_sparse_query_block(
+        query_row, pattern.block_size);
     for (int candidate = 0; candidate <= query_block; ++candidate) {
         if (lane == 0) block_score = -FLT_MAX;
         __syncthreads();
-        const int begin = candidate * pattern.block_size;
-        const int end = min(sequence_length, begin + pattern.block_size);
+        const int begin = attention_semantics::dynamic_sparse_block_begin(
+            candidate, pattern.block_size);
+        const int end = attention_semantics::dynamic_sparse_block_end_exclusive(
+            query_row, candidate, pattern.block_size);
         for (int token = begin; token < end; ++token) {
             const __nv_bfloat16* key = keys +
                 (static_cast<size_t>(token) * kv_heads + kv_head) * head_dim;
@@ -86,8 +61,9 @@ __global__ void gqa_prefill_dynamic_sparse_kernel(
             __syncthreads();
         }
         if (lane == 0) {
-            insert_top_block(candidate, block_score, selected, selected_scores,
-                             pattern.max_selected_blocks);
+            attention_semantics::dynamic_sparse_insert_top_block(
+                candidate, block_score, selected, selected_scores,
+                pattern.max_selected_blocks);
         }
         __syncthreads();
     }
@@ -95,8 +71,9 @@ __global__ void gqa_prefill_dynamic_sparse_kernel(
     if (lane == 0) maximum = -FLT_MAX;
     __syncthreads();
     for (int token = 0; token < sequence_length; ++token) {
-        if (!selected_block(token / pattern.block_size, selected,
-                            pattern.max_selected_blocks)) continue;
+        if (!attention_semantics::dynamic_sparse_selected_block(
+                token / pattern.block_size, selected,
+                pattern.max_selected_blocks)) continue;
         const __nv_bfloat16* key = keys +
             (static_cast<size_t>(token) * kv_heads + kv_head) * head_dim;
         const float dot = attention_dot(q, key, head_dim, warp_sums, &dot_total);
@@ -108,8 +85,9 @@ __global__ void gqa_prefill_dynamic_sparse_kernel(
     if (lane == 0) denominator = 0.0f;
     __syncthreads();
     for (int token = 0; token < sequence_length; ++token) {
-        if (!selected_block(token / pattern.block_size, selected,
-                            pattern.max_selected_blocks)) continue;
+        if (!attention_semantics::dynamic_sparse_selected_block(
+                token / pattern.block_size, selected,
+                pattern.max_selected_blocks)) continue;
         const __nv_bfloat16* key = keys +
             (static_cast<size_t>(token) * kv_heads + kv_head) * head_dim;
         const float dot = attention_dot(q, key, head_dim, warp_sums, &dot_total);
@@ -120,8 +98,9 @@ __global__ void gqa_prefill_dynamic_sparse_kernel(
 
     float accumulator = 0.0f;
     for (int token = 0; token < sequence_length; ++token) {
-        if (!selected_block(token / pattern.block_size, selected,
-                            pattern.max_selected_blocks)) continue;
+        if (!attention_semantics::dynamic_sparse_selected_block(
+                token / pattern.block_size, selected,
+                pattern.max_selected_blocks)) continue;
         const __nv_bfloat16* key = keys +
             (static_cast<size_t>(token) * kv_heads + kv_head) * head_dim;
         const float dot = attention_dot(q, key, head_dim, warp_sums, &dot_total);
