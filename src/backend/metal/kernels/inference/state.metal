@@ -161,27 +161,6 @@ kernel void celeg_swiglu(device const float* gate_up [[buffer(0)]],
     output[index] = gate / (1.0f + exp(-gate)) * up;
 }
 
-kernel void celeg_shortconv(device const float* projected [[buffer(0)]],
-                            device const float* taps [[buffer(1)]],
-                            device float* state [[buffer(2)]],
-                            device float* output [[buffer(3)]],
-                            constant uint& width [[buffer(4)]],
-                            constant uint& cache_length [[buffer(5)]],
-                            constant uint& position [[buffer(6)]],
-                            uint channel [[thread_position_in_grid]]) {
-    if (channel >= width) return;
-    const uint cursor = position % cache_length;
-    const float value = projected[2 * width + channel] * projected[channel];
-    state[static_cast<size_t>(cursor) * width + channel] = value;
-    float convolution = 0.0f;
-    for (uint tap = 0; tap < cache_length; ++tap) {
-        const uint slot = (cursor + 1 + tap) % cache_length;
-        convolution += state[static_cast<size_t>(slot) * width + channel] *
-                       taps[static_cast<size_t>(tap) * width + channel];
-    }
-    output[channel] = projected[width + channel] * convolution;
-}
-
 kernel void celeg_qk_norm_rope_store_kv(
     device float* query [[buffer(0)]],
     device const float* query_weight [[buffer(1)]],
