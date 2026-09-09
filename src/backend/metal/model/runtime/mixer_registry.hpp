@@ -10,8 +10,6 @@
 
 namespace celeg {
 
-struct MetalModelImplFriend;
-
 /**
  * @brief Registry for mixer-specific encode.
  *
