@@ -39,6 +39,7 @@ if(TARGET celeg_cuda_backend)
         celeg_cuda_backend)
 
     foreach(test_name IN ITEMS
+        cuda_attention_bias_semantics_test
         cuda_bidirectional_attention_test
         cuda_block_sparse_attention_test
         cuda_dynamic_sparse_attention_test
