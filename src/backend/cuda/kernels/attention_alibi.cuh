@@ -6,8 +6,8 @@ struct AlibiScorePolicy {
     __device__ __forceinline__ float score(
         float dot, float scale, int head, int query_position,
         int key_position) const {
-        return dot * scale - slopes[head] *
-            static_cast<float>(query_position - key_position);
+        return dot * scale + attention_semantics::alibi_bias(
+            slopes[head], query_position, key_position);
     }
 };
 
