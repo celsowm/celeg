@@ -14,7 +14,12 @@ The following model-level rules now have canonical C++/CUDA definitions under `s
   - sliding-window visibility/start
   - Prefix-LM visibility/future-read behavior
   - block-sparse visibility
-  - dynamic-sparse reference visibility
+- `dynamic_sparse_semantics.hpp`
+  - content-ranked dynamic sparse block selection
+  - causal block geometry
+  - deterministic top-K insertion
+  - selected-block membership
+  - score ties prefer the lower block index
 - `online_semantics.hpp`
   - online-softmax state transition
   - scalar accumulator update
@@ -39,7 +44,7 @@ The following duplication is intentional and should not be removed merely to red
 - KV-cache address calculation when layouts differ by backend
 - quantized load/dequantization arithmetic whose association is required for parity
 - block-sparse three-pass accumulation versus online-softmax recurrence
-- dynamic sparse top-K block scoring/selection implementation
+- dynamic sparse block-score reduction and accelerator storage for the selected set
 - paged versus contiguous storage traversal
 
 These are execution mechanisms, not independent definitions of model semantics.
@@ -54,36 +59,35 @@ Metal mirrors are acceptable only when they are covered by cross-backend conform
 - partial-state merge semantics
 - attention micro-semantics
 
+The production `celeg_attention_span()` path now consumes the same `celeg_online_transition()` and `celeg_partial_rescale()` helpers exercised by the conformance probes. The helpers live in `common.metal`; probe fragments no longer carry independent copies of those formulas.
+
 Do not introduce a new Metal semantic formula without adding it to the corresponding conformance contract.
 
-### Remaining mechanical Metal cleanup
+## Resolved DynamicSparsePattern contract
 
-The production `celeg_attention_span()` path in `common.metal` still spells out the online-softmax recurrence and simdgroup partial-state rescaling locally, while the tested `celeg_online_transition()` and `celeg_partial_rescale()` mirrors currently live with the conformance probes.
+`DynamicSparsePattern` means content-ranked causal block selection, not a position-only visibility mask.
 
-This is still a DRY residue, but it is mechanical rather than a semantic design question. The safe follow-up is:
+For each query position:
 
-1. move the MSL online/merge helpers into `common.metal`;
-2. make `celeg_attention_span()` consume them;
-3. leave simdgroup/threadgroup scheduling unchanged;
-4. keep the existing conformance probes calling those same production helpers.
+1. consider every causal block from block zero through the query block;
+2. score each candidate block by the maximum scaled Q.K score among the causally visible tokens in that block;
+3. retain at most `max_selected_blocks` candidates with the highest scores;
+4. on an exact score tie, prefer the lower block index;
+5. run attention only over tokens belonging to the selected blocks.
 
-That change should not modify arithmetic grouping beyond replacing identical scalar formulas.
+The old position-only `dynamic_sparse_visible(query_position, key_position, ...)` helper was removed because visibility cannot be decided from positions alone under this contract.
 
-## Remaining semantic decision: DynamicSparsePattern
+The canonical selection mechanics are defined in `dynamic_sparse_semantics.hpp`. CUDA consumes those mechanics directly while retaining its own warp reduction, shared-memory layout, synchronization and BF16-rounded three-pass attention implementation.
 
-`DynamicSparsePattern` still needs an explicit architectural decision before further DRY refactoring.
+### Backend support
 
-The canonical host/reference visibility rule currently models a deterministic block policy, while the CUDA prefill implementation performs score-based top-K block selection at runtime. These are not merely two optimized implementations of the same visible-token predicate; they can select different tokens.
+| Backend | DynamicSparsePattern |
+| --- | --- |
+| CPU | Unsupported. The compiler capability is false and the low-level `CpuAttentionPattern` path rejects the pattern explicitly. |
+| CUDA | Supported as content-ranked top-K. The CUDA capability layer retains its backend limit on the maximum selected-block count. |
+| Metal | Unsupported. `metal_attention_capabilities()` advertises `dynamic_sparse = false`. |
 
-Therefore this must not be "fixed" by mechanically routing CUDA through `dynamic_sparse_visible()` or by changing the host reference to imitate CUDA without deciding the intended model contract first.
-
-Before changing this area:
-
-1. define whether `DynamicSparsePattern` means a deterministic sparse mask or score-based top-K block selection;
-2. encode that meaning in the model-level spec;
-3. determine which backends are expected to support it;
-4. add parity/golden tests for selected blocks and final attention output;
-5. only then unify backend implementations around the chosen contract.
+Host and CUDA-device semantic tests cover ranking, K selection, negative scores and deterministic tie behavior. The existing CUDA end-to-end dynamic-sparse test remains the output-level check that the content-ranked block wins.
 
 ## Final rule
 
