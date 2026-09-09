@@ -2,6 +2,7 @@
 #include "celeg/backend/cpu/numa.hpp"
 #include "celeg/model/weights/quantization.hpp"
 #include "celeg/backend/cpu/isa.hpp"
+#include "celeg/attention/online_semantics.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -93,12 +94,11 @@ void update_online_avx2(const float* query, int kv_head, int head_dim, float sca
             for (; d < head_dim; ++d) dot += query[d] * bf16_bits_to_float(key[d]);
         }
         const float score = dot * scale;
-        const float new_max = std::max(state.maximum, score);
-        const float old_scale = std::isfinite(state.maximum) ? std::exp(state.maximum - new_max) : 0.0f;
-        const float new_scale = std::exp(score - new_max);
-        state.denominator = state.denominator * old_scale + new_scale;
-        old_scale_vec = _mm256_set1_ps(old_scale);
-        new_scale_vec = _mm256_set1_ps(new_scale);
+        const auto transition = attention_semantics::online_transition(
+            state.maximum, state.denominator, score);
+        state.denominator = transition.denominator;
+        old_scale_vec = _mm256_set1_ps(transition.previous_scale);
+        new_scale_vec = _mm256_set1_ps(transition.current_scale);
         int d = 0;
         if (pool.mode() == CpuKvCacheMode::Fp32) {
             const float* value = pool.value_fp32(page, static_cast<size_t>(local)) +
@@ -110,7 +110,10 @@ void update_online_avx2(const float* query, int kv_head, int head_dim, float sca
                 acc_val = _mm256_fmadd_ps(val_val, new_scale_vec, acc_val);
                 _mm256_storeu_ps(accumulator + d, acc_val);
             }
-            for (; d < head_dim; ++d) accumulator[d] = accumulator[d] * old_scale + new_scale * value[d];
+            for (; d < head_dim; ++d) {
+                accumulator[d] = attention_semantics::online_accumulate(
+                    accumulator[d], value[d], transition);
+            }
         } else {
             const uint16_t* value = pool.value_bf16(page, static_cast<size_t>(local)) +
                 static_cast<size_t>(kv_head) * head_dim;
@@ -122,9 +125,12 @@ void update_online_avx2(const float* query, int kv_head, int head_dim, float sca
                 acc_val = _mm256_fmadd_ps(val_val, new_scale_vec, acc_val);
                 _mm256_storeu_ps(accumulator + d, acc_val);
             }
-            for (; d < head_dim; ++d) accumulator[d] = accumulator[d] * old_scale + new_scale * bf16_bits_to_float(value[d]);
+            for (; d < head_dim; ++d) {
+                accumulator[d] = attention_semantics::online_accumulate(
+                    accumulator[d], bf16_bits_to_float(value[d]), transition);
+            }
         }
-        state.maximum = new_max;
+        state.maximum = transition.maximum;
     }
 }
 #endif
@@ -150,19 +156,23 @@ void update_online(const float* query, int query_head, int kv_head, int head_dim
             for (int d = 0; d < head_dim; ++d) dot += query[d] * bf16_bits_to_float(key[d]);
         }
         const float score = dot * scale + bias.score(query_head, query_position, page_token_base + local);
-        const float new_max = std::max(state.maximum, score);
-        const float old_scale = std::isfinite(state.maximum) ? std::exp(state.maximum - new_max) : 0.0f;
-        const float new_scale = std::exp(score - new_max);
-        state.denominator = state.denominator * old_scale + new_scale;
-        for (int d = 0; d < head_dim; ++d) accumulator[d] *= old_scale;
+        const auto transition = attention_semantics::online_transition(
+            state.maximum, state.denominator, score);
+        state.denominator = transition.denominator;
         if (pool.mode() == CpuKvCacheMode::Fp32) {
             const float* value = pool.value_fp32(page, static_cast<size_t>(local)) + static_cast<size_t>(kv_head) * head_dim;
-            for (int d = 0; d < head_dim; ++d) accumulator[d] += new_scale * value[d];
+            for (int d = 0; d < head_dim; ++d) {
+                accumulator[d] = attention_semantics::online_accumulate(
+                    accumulator[d], value[d], transition);
+            }
         } else {
             const uint16_t* value = pool.value_bf16(page, static_cast<size_t>(local)) + static_cast<size_t>(kv_head) * head_dim;
-            for (int d = 0; d < head_dim; ++d) accumulator[d] += new_scale * bf16_bits_to_float(value[d]);
+            for (int d = 0; d < head_dim; ++d) {
+                accumulator[d] = attention_semantics::online_accumulate(
+                    accumulator[d], bf16_bits_to_float(value[d]), transition);
+            }
         }
-        state.maximum = new_max;
+        state.maximum = transition.maximum;
     }
 }
 }
