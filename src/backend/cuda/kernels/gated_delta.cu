@@ -91,10 +91,8 @@ __global__ void gated_delta_sequence_prepare_kernel(
             current[offset] = __float2bfloat16(convolve(offset));
         }
         float q2 = q * q, k2 = k * k;
-        for (int offset = 16; offset > 0; offset >>= 1) {
-            q2 += __shfl_down_sync(0xffffffffu, q2, offset);
-            k2 += __shfl_down_sync(0xffffffffu, k2, offset);
-        }
+        q2 = warp_sum(q2);
+        k2 = warp_sum(k2);
         if ((lane & 31) == 0) { reduce[lane >> 5] = q2; reduce[8 + (lane >> 5)] = k2; }
         __syncthreads();
         if (lane == 0) {
@@ -180,9 +178,7 @@ __global__ void gated_delta_sequence_state_kernel(
             memory_partial += state_registers[shard] *
                 bf16_float(current[key_width + key_head * head_dim + k_dim]);
         }
-        for (int offset = 16; offset > 0; offset >>= 1) {
-            memory_partial += __shfl_down_sync(0xffffffffu, memory_partial, offset);
-        }
+        memory_partial = warp_sum(memory_partial);
         const float memory = __shfl_sync(0xffffffffu, memory_partial, 0);
         const float beta = sigmoid(bf16_float(b[static_cast<size_t>(row) * value_heads + value_head]));
         const float value = bf16_float(current[2 * key_width + value_head * value_head_dim + v_dim]);
@@ -197,9 +193,7 @@ __global__ void gated_delta_sequence_state_kernel(
             result_partial += state_registers[shard] *
                 bf16_float(current[key_head * head_dim + k_dim]);
         }
-        for (int offset = 16; offset > 0; offset >>= 1) {
-            result_partial += __shfl_down_sync(0xffffffffu, result_partial, offset);
-        }
+        result_partial = warp_sum(result_partial);
         if (lane == 0) output[static_cast<size_t>(row) * value_width + value_head * value_head_dim + v_dim] =
             __float2bfloat16(result_partial / sqrtf(static_cast<float>(head_dim)));
     }
@@ -225,17 +219,13 @@ __global__ void gated_delta_sequence_norm_kernel(
         __nv_bfloat16* values = output + static_cast<size_t>(row) * value_width + value_head * value_head_dim;
         float sum = 0.0f;
         for (int d = lane; d < value_head_dim; d += blockDim.x) { const float value = bf16_float(values[d]); sum += value * value; }
-        for (int offset = 16; offset > 0; offset >>= 1) {
-            sum += __shfl_down_sync(0xffffffffu, sum, offset);
-        }
+        sum = warp_sum(sum);
         const int warp = lane >> 5;
         if ((lane & 31) == 0) warp_sums[warp] = sum;
         __syncthreads();
         if (warp == 0) {
             sum = lane < 4 ? warp_sums[lane] : 0.0f;
-            for (int offset = 16; offset > 0; offset >>= 1) {
-                sum += __shfl_down_sync(0xffffffffu, sum, offset);
-            }
+            sum = warp_sum(sum);
             if (lane == 0) warp_sums[0] = rsqrtf(sum / value_head_dim + eps);
         }
         __syncthreads();
@@ -317,9 +307,7 @@ __global__ void gated_delta_sequence_register_tile_kernel(
                     state_registers[shard][column] * decays[shard]));
                 memory_partial += state_registers[shard][column] * k_values[shard];
             }
-            for (int offset = 16; offset > 0; offset >>= 1) {
-                memory_partial += __shfl_down_sync(0xffffffffu, memory_partial, offset);
-            }
+            memory_partial = warp_sum(memory_partial);
             const float memory = __shfl_sync(0xffffffffu, memory_partial, 0);
             const float value = bf16_float(current[2 * key_width +
                 value_head * ValueHeadDim + column_base + column]);
@@ -331,9 +319,7 @@ __global__ void gated_delta_sequence_register_tile_kernel(
                     state_registers[shard][column] + k_values[shard] * delta));
                 result_partial += state_registers[shard][column] * q_values[shard];
             }
-            for (int offset = 16; offset > 0; offset >>= 1) {
-                result_partial += __shfl_down_sync(0xffffffffu, result_partial, offset);
-            }
+            result_partial = warp_sum(result_partial);
             if (lane == 0) output[static_cast<size_t>(row) * value_width +
                 value_head * ValueHeadDim + column_base + column] =
                 __float2bfloat16(result_partial / sqrtf(static_cast<float>(KeyHeadDim)));
@@ -531,10 +517,8 @@ void gated_delta_fused_register_state_kernel(
 
     float q_sum = q_values[value_dim] * q_values[value_dim];
     float k_sum = k_values[value_dim] * k_values[value_dim];
-    for (int offset = 16; offset > 0; offset >>= 1) {
-        q_sum += __shfl_down_sync(0xffffffffu, q_sum, offset);
-        k_sum += __shfl_down_sync(0xffffffffu, k_sum, offset);
-    }
+    q_sum = warp_sum(q_sum);
+    k_sum = warp_sum(k_sum);
     if (lane == 0) {
         const int warp = value_dim >> 5;
         reductions[4 + warp] = q_sum;
@@ -596,9 +580,7 @@ void gated_delta_fused_register_state_kernel(
 
     const float raw = bf16_float(output_row[head * ValueHeadDim + value_dim]);
     float output_sum = raw * raw;
-    for (int offset = 16; offset > 0; offset >>= 1) {
-        output_sum += __shfl_down_sync(0xffffffffu, output_sum, offset);
-    }
+    output_sum = warp_sum(output_sum);
     if (lane == 0) reductions[12 + (value_dim >> 5)] = output_sum;
     __syncthreads();
     if (value_dim == 0) {
@@ -689,10 +671,8 @@ __global__ void gated_delta_fused_single_head_kernel(
         q_square += q_values[d] * q_values[d];
         k_square += k_values[d] * k_values[d];
     }
-    for (int offset = 16; offset > 0; offset >>= 1) {
-        q_square += __shfl_down_sync(0xffffffffu, q_square, offset);
-        k_square += __shfl_down_sync(0xffffffffu, k_square, offset);
-    }
+    q_square = warp_sum(q_square);
+    k_square = warp_sum(k_square);
     if ((lane & 31) == 0) {
         reductions[lane >> 5] = q_square;
         reductions[8 + (lane >> 5)] = k_square;
@@ -766,9 +746,7 @@ __global__ void gated_delta_fused_single_head_kernel(
         const float value = bf16_float(output_row[head * value_head_dim + d]);
         output_square += value * value;
     }
-    for (int offset = 16; offset > 0; offset >>= 1) {
-        output_square += __shfl_down_sync(0xffffffffu, output_square, offset);
-    }
+    output_square = warp_sum(output_square);
     if ((lane & 31) == 0) reductions[lane >> 5] = output_square;
     __syncthreads();
     if (lane == 0) {
