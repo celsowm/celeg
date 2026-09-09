@@ -4,6 +4,7 @@ if(TARGET celeg_metal_backend)
     target_link_libraries(metal_c_api_smoke_test PRIVATE celeg)
 
     foreach(test_name IN ITEMS
+        metal_attention_bias_semantics_test
         metal_attention_gate_test
         metal_device_test
         metal_inference_test
