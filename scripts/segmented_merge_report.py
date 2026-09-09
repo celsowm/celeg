@@ -107,10 +107,17 @@ def main() -> int:
         type=Path,
         help="Optional JSON report path",
     )
+    parser.add_argument(
+        "--max-ratio",
+        type=float,
+        help="Optional maximum allowed shared/baseline ratio; no default gate is imposed",
+    )
     args = parser.parse_args()
 
     if args.iterations <= 0:
         parser.error("--iterations must be positive")
+    if args.max_ratio is not None and args.max_ratio <= 0.0:
+        parser.error("--max-ratio must be positive")
     if not args.binary.is_file():
         parser.error(f"benchmark binary not found: {args.binary}")
 
@@ -130,6 +137,11 @@ def main() -> int:
         print(f"report_error={error}", file=sys.stderr)
         return completed.returncode or 2
 
+    report["max_ratio_limit"] = args.max_ratio
+    report["performance_gate_passed"] = (
+        args.max_ratio is None or report["max_ratio"] <= args.max_ratio
+    )
+
     encoded = json.dumps(report, indent=2, sort_keys=True)
     print(encoded)
     if args.output:
@@ -138,7 +150,9 @@ def main() -> int:
 
     if completed.returncode != 0:
         return completed.returncode
-    return 0 if report["all_bitwise"] else 1
+    if not report["all_bitwise"]:
+        return 1
+    return 0 if report["performance_gate_passed"] else 3
 
 
 if __name__ == "__main__":
