@@ -31,10 +31,6 @@ uint celeg_relative_position_bucket(int query_position,
     return bucket;
 }
 
-float celeg_alibi_bias(float slope, int query_position, int key_position) {
-    return -slope * static_cast<float>(abs(query_position - key_position));
-}
-
 kernel void celeg_attention_bias_semantics_probe(
     device uint* bucket_out [[buffer(0)]],
     device float* alibi_out [[buffer(1)]],
@@ -46,5 +42,7 @@ kernel void celeg_attention_bias_semantics_probe(
     constant float& slope [[buffer(7)]]) {
     bucket_out[0] = celeg_relative_position_bucket(
         query_position, key_position, bucket_count, max_distance, bidirectional);
-    alibi_out[0] = celeg_alibi_bias(slope, query_position, key_position);
+    const CelegAttentionAlibiBias alibi{&slope};
+    alibi_out[0] = alibi.value(
+        0, static_cast<uint>(query_position), static_cast<uint>(key_position));
 }
