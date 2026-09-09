@@ -5,6 +5,34 @@
  * (96 MB → 48 MB per token). Reuses same threading (32 th per head).
  */
 
+inline void celeg_apply_split_half_rope(
+    device float* vector,
+    device const float* weight,
+    size_t base,
+    uint pairs,
+    uint head_dim,
+    uint position,
+    float theta,
+    float inverse,
+    float output_scale,
+    uint start,
+    uint stride) {
+    for (uint pair = start; pair < pairs; pair += stride) {
+        const float frequency = pow(
+            theta,
+            -2.0f * static_cast<float>(pair) / static_cast<float>(head_dim));
+        const float angle = static_cast<float>(position) * frequency;
+        const float c = cos(angle);
+        const float s = sin(angle);
+        const size_t first = base + pair;
+        const size_t second = base + pairs + pair;
+        const float x = vector[first] * (inverse * weight[pair]);
+        const float y = vector[second] * (inverse * weight[pairs + pair]);
+        vector[first] = (x * c - y * s) * output_scale;
+        vector[second] = (y * c + x * s) * output_scale;
+    }
+}
+
 kernel void celeg_qk_norm_rope_store_kv_split_half(
     device float* query [[buffer(0)]],
     device const float* query_weight [[buffer(1)]],
@@ -55,45 +83,31 @@ kernel void celeg_qk_norm_rope_store_kv_split_half(
             key_sum += tail * tail;
         }
     }
-    const float query_inverse = has_query ? rsqrt(simd_sum(query_sum) / static_cast<float>(head_dim) + query_epsilon) : 0.0f;
-    const float key_inverse = has_key ? rsqrt(simd_sum(key_sum) / static_cast<float>(head_dim) + key_epsilon) : 0.0f;
+    const float query_inverse = has_query
+        ? rsqrt(simd_sum(query_sum) / static_cast<float>(head_dim) + query_epsilon)
+        : 0.0f;
+    const float key_inverse = has_key
+        ? rsqrt(simd_sum(key_sum) / static_cast<float>(head_dim) + key_epsilon)
+        : 0.0f;
     if (has_query) {
         const size_t base = static_cast<size_t>(head) * head_dim;
-        for (uint pair = lane; pair < pairs; pair += 32u) {
-            const float frequency = pow(theta, -2.0f * static_cast<float>(pair) / static_cast<float>(head_dim));
-            const float angle = static_cast<float>(position) * frequency;
-            const float c = cos(angle);
-            const float s = sin(angle);
-            const size_t first = base + pair;
-            const size_t second = base + pairs + pair;
-            const float x = query[first] * (query_inverse * query_weight[pair]);
-            const float y = query[second] * (query_inverse * query_weight[pairs + pair]);
-            query[first] = (x * c - y * s) * query_scale;
-            query[second] = (y * c + x * s) * query_scale;
-        }
+        celeg_apply_split_half_rope(
+            query, query_weight, base, pairs, head_dim, position, theta,
+            query_inverse, query_scale, lane, 32u);
     }
     if (has_key) {
         const size_t base = static_cast<size_t>(head) * head_dim;
-        for (uint pair = lane; pair < pairs; pair += 32u) {
-            const float frequency = pow(theta, -2.0f * static_cast<float>(pair) / static_cast<float>(head_dim));
-            const float angle = static_cast<float>(position) * frequency;
-            const float c = cos(angle);
-            const float s = sin(angle);
-            const size_t first = base + pair;
-            const size_t second = base + pairs + pair;
-            const float x = key[first] * (key_inverse * key_weight[pair]);
-            const float y = key[second] * (key_inverse * key_weight[pairs + pair]);
-            const float kx = x * c - y * s;
-            const float ky = y * c + x * s;
-            key[first] = kx;
-            key[second] = ky;
-        }
-        const size_t cache_base = static_cast<size_t>(position) * static_cast<size_t>(key_heads) * head_dim + base;
+        celeg_apply_split_half_rope(
+            key, key_weight, base, pairs, head_dim, position, theta,
+            key_inverse, 1.0f, lane, 32u);
+        const size_t cache_base = static_cast<size_t>(position) *
+            static_cast<size_t>(key_heads) * head_dim + base;
         for (uint d = lane; d < head_dim; d += 32u) {
             key_cache[cache_base + d] = static_cast<bfloat>(key[base + d]);
             value_cache[cache_base + d] = static_cast<bfloat>(value[base + d]);
         }
     }
+    (void)page_tokens;
 }
 
 kernel void celeg_qk_norm_rope_batch_split_store_kv_half(
@@ -120,7 +134,8 @@ kernel void celeg_qk_norm_rope_batch_split_store_kv_half(
     if (token >= rows) return;
     const uint position = base_position + token;
     if (head < query_heads) {
-        const size_t base = static_cast<size_t>(token) * query_heads * head_dim + static_cast<size_t>(head) * head_dim;
+        const size_t base = static_cast<size_t>(token) * query_heads * head_dim +
+            static_cast<size_t>(head) * head_dim;
         const uint pairs = head_dim / 2u;
         float sum = 0.0f;
         for (uint pair = 0; pair < pairs; ++pair) {
@@ -128,22 +143,14 @@ kernel void celeg_qk_norm_rope_batch_split_store_kv_half(
             const float y = query[base + pairs + pair];
             sum += x * x + y * y;
         }
-        const float inv = rsqrt(sum / static_cast<float>(head_dim) + query_epsilon);
-        for (uint pair = 0; pair < pairs; ++pair) {
-            const float freq = pow(theta, -2.0f * static_cast<float>(pair) / static_cast<float>(head_dim));
-            const float ang = static_cast<float>(position) * freq;
-            const float c = cos(ang);
-            const float s = sin(ang);
-            const size_t first = base + pair;
-            const size_t second = base + pairs + pair;
-            const float x = query[first] * (inv * query_weight[pair]);
-            const float y = query[second] * (inv * query_weight[pairs + pair]);
-            query[first] = (x * c - y * s) * query_scale;
-            query[second] = (y * c + x * s) * query_scale;
-        }
+        const float inverse = rsqrt(sum / static_cast<float>(head_dim) + query_epsilon);
+        celeg_apply_split_half_rope(
+            query, query_weight, base, pairs, head_dim, position, theta,
+            inverse, query_scale, 0u, 1u);
     }
     if (head < key_heads) {
-        const size_t source_base = static_cast<size_t>(token) * key_heads * head_dim + static_cast<size_t>(head) * head_dim;
+        const size_t source_base = static_cast<size_t>(token) * key_heads * head_dim +
+            static_cast<size_t>(head) * head_dim;
         const uint pairs = head_dim / 2u;
         float sum = 0.0f;
         for (uint pair = 0; pair < pairs; ++pair) {
@@ -151,20 +158,12 @@ kernel void celeg_qk_norm_rope_batch_split_store_kv_half(
             const float y = key[source_base + pairs + pair];
             sum += x * x + y * y;
         }
-        const float inv = rsqrt(sum / static_cast<float>(head_dim) + key_epsilon);
-        for (uint pair = 0; pair < pairs; ++pair) {
-            const float freq = pow(theta, -2.0f * static_cast<float>(pair) / static_cast<float>(head_dim));
-            const float ang = static_cast<float>(position) * freq;
-            const float c = cos(ang);
-            const float s = sin(ang);
-            const size_t first = source_base + pair;
-            const size_t second = source_base + pairs + pair;
-            const float x = key[first] * (inv * key_weight[pair]);
-            const float y = key[second] * (inv * key_weight[pairs + pair]);
-            key[first] = x * c - y * s;
-            key[second] = y * c + x * s;
-        }
-        const size_t cache_base = static_cast<size_t>(position) * key_heads * head_dim + static_cast<size_t>(head) * head_dim;
+        const float inverse = rsqrt(sum / static_cast<float>(head_dim) + key_epsilon);
+        celeg_apply_split_half_rope(
+            key, key_weight, source_base, pairs, head_dim, position, theta,
+            inverse, 1.0f, 0u, 1u);
+        const size_t cache_base = static_cast<size_t>(position) * key_heads * head_dim +
+            static_cast<size_t>(head) * head_dim;
         for (uint d = 0; d < head_dim; ++d) {
             key_cache[cache_base + d] = static_cast<bfloat>(key[source_base + d]);
             value_cache[cache_base + d] = static_cast<bfloat>(value[source_base + d]);
