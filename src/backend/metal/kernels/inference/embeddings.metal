@@ -1,25 +1,43 @@
 /**
  * @brief embeddings — all celeg_embedding_* kernels.
  */
+inline float celeg_embedding_value(half value) {
+    return static_cast<float>(value);
+}
+
+inline float celeg_embedding_value(ushort value) {
+    return celeg_bf16_to_float(value);
+}
+
+template <typename T>
+inline void celeg_embedding_dense_core(
+    device const T* table,
+    device float* output,
+    uint width,
+    uint token,
+    uint index) {
+    if (index < width) {
+        output[index] = celeg_embedding_value(
+            table[static_cast<size_t>(token) * width + index]);
+    }
+}
+
 kernel void celeg_embedding_f16(device const half* table [[buffer(0)]],
                                 device float* output [[buffer(1)]],
                                 constant uint& width [[buffer(2)]],
                                 constant uint& token [[buffer(3)]],
                                 uint index [[thread_position_in_grid]]) {
-    if (index < width) output[index] = static_cast<float>(
-        table[static_cast<size_t>(token) * width + index]);
+    celeg_embedding_dense_core(table, output, width, token, index);
 }
-
-
 
 kernel void celeg_embedding_bf16(device const ushort* table [[buffer(0)]],
                                  device float* output [[buffer(1)]],
                                  constant uint& width [[buffer(2)]],
                                  constant uint& token [[buffer(3)]],
                                  uint index [[thread_position_in_grid]]) {
-    if (index < width) output[index] = celeg_bf16_to_float(
-        table[static_cast<size_t>(token) * width + index]);
+    celeg_embedding_dense_core(table, output, width, token, index);
 }
+
 kernel void celeg_embedding_q4k(device const uchar* weights [[buffer(0)]],
                                 device float* output [[buffer(1)]],
                                 constant uint& width [[buffer(2)]],
