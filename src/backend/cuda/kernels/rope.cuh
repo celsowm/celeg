@@ -256,88 +256,6 @@ void launch_rope_batch_positions(
     CELEG_KERNEL_DEBUG_SYNC(stream);
 }
 
-__device__ __forceinline__ float dynamic_yarn_correction_dimension(
-    float rotations, int rotary_dimension, float theta, int original_context) {
-    const float numerator = static_cast<float>(rotary_dimension) *
-        logf(static_cast<float>(original_context) /
-             (rotations * 6.28318530717958647692f));
-    const float denominator = 2.0f * logf(theta);
-    return numerator / denominator;
-}
-
-/// `rotary_dimension` must be the actual rotated width (2 * rotary_pairs),
-/// not head_dim -- for partial-rotary checkpoints (rotary_fraction < 1.0)
-/// those differ, and using head_dim here silently understates the frequency
-/// falloff across the rotated dims. Invisible whenever rotary_fraction == 1.0,
-/// which is why this was wrong for a long time before a partial-rotary
-/// checkpoint (Qwen3.5) surfaced it -- see
-/// docs/QWEN3_5_NVFP4_FP8_SUPPORT_PLAN.md Phase 6.
-__device__ __forceinline__ float scaled_rope_frequency(
-    float theta, int pair, int rotary_dimension, int position,
-    CudaRopeScaling scaling) {
-    float base = theta;
-    if (scaling.kind == 2 && scaling.original_context > 0 &&
-        position > scaling.original_context) {
-        const float context = static_cast<float>(position);
-        const float ratio = scaling.factor * context /
-            static_cast<float>(scaling.original_context) - (scaling.factor - 1.0f);
-        const int denominator = rotary_dimension - 2 > 2 ? rotary_dimension - 2 : 2;
-        base *= powf(fmaxf(1.0f, ratio),
-                     static_cast<float>(rotary_dimension) /
-                     static_cast<float>(denominator));
-    }
-    float frequency = powf(base, -2.0f * static_cast<float>(pair) /
-                           static_cast<float>(rotary_dimension));
-    if (scaling.kind == 1) {
-        frequency /= scaling.factor;
-    } else if (scaling.kind == 3) {
-        const float low = floorf(dynamic_yarn_correction_dimension(
-            scaling.beta_fast, rotary_dimension, theta, scaling.original_context));
-        const float high = ceilf(dynamic_yarn_correction_dimension(
-            scaling.beta_slow, rotary_dimension, theta, scaling.original_context));
-        const float clipped_low = fmaxf(0.0f, low);
-        const float clipped_high = fminf(
-            static_cast<float>(rotary_dimension - 1), high);
-        const float span = fmaxf(0.001f, clipped_high - clipped_low);
-        const float ramp = fminf(1.0f, fmaxf(0.0f,
-            (static_cast<float>(pair) - clipped_low) / span));
-        const float interpolated = frequency / scaling.factor;
-        frequency = frequency * (1.0f - ramp) + interpolated * ramp;
-    } else if (scaling.kind == 4) {
-        if (pair < scaling.factor_count) {
-            const float factor = position > scaling.original_context
-                ? scaling.long_factors[pair] : scaling.short_factors[pair];
-            frequency /= factor;
-        }
-    } else if (scaling.kind == 5) {
-        const float wavelength = 6.28318530717958647692f / frequency;
-        if (wavelength > static_cast<float>(scaling.original_context) /
-                         scaling.low_frequency_factor) {
-            frequency /= scaling.factor;
-        } else if (wavelength <= static_cast<float>(scaling.original_context) /
-                                  scaling.high_frequency_factor) {
-        } else {
-            const float span = scaling.low_frequency_factor -
-                scaling.high_frequency_factor;
-            const float blend = span > 0.0f
-                ? (wavelength * scaling.high_frequency_factor /
-                   static_cast<float>(scaling.original_context) - 1.0f) / span
-                : 0.0f;
-            frequency /= 1.0f + fminf(1.0f, fmaxf(0.0f, blend)) *
-                (scaling.factor - 1.0f);
-        }
-    } else if (scaling.kind == 6) {
-        /// Proportional RoPE derives from head_dim: `base ** (-2*pair /
-        /// head_dim)` with `head_dim = rotary_dimension / rotary_fraction`.
-        /// Since `frequency` above is `base ** (-2*pair / rotary_dimension)`,
-        /// raising it to `rotary_fraction` yields the proportional frequency.
-        const float fraction = scaling.rotary_fraction > 0.0f
-            ? scaling.rotary_fraction : 1.0f;
-        frequency = powf(frequency, fraction) / scaling.factor;
-    }
-    return frequency;
-}
-
 __global__ void dynamic_qk_norm_rope_kernel(
     __nv_bfloat16* data, const __nv_bfloat16* norm_weight,
     int rows, int heads, int head_dim, int position_value,
@@ -379,7 +297,7 @@ __global__ void dynamic_qk_norm_rope_kernel(
             (normalize ? bf16_float(norm_weight[low]) : 1.0f);
         const float b = bf16_float(vector[high]) * inv *
             (normalize ? bf16_float(norm_weight[high]) : 1.0f);
-        const float frequency = scaled_rope_frequency(
+        const float frequency = cuda_rope::scaled_frequency(
             theta, i, 2 * rotary_pairs, position, scaling);
         const float angle = static_cast<float>(position) * frequency;
         const float c = cosf(angle);
@@ -506,7 +424,7 @@ __global__ void dynamic_mrope_qk_norm_rope_kernel(
     for (int i = threadIdx.x; i < rotary_pairs; i += blockDim.x) {
         const int axis = mrope_axis_for_pair_device(i, section0, section1, interleaved);
         const float position = static_cast<float>(positions[axis]);
-        const float frequency = scaled_rope_frequency(
+        const float frequency = cuda_rope::scaled_frequency(
             theta, i, 2 * rotary_pairs, static_cast<int>(position), scaling);
         const float angle = position * frequency;
         const float a = bf16_float(vector[i]) * inv *
