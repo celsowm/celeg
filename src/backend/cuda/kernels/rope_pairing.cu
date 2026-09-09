@@ -2,6 +2,7 @@
 #include "reductions.cuh"
 #include "rope_scaling.cuh"
 #include "utils.cuh"
+#include "celeg/model/rope_geometry.hpp"
 
 #include <stdexcept>
 
@@ -21,7 +22,7 @@ __global__ void paired_qk_norm_rope_kernel(
     int rotary_pairs,
     float epsilon,
     bool normalize,
-    bool adjacent_pairs,
+    RopePairingKind pairing,
     CudaRopeScaling scaling,
     float attention_scale) {
     const int block = static_cast<int>(blockIdx.x);
@@ -65,8 +66,10 @@ __global__ void paired_qk_norm_rope_kernel(
     const int position = positions ? positions[row] : row;
     for (int pair = static_cast<int>(threadIdx.x);
          pair < rotary_pairs; pair += static_cast<int>(blockDim.x)) {
-        const int first = adjacent_pairs ? 2 * pair : pair;
-        const int second = adjacent_pairs ? first + 1 : rotary_pairs + pair;
+        const auto components = rope_geometry::pair_components(
+            pair, rotary_pairs, pairing);
+        const int first = components.first;
+        const int second = components.second;
         const float norm_first = normalize ? __bfloat162float(norm_weight[first]) : 1.0f;
         const float norm_second = normalize ? __bfloat162float(norm_weight[second]) : 1.0f;
         const float a = __bfloat162float(vector[first]) * inverse_norm * norm_first;
@@ -137,19 +140,18 @@ void launch_qk_norm_rope_positions(
     if (rotary_dimension <= 0 || (rotary_dimension % 2) != 0) {
         throw std::invalid_argument("position-vector RoPE rotary dimension must be even");
     }
-    const int pairs = rotary_dimension / 2;
+    const int pairs = rope_geometry::rotary_pairs(rotary_dimension);
     const int threads = rope_threads(head_dim);
-    const bool adjacent_pairs = pairing == RopePairingKind::AdjacentPairs;
     const float query_attention_scale = scaling.kind == 3
         ? scaling.attention_factor * scaling.attention_factor
         : 1.0f;
     paired_qk_norm_rope_kernel<<<rows * query_heads, threads, 0, stream>>>(
         query, query_norm, rows, query_heads, head_dim, positions, rope_theta,
-        pairs, epsilon, normalize, adjacent_pairs, scaling, query_attention_scale);
+        pairs, epsilon, normalize, pairing, scaling, query_attention_scale);
     if (key) {
         paired_qk_norm_rope_kernel<<<rows * key_value_heads, threads, 0, stream>>>(
             key, key_norm, rows, key_value_heads, head_dim, positions, rope_theta,
-            pairs, epsilon, normalize, adjacent_pairs, scaling, 1.0f);
+            pairs, epsilon, normalize, pairing, scaling, 1.0f);
     }
     CELEG_CUDA(cudaGetLastError());
 }
