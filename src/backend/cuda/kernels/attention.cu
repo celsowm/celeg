@@ -7,6 +7,7 @@
 namespace celeg {
 #include "kv_cache.cuh"
 #include "attention_common.cuh"
+#include "attention_online.cuh"
 #include "attention_dense.cuh"
 #include "attention_segmented.cuh"
 #include "attention_batch_ptrs.cuh"
