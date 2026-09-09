@@ -1,3 +1,42 @@
+inline float celeg_projection_weight(float value) {
+    return value;
+}
+
+inline float celeg_projection_weight(half value) {
+    return static_cast<float>(value);
+}
+
+inline float celeg_projection_weight(ushort value) {
+    return celeg_bf16_to_float(value);
+}
+
+template <typename T>
+inline void celeg_matmul_dense_core(
+    device const T* weights,
+    device const float* input,
+    device float* output,
+    uint cols,
+    uint output_rows,
+    uint output_stride,
+    uint lane,
+    uint simd,
+    uint2 grid) {
+    const uint row = grid.x * 8 + simd;
+    const uint token = grid.y;
+    if (row >= output_rows) return;
+    float sum = 0.0f;
+    const size_t input_base = static_cast<size_t>(token) * cols;
+    const size_t weight_base = static_cast<size_t>(row) * cols;
+    for (uint col = lane; col < cols; col += 32) {
+        sum += celeg_projection_weight(weights[weight_base + col]) *
+            input[input_base + col];
+    }
+    const float reduced = simd_sum(sum);
+    if (lane == 0) {
+        output[static_cast<size_t>(token) * output_stride + row] = reduced;
+    }
+}
+
 kernel void celeg_matmul(device const float* weights [[buffer(0)]],
                          device const float* input [[buffer(1)]],
                          device float* output [[buffer(2)]],
@@ -8,17 +47,9 @@ kernel void celeg_matmul(device const float* weights [[buffer(0)]],
                          uint lane [[thread_index_in_simdgroup]],
                          uint simd [[simdgroup_index_in_threadgroup]],
                          uint2 grid [[threadgroup_position_in_grid]]) {
-    const uint row = grid.x * 8 + simd;
-    const uint token = grid.y;
-    if (row >= output_rows) return;
-    float sum = 0.0f;
-    const size_t input_base = static_cast<size_t>(token) * cols;
-    const size_t weight_base = static_cast<size_t>(row) * cols;
-    for (uint col = lane; col < cols; col += 32) {
-        sum += weights[weight_base + col] * input[input_base + col];
-    }
-    const float reduced = simd_sum(sum);
-    if (lane == 0) output[static_cast<size_t>(token) * output_stride + row] = reduced;
+    celeg_matmul_dense_core(
+        weights, input, output, cols, output_rows, output_stride,
+        lane, simd, grid);
 }
 
 kernel void celeg_matmul_f16(device const half* weights [[buffer(0)]],
@@ -31,17 +62,9 @@ kernel void celeg_matmul_f16(device const half* weights [[buffer(0)]],
                              uint lane [[thread_index_in_simdgroup]],
                              uint simd [[simdgroup_index_in_threadgroup]],
                              uint2 grid [[threadgroup_position_in_grid]]) {
-    const uint row = grid.x * 8 + simd;
-    const uint token = grid.y;
-    if (row >= output_rows) return;
-    float sum = 0.0f;
-    const size_t input_base = static_cast<size_t>(token) * cols;
-    const size_t weight_base = static_cast<size_t>(row) * cols;
-    for (uint col = lane; col < cols; col += 32) {
-        sum += static_cast<float>(weights[weight_base + col]) * input[input_base + col];
-    }
-    const float reduced = simd_sum(sum);
-    if (lane == 0) output[static_cast<size_t>(token) * output_stride + row] = reduced;
+    celeg_matmul_dense_core(
+        weights, input, output, cols, output_rows, output_stride,
+        lane, simd, grid);
 }
 
 kernel void celeg_matmul_bf16(device const ushort* weights [[buffer(0)]],
@@ -54,17 +77,9 @@ kernel void celeg_matmul_bf16(device const ushort* weights [[buffer(0)]],
                               uint lane [[thread_index_in_simdgroup]],
                               uint simd [[simdgroup_index_in_threadgroup]],
                               uint2 grid [[threadgroup_position_in_grid]]) {
-    const uint row = grid.x * 8 + simd;
-    const uint token = grid.y;
-    if (row >= output_rows) return;
-    float sum = 0.0f;
-    const size_t input_base = static_cast<size_t>(token) * cols;
-    const size_t weight_base = static_cast<size_t>(row) * cols;
-    for (uint col = lane; col < cols; col += 32) {
-        sum += celeg_bf16_to_float(weights[weight_base + col]) * input[input_base + col];
-    }
-    const float reduced = simd_sum(sum);
-    if (lane == 0) output[static_cast<size_t>(token) * output_stride + row] = reduced;
+    celeg_matmul_dense_core(
+        weights, input, output, cols, output_rows, output_stride,
+        lane, simd, grid);
 }
 
 kernel void celeg_matmul_q4_0(device const uchar* weights [[buffer(0)]],
