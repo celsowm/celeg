@@ -1,35 +1,4 @@
 
-__device__ __forceinline__ int relative_position_bucket(
-    int query_position, int key_position, int total_bucket_count,
-    int max_distance, bool bidirectional) {
-    const int relative_position = key_position - query_position;
-    const int bucket_count = bidirectional
-        ? total_bucket_count / 2 : total_bucket_count;
-    const bool positive = bidirectional && relative_position > 0;
-    const int distance = bidirectional
-        ? abs(relative_position) : max(-relative_position, 0);
-    const int max_exact = bucket_count / 2;
-    int bucket = 0;
-    if (distance < max_exact) {
-        bucket = distance;
-    } else {
-        const int safe_exact = max(max_exact, 1);
-        const int safe_distance = max(distance, max_exact);
-        const int safe_max_distance = max(max_distance, max_exact + 1);
-        const float denominator = logf(
-            static_cast<float>(safe_max_distance) /
-            static_cast<float>(safe_exact));
-        const float logarithmic = denominator == 0.0f ? 0.0f : logf(
-            static_cast<float>(safe_distance) /
-            static_cast<float>(safe_exact)) / denominator;
-        bucket = max_exact + static_cast<int>(
-            logarithmic * static_cast<float>(bucket_count - max_exact));
-        bucket = min(bucket, bucket_count - 1);
-    }
-    if (positive) bucket += bucket_count;
-    return bucket;
-}
-
 /** @brief Relative-position score policy for shared warp-online attention. */
 struct RelativeBiasScorePolicy {
     const float* values;
@@ -40,7 +9,7 @@ struct RelativeBiasScorePolicy {
     __device__ __forceinline__ float score(
         float dot, float scale, int head, int query_position,
         int key_position) const {
-        const int bucket = relative_position_bucket(
+        const int bucket = attention_semantics::relative_position_bucket(
             query_position, key_position, bucket_count,
             max_distance, bidirectional);
         return dot * scale + values[static_cast<size_t>(head) *
