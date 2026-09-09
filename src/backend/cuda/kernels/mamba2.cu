@@ -4,6 +4,26 @@
 #include <stdexcept>
 
 namespace celeg {
+namespace {
+
+__device__ __forceinline__ float mamba2_silu(float value) {
+    return value / (1.0f + expf(-value));
+}
+
+__device__ __forceinline__ float mamba2_dt(float raw, __nv_bfloat16 bias) {
+    return log1pf(expf(raw + bf16_float(bias)));
+}
+
+__device__ __forceinline__ float mamba2_decay(float dt, __nv_bfloat16 a_log) {
+    return expf(-dt * expf(bf16_float(a_log)));
+}
+
+__device__ __forceinline__ float mamba2_state_value(
+    float previous, float decay, float dt, __nv_bfloat16 b, float conv) {
+    return decay * previous + dt * bf16_float(b) * conv;
+}
+
+}
 
 __global__ void mamba2_step_kernel(
     const __nv_bfloat16* projected, const __nv_bfloat16* conv_weight,
@@ -25,14 +45,14 @@ __global__ void mamba2_step_kernel(
         value += bf16_float(history[tap]) *
             bf16_float(conv_weight[static_cast<size_t>(channel) * conv_kernel + tap]);
     }
-    const float conv = value / (1.0f + expf(-value));
+    const float conv = mamba2_silu(value);
     if (channel >= intermediate) return;
 
     const int head = channel / head_dim;
     const int group = head / (num_heads / group_count);
     const float dt_raw = bf16_float(projected[conv_dim + intermediate + head]);
-    const float dt = log1pf(expf(dt_raw + bf16_float(dt_bias[head])));
-    const float decay = expf(-dt * expf(bf16_float(a_log[head])));
+    const float dt = mamba2_dt(dt_raw, dt_bias[head]);
+    const float decay = mamba2_decay(dt, a_log[head]);
     __nv_bfloat16* state = ssm_state + static_cast<size_t>(channel) * state_size;
     const __nv_bfloat16* b = nullptr;
     const __nv_bfloat16* c = nullptr;
@@ -40,7 +60,8 @@ __global__ void mamba2_step_kernel(
     c = xbc + intermediate + group_count * state_size + group * state_size;
     float output = 0.0f;
     for (int n = 0; n < state_size; ++n) {
-        float s = decay * bf16_float(state[n]) + dt * bf16_float(b[n]) * conv;
+        const float s = mamba2_state_value(
+            bf16_float(state[n]), decay, dt, b[n], conv);
         state[n] = __float2bfloat16(s);
         output += s * bf16_float(c[n]);
     }
@@ -78,7 +99,7 @@ __global__ void mamba2_prefill_kernel(
                 value += history[tap] * bf16_float(
                     conv_weight[static_cast<size_t>(channel) * conv_kernel + tap]);
             }
-            conv = value / (1.0f + expf(-value));
+            conv = mamba2_silu(value);
         }
         conv = __shfl_sync(0xffffffff, conv, 0);
         if (channel >= intermediate) continue;
@@ -86,15 +107,16 @@ __global__ void mamba2_prefill_kernel(
         const int group = head / group_width;
         const float dt_raw = bf16_float(projected_row[intermediate +
             2 * group_count * state_size + head]);
-        const float dt = log1pf(expf(dt_raw + bf16_float(dt_bias[head])));
-        const float decay = expf(-dt * expf(bf16_float(a_log[head])));
+        const float dt = mamba2_dt(dt_raw, dt_bias[head]);
+        const float decay = mamba2_decay(dt, a_log[head]);
         const __nv_bfloat16* b = xbc + intermediate + group * state_size;
         const __nv_bfloat16* c = xbc + intermediate + group_count * state_size +
             group * state_size;
         __nv_bfloat16* state = ssm_state + static_cast<size_t>(channel) * state_size;
         float output = 0.0f;
         for (int n = lane; n < state_size; n += 32) {
-            const float s = decay * bf16_float(state[n]) + dt * bf16_float(b[n]) * conv;
+            const float s = mamba2_state_value(
+                bf16_float(state[n]), decay, dt, b[n], conv);
             state[n] = __float2bfloat16(s);
             output += s * bf16_float(c[n]);
         }
