@@ -24,6 +24,51 @@ __device__ __forceinline__ float attention_dot(const __nv_bfloat16* query,
     return block_sum(partial, warp_sums, total);
 }
 
+struct ContiguousBf16AttentionStorage {
+    const __nv_bfloat16* keys;
+    const __nv_bfloat16* values;
+    int kv_heads;
+
+    __device__ __forceinline__ float dot(
+        const __nv_bfloat16* query, int token, int kv_head, int head_dim,
+        float* warp_sums, float* dot_total) const {
+        const __nv_bfloat16* key = keys +
+            (static_cast<size_t>(token) * kv_heads + kv_head) * head_dim;
+        return attention_dot(query, key, head_dim, warp_sums, dot_total);
+    }
+
+    __device__ __forceinline__ float value(
+        int token, int kv_head, int dimension, int head_dim) const {
+        const __nv_bfloat16* value_ptr = values +
+            (static_cast<size_t>(token) * kv_heads + kv_head) * head_dim;
+        return bf16_float(value_ptr[dimension]);
+    }
+};
+
+struct ContiguousInt8AttentionStorage {
+    const int8_t* keys;
+    const int8_t* values;
+    const float* key_scales;
+    const float* value_scales;
+    int kv_heads;
+
+    __device__ __forceinline__ float dot(
+        const __nv_bfloat16* query, int token, int kv_head, int head_dim,
+        float* warp_sums, float* dot_total) const {
+        const size_t scale_index = static_cast<size_t>(token) * kv_heads + kv_head;
+        const int8_t* key = keys + scale_index * head_dim;
+        return attention_dot_int8(
+            query, key, key_scales[scale_index], head_dim, warp_sums, dot_total);
+    }
+
+    __device__ __forceinline__ float value(
+        int token, int kv_head, int dimension, int head_dim) const {
+        const size_t scale_index = static_cast<size_t>(token) * kv_heads + kv_head;
+        const int8_t* value_ptr = values + scale_index * head_dim;
+        return static_cast<float>(value_ptr[dimension]) * value_scales[scale_index];
+    }
+};
+
 /// Online/segmented decode kernels launch with 32 threads and stride
 /// `for (d = lane; d < head_dim; d += 32)`, accumulating into a per-lane
 /// register array. The supported head_dim ceiling is therefore
