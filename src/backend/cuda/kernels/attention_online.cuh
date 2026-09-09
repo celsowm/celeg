@@ -60,12 +60,15 @@ __global__ void gqa_online_attention_kernel(
     const int head = flat % q_heads;
     if (row >= rows) return;
     const int query_position = positions.value(row);
-    const int sequence_length = query_position + 1;
+    const int sequence_length =
+        celeg::attention_semantics::sequence_length_from_query_position(
+            query_position);
     const int first_token = sliding_window > 0
         ? celeg::attention_semantics::sliding_window_first_candidate(
               query_position, sliding_window)
         : 0;
-    const int kv_head = head / (q_heads / kv_heads);
+    const int kv_head = celeg::attention_semantics::gqa_kv_head(
+        head, q_heads, kv_heads);
     const __nv_bfloat16* query_row = query +
         (static_cast<size_t>(row) * q_heads + head) * head_dim;
     __nv_bfloat16* output_row = output +
@@ -73,5 +76,5 @@ __global__ void gqa_online_attention_kernel(
     online_attention_row(
         query_row, storage.row(row), output_row, head, kv_head, head_dim,
         query_position, first_token, sequence_length,
-        rsqrtf(static_cast<float>(head_dim)), score_policy);
+        celeg::attention_semantics::attention_scale(head_dim), score_policy);
 }
