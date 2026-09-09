@@ -9,6 +9,7 @@
 #include <memory>
 #include <mutex>
 #include <span>
+#include <stdexcept>
 #include <variant>
 #include <vector>
 
@@ -140,6 +141,10 @@ struct CpuAttentionPattern {
     AttentionPatternSpec storage = FullCausalPattern{};
 
     static CpuAttentionPattern lower(const AttentionPatternSpec& pattern) {
+        if (std::holds_alternative<DynamicSparsePattern>(pattern)) {
+            throw std::invalid_argument(
+                "CPU content-ranked dynamic sparse attention is unsupported");
+        }
         return {pattern};
     }
     bool allows(int query_position, int key_position) const;

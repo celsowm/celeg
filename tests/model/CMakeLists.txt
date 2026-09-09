@@ -13,6 +13,7 @@ foreach(test_name IN ITEMS
     attention_shared_kv_contract_test
     automatic_inference_test
     cpu_attention_semantic_capability_test
+    cpu_dynamic_sparse_semantics_test
     cuda_packed_attention_capability_test
     cuda_relative_bias_semantic_test
     layer_dispatch_exhaustiveness_test
@@ -41,6 +42,8 @@ target_sources(attention_bias_semantics_test PRIVATE
 target_sources(attention_pattern_semantics_test PRIVATE
     src/backend/cpu/memory/attention_policy.cpp)
 target_sources(cpu_attention_semantic_capability_test PRIVATE
+    src/backend/cpu/compiler.cpp)
+target_sources(cpu_dynamic_sparse_semantics_test PRIVATE
     src/backend/cpu/compiler.cpp)
 target_include_directories(cuda_packed_attention_capability_test PRIVATE
     src/backend/cuda)

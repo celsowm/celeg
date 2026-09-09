@@ -86,7 +86,7 @@ CompiledModelProgram CpuModelCompiler::compile(const ResolvedModel& model) const
          .bidirectional = true,
          .prefix_lm = true,
          .block_sparse = true,
-         .dynamic_sparse = true,
+         .dynamic_sparse = false,
          .external_memory = true,
          .alibi = true,
          .relative_position_bias = true,

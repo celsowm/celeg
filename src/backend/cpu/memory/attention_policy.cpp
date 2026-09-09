@@ -25,9 +25,8 @@ bool CpuAttentionPattern::allows(int query_position, int key_position) const {
                 query_position, key_position, value.block_size,
                 value.local_blocks, value.global_blocks);
         } else if constexpr (std::is_same_v<Pattern, DynamicSparsePattern>) {
-            return attention_semantics::dynamic_sparse_visible(
-                query_position, key_position, value.block_size,
-                value.max_selected_blocks);
+            throw std::invalid_argument(
+                "CPU content-ranked dynamic sparse attention is unsupported");
         } else {
             static_assert(always_false_v<Pattern>, "unhandled attention pattern variant");
         }
@@ -45,9 +44,11 @@ bool CpuAttentionPattern::may_read_future(int query_position,
                 query_position, sequence_length, value.prefix_length);
         } else if constexpr (std::is_same_v<Pattern, FullCausalPattern> ||
                              std::is_same_v<Pattern, SlidingWindowPattern> ||
-                             std::is_same_v<Pattern, BlockSparsePattern> ||
-                             std::is_same_v<Pattern, DynamicSparsePattern>) {
+                             std::is_same_v<Pattern, BlockSparsePattern>) {
             return false;
+        } else if constexpr (std::is_same_v<Pattern, DynamicSparsePattern>) {
+            throw std::invalid_argument(
+                "CPU content-ranked dynamic sparse attention is unsupported");
         } else {
             static_assert(always_false_v<Pattern>, "unhandled attention pattern variant");
         }
@@ -63,9 +64,11 @@ int CpuAttentionPattern::first_candidate(int query_position) const {
         } else if constexpr (std::is_same_v<Pattern, FullCausalPattern> ||
                              std::is_same_v<Pattern, BidirectionalPattern> ||
                              std::is_same_v<Pattern, PrefixLmPattern> ||
-                             std::is_same_v<Pattern, BlockSparsePattern> ||
-                             std::is_same_v<Pattern, DynamicSparsePattern>) {
+                             std::is_same_v<Pattern, BlockSparsePattern>) {
             return 0;
+        } else if constexpr (std::is_same_v<Pattern, DynamicSparsePattern>) {
+            throw std::invalid_argument(
+                "CPU content-ranked dynamic sparse attention is unsupported");
         } else {
             static_assert(always_false_v<Pattern>, "unhandled attention pattern variant");
         }
