@@ -31,12 +31,6 @@ void sparse_semantics() {
     CELEG_TEST_CHECK(block_sparse_visible(63, 32, 16, 2, 1));
     CELEG_TEST_CHECK(!block_sparse_visible(63, 16, 16, 2, 1));
     CELEG_TEST_CHECK(!block_sparse_visible(63, 64, 16, 2, 1));
-
-    CELEG_TEST_CHECK(dynamic_sparse_visible(63, 48, 16, 2));
-    CELEG_TEST_CHECK(dynamic_sparse_visible(63, 0, 16, 2));
-    CELEG_TEST_CHECK(dynamic_sparse_visible(63, 16, 16, 2));
-    CELEG_TEST_CHECK(!dynamic_sparse_visible(63, 32, 16, 2));
-    CELEG_TEST_CHECK(!dynamic_sparse_visible(63, 64, 16, 2));
 }
 
 void cpu_matches_canonical() {

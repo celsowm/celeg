@@ -3,6 +3,7 @@ foreach(test_name IN ITEMS
     attention_backend_capabilities_test
     attention_bias_semantics_test
     attention_bias_validation_test
+    attention_dynamic_sparse_semantics_test
     attention_merge_semantics_test
     attention_micro_semantics_test
     attention_norm_weight_plan_test

@@ -48,16 +48,6 @@ CELEG_PATTERN_SEMANTICS_INLINE bool block_sparse_visible(
            key_block <= query_block;
 }
 
-CELEG_PATTERN_SEMANTICS_INLINE bool dynamic_sparse_visible(
-    int query_position, int key_position, int block_size,
-    int max_selected_blocks) {
-    if (!causal_visible(query_position, key_position)) return false;
-    const int query_block = query_position / block_size;
-    const int key_block = key_position / block_size;
-    if (key_block == query_block) return true;
-    return key_block < max_selected_blocks;
-}
-
 CELEG_PATTERN_SEMANTICS_INLINE bool prefix_lm_may_read_future(
     int query_position, int sequence_length, int prefix_length) {
     return query_position < prefix_length && prefix_length < sequence_length;
