@@ -45,13 +45,7 @@ kernel void celeg_embedding(device const float* table [[buffer(0)]],
 
 void celeg_q4k_scale_min(device const uchar* scales, uint index,
                          thread uchar& scale, thread uchar& minimum) {
-    if (index < 4) {
-        scale = scales[index] & 63;
-        minimum = scales[index + 4] & 63;
-        return;
-    }
-    scale = (scales[index + 4] & 0x0f) | ((scales[index - 4] >> 6) << 4);
-    minimum = (scales[index + 4] >> 4) | ((scales[index] >> 6) << 4);
+    celeg_q5k_scale_min(scales, index, scale, minimum);
 }
 
 uint celeg_q4k_value(device const uchar* block, uint column) {
