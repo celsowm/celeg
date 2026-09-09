@@ -39,10 +39,10 @@ kernel void celeg_attention_bias_semantics_probe(
     constant uint& bucket_count [[buffer(4)]],
     constant uint& max_distance [[buffer(5)]],
     constant uint& bidirectional [[buffer(6)]],
-    constant float& slope [[buffer(7)]]) {
+    constant float* slopes [[buffer(7)]]) {
     bucket_out[0] = celeg_relative_position_bucket(
         query_position, key_position, bucket_count, max_distance, bidirectional);
-    const CelegAttentionAlibiBias alibi{&slope};
+    const CelegAttentionAlibiBias alibi{slopes};
     alibi_out[0] = alibi.value(
         0, static_cast<uint>(query_position), static_cast<uint>(key_position));
 }
