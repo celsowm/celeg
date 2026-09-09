@@ -11,4 +11,5 @@ set(CELEG_CUDA_APP_SOURCES
     celeg_run;apps/cuda/main.cpp
     celeg_concurrent_benchmark;apps/benchmark/cuda/concurrent.cpp
     celeg_prefix_cache_benchmark;apps/benchmark/cuda/prefix_cache.cpp
+    celeg_segmented_merge_benchmark;apps/benchmark/cuda/segmented_merge.cu
 )
