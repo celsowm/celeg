@@ -1,15 +1,5 @@
 #pragma once
 
-using OnlineContiguousBf16Storage = ContiguousBf16AttentionStorage;
-using OnlineContiguousInt8Storage = ContiguousInt8AttentionStorage;
-using OnlinePtrBf16Storage = PointerBf16AttentionStorage;
-using OnlinePtrInt8Storage = PointerInt8AttentionStorage;
-using OnlinePagedBf16Storage = PagedBf16AttentionStorage;
-using OnlinePagedInt8Storage = PagedInt8AttentionStorage;
-using OnlinePrefillPosition = AttentionPrefillPosition;
-using OnlineSinglePosition = AttentionSinglePosition;
-using OnlineBatchPositions = AttentionBatchPositions;
-
 /**
  * @brief Runs one warp-online attention row with storage and score policies.
  *
