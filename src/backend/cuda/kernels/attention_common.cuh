@@ -69,6 +69,16 @@ struct ContiguousInt8AttentionStorage {
     }
 };
 
+__device__ __forceinline__ bool attention_block_sparse_visible(
+    int query_position, int token, const GqaBlockSparsePattern& pattern) {
+    if (token > query_position) return false;
+    const int query_block = query_position / pattern.block_size;
+    const int token_block = token / pattern.block_size;
+    if (token_block < pattern.global_blocks) return true;
+    const int local_start = max(0, query_block - pattern.local_blocks + 1);
+    return token_block >= local_start && token_block <= query_block;
+}
+
 /// Online/segmented decode kernels launch with 32 threads and stride
 /// `for (d = lane; d < head_dim; d += 32)`, accumulating into a per-lane
 /// register array. The supported head_dim ceiling is therefore
