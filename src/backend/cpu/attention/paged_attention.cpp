@@ -3,6 +3,7 @@
 #include "celeg/model/weights/quantization.hpp"
 #include "celeg/backend/cpu/isa.hpp"
 #include "celeg/attention/online_semantics.hpp"
+#include "celeg/attention/merge_semantics.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -257,13 +258,16 @@ void cpu_gqa_decode_paged_parallel(const float* q, const CpuKvPagePool& pool, st
             const size_t task = static_cast<size_t>(qh) * tiles + tile;
             const PartialAttention& source = partial[task];
             if (source.denominator == 0.0f) continue;
-            const float new_max = std::max(combined.maximum, source.maximum);
-            const float old_scale = std::isfinite(combined.maximum) ? std::exp(combined.maximum - new_max) : 0.0f;
-            const float source_scale = std::exp(source.maximum - new_max);
-            combined.denominator = combined.denominator * old_scale + source.denominator * source_scale;
+            const auto transition = attention_semantics::merge_pair(
+                combined.maximum, combined.denominator,
+                source.maximum, source.denominator);
+            combined.denominator = transition.denominator;
             const float* source_output = accumulators.data() + task * static_cast<size_t>(head_dim);
-            for (int d = 0; d < head_dim; ++d) destination[d] = destination[d] * old_scale + source_output[d] * source_scale;
-            combined.maximum = new_max;
+            for (int d = 0; d < head_dim; ++d) {
+                destination[d] = attention_semantics::merge_accumulate(
+                    destination[d], source_output[d], transition);
+            }
+            combined.maximum = transition.maximum;
         }
         if (combined.denominator == 0.0f) throw std::invalid_argument("attention pattern selected no KV tokens");
         const float reciprocal = 1.0f / combined.denominator;
