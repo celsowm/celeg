@@ -1,3 +1,22 @@
+inline float celeg_shortconv_ring_value(
+    device const float* taps,
+    device const float* state,
+    uint width,
+    uint cache_length,
+    uint cursor,
+    uint channel) {
+    float convolution = 0.0f;
+    uint slot = cursor + 1;
+    if (slot == cache_length) slot = 0;
+    for (uint tap = 0; tap < cache_length; ++tap) {
+        convolution += state[static_cast<size_t>(slot) * width + channel] *
+            taps[static_cast<size_t>(tap) * width + channel];
+        ++slot;
+        if (slot == cache_length) slot = 0;
+    }
+    return convolution;
+}
+
 kernel void celeg_shortconv_ring(
     device const float* projected [[buffer(0)]],
     device const float* taps [[buffer(1)]],
@@ -11,17 +30,9 @@ kernel void celeg_shortconv_ring(
 
     const float value = projected[2 * width + channel] * projected[channel];
     state[static_cast<size_t>(cursor) * width + channel] = value;
-
-    float convolution = 0.0f;
-    uint slot = cursor + 1;
-    if (slot == cache_length) slot = 0;
-    for (uint tap = 0; tap < cache_length; ++tap) {
-        convolution += state[static_cast<size_t>(slot) * width + channel] *
-                       taps[static_cast<size_t>(tap) * width + channel];
-        ++slot;
-        if (slot == cache_length) slot = 0;
-    }
-    output[channel] = projected[width + channel] * convolution;
+    output[channel] = projected[width + channel] *
+        celeg_shortconv_ring_value(
+            taps, state, width, cache_length, cursor, channel);
 }
 
 kernel void celeg_shortconv_batch_ring(
@@ -45,15 +56,8 @@ kernel void celeg_shortconv_batch_ring(
         state[state_index] = projected[projected_base + actual_channel] *
             projected[projected_base + 2 * width + actual_channel];
 
-        float convolution = 0.0f;
-        uint slot = cursor + 1;
-        if (slot == cache_length) slot = 0;
-        for (uint tap = 0; tap < cache_length; ++tap) {
-            convolution += state[static_cast<size_t>(slot) * width + actual_channel] *
-                taps[static_cast<size_t>(tap) * width + actual_channel];
-            ++slot;
-            if (slot == cache_length) slot = 0;
-        }
+        const float convolution = celeg_shortconv_ring_value(
+            taps, state, width, cache_length, cursor, actual_channel);
         output[static_cast<size_t>(row) * width + actual_channel] =
             projected[projected_base + width + actual_channel] * convolution;
 
