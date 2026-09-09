@@ -13,20 +13,3 @@ set(CELEG_CUDA_APP_SOURCES
     celeg_prefix_cache_benchmark;apps/benchmark/cuda/prefix_cache.cpp
     celeg_segmented_merge_benchmark;apps/benchmark/cuda/segmented_merge.cu
 )
-
-function(celeg_register_cuda_benchmark_apps)
-    if(NOT CELEG_CUDA_AVAILABLE)
-        return()
-    endif()
-    add_executable(
-        celeg-segmented-merge-benchmark
-        apps/benchmark/cuda/segmented_merge.cu)
-    target_include_directories(
-        celeg-segmented-merge-benchmark PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/backend/cuda
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/backend/cuda/kernels)
-    target_link_libraries(
-        celeg-segmented-merge-benchmark PRIVATE celeg_cuda_backend)
-endfunction()
-
-cmake_language(DEFER CALL celeg_register_cuda_benchmark_apps)
