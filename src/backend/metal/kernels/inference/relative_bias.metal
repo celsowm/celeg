@@ -1,3 +1,50 @@
+struct CelegMergeTransition {
+    float maximum;
+    float denominator;
+    float destination_scale;
+    float source_scale;
+};
+
+float celeg_partial_rescale(float partial_maximum, float global_maximum) {
+    return exp(partial_maximum - global_maximum);
+}
+
+CelegMergeTransition celeg_merge_pair(
+    float destination_maximum, float destination_denominator,
+    float source_maximum, float source_denominator) {
+    const float maximum = max(destination_maximum, source_maximum);
+    const float destination_scale = isfinite(destination_maximum)
+        ? celeg_partial_rescale(destination_maximum, maximum) : 0.0f;
+    const float source_scale = celeg_partial_rescale(source_maximum, maximum);
+    return CelegMergeTransition{
+        maximum,
+        destination_denominator * destination_scale +
+            source_denominator * source_scale,
+        destination_scale,
+        source_scale};
+}
+
+kernel void celeg_attention_merge_semantics_probe(
+    device float* output [[buffer(0)]],
+    constant float& destination_maximum [[buffer(1)]],
+    constant float& destination_denominator [[buffer(2)]],
+    constant float& source_maximum [[buffer(3)]],
+    constant float& source_denominator [[buffer(4)]],
+    constant float& destination_accumulator [[buffer(5)]],
+    constant float& source_accumulator [[buffer(6)]],
+    constant float& global_maximum [[buffer(7)]]) {
+    const CelegMergeTransition transition = celeg_merge_pair(
+        destination_maximum, destination_denominator,
+        source_maximum, source_denominator);
+    output[0] = transition.maximum;
+    output[1] = transition.denominator;
+    output[2] = transition.destination_scale;
+    output[3] = transition.source_scale;
+    output[4] = destination_accumulator * transition.destination_scale +
+        source_accumulator * transition.source_scale;
+    output[5] = celeg_partial_rescale(source_maximum, global_maximum);
+}
+
 struct CelegOnlineTransition {
     float maximum;
     float denominator;
