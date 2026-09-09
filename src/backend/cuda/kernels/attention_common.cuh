@@ -1,6 +1,7 @@
 #pragma once
 
 #include "attention_storage.cuh"
+#include "celeg/attention/pattern_semantics.hpp"
 
 struct AttentionPrefillPosition {
     __device__ __forceinline__ int value(int row) const { return row; }
@@ -18,12 +19,9 @@ struct AttentionBatchPositions {
 
 __device__ __forceinline__ bool attention_block_sparse_visible(
     int query_position, int token, const GqaBlockSparsePattern& pattern) {
-    if (token > query_position) return false;
-    const int query_block = query_position / pattern.block_size;
-    const int token_block = token / pattern.block_size;
-    if (token_block < pattern.global_blocks) return true;
-    const int local_start = max(0, query_block - pattern.local_blocks + 1);
-    return token_block >= local_start && token_block <= query_block;
+    return celeg::attention_semantics::block_sparse_visible(
+        query_position, token, pattern.block_size,
+        pattern.local_blocks, pattern.global_blocks);
 }
 
 /// Online/segmented decode kernels launch with 32 threads and stride
