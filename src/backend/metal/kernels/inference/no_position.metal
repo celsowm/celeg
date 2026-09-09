@@ -1,3 +1,21 @@
+inline void celeg_qk_norm_head(
+    device float* data,
+    device const float* weight,
+    size_t base,
+    uint head_dim,
+    float epsilon,
+    float output_scale) {
+    float sum = 0.0f;
+    for (uint d = 0; d < head_dim; ++d) {
+        const float value = data[base + d];
+        sum += value * value;
+    }
+    const float inverse = rsqrt(sum / static_cast<float>(head_dim) + epsilon);
+    for (uint d = 0; d < head_dim; ++d) {
+        data[base + d] *= inverse * weight[d] * output_scale;
+    }
+}
+
 kernel void celeg_qk_norm_store_kv(
     device float* query [[buffer(0)]],
     device const float* query_weight [[buffer(1)]],
@@ -17,19 +35,12 @@ kernel void celeg_qk_norm_store_kv(
     uint head [[thread_position_in_grid]]) {
     if (head < query_heads) {
         const size_t base = static_cast<size_t>(head) * head_dim;
-        float sum = 0.0f;
-        for (uint d = 0; d < head_dim; ++d) sum += query[base + d] * query[base + d];
-        const float inverse = rsqrt(sum / static_cast<float>(head_dim) + query_epsilon);
-        for (uint d = 0; d < head_dim; ++d) {
-            query[base + d] *= inverse * query_weight[d] * query_scale;
-        }
+        celeg_qk_norm_head(
+            query, query_weight, base, head_dim, query_epsilon, query_scale);
     }
     if (head < key_heads) {
         const size_t base = static_cast<size_t>(head) * head_dim;
-        float sum = 0.0f;
-        for (uint d = 0; d < head_dim; ++d) sum += key[base + d] * key[base + d];
-        const float inverse = rsqrt(sum / static_cast<float>(head_dim) + key_epsilon);
-        for (uint d = 0; d < head_dim; ++d) key[base + d] *= inverse * key_weight[d];
+        celeg_qk_norm_head(key, key_weight, base, head_dim, key_epsilon, 1.0f);
         const size_t cache_base = static_cast<size_t>(position) *
             static_cast<size_t>(key_heads) * head_dim + base;
         for (uint d = 0; d < head_dim; ++d) {
@@ -59,19 +70,12 @@ kernel void celeg_qk_norm_batch_no_position(
     if (head < query_heads) {
         const size_t base = static_cast<size_t>(token) * query_heads * head_dim +
             static_cast<size_t>(head) * head_dim;
-        float sum = 0.0f;
-        for (uint d = 0; d < head_dim; ++d) sum += query[base + d] * query[base + d];
-        const float inverse = rsqrt(sum / static_cast<float>(head_dim) + query_epsilon);
-        for (uint d = 0; d < head_dim; ++d) {
-            query[base + d] *= inverse * query_weight[d] * query_scale;
-        }
+        celeg_qk_norm_head(
+            query, query_weight, base, head_dim, query_epsilon, query_scale);
     }
     if (head < key_heads) {
         const size_t base = static_cast<size_t>(token) * key_heads * head_dim +
             static_cast<size_t>(head) * head_dim;
-        float sum = 0.0f;
-        for (uint d = 0; d < head_dim; ++d) sum += key[base + d] * key[base + d];
-        const float inverse = rsqrt(sum / static_cast<float>(head_dim) + key_epsilon);
-        for (uint d = 0; d < head_dim; ++d) key[base + d] *= inverse * key_weight[d];
+        celeg_qk_norm_head(key, key_weight, base, head_dim, key_epsilon, 1.0f);
     }
 }
