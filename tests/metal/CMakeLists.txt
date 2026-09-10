@@ -18,6 +18,8 @@ if(TARGET celeg_metal_backend)
         metal_linear_binding_test
         metal_mrope_sectioned_test
         metal_mrope_theta_test
+        metal_mrope_theta_fused_test
+        metal_mrope_theta_batch_test
         metal_normalization_test
         metal_partial_rope_test
         metal_q5k_dispatch_test
@@ -41,6 +43,8 @@ if(TARGET celeg_metal_backend)
         target_link_libraries(${test_name} PRIVATE celeg_base celeg_metal_backend)
         if(test_name STREQUAL "metal_mrope_sectioned_test" OR
            test_name STREQUAL "metal_mrope_theta_test" OR
+           test_name STREQUAL "metal_mrope_theta_fused_test" OR
+           test_name STREQUAL "metal_mrope_theta_batch_test" OR
            test_name STREQUAL "metal_partial_rope_test" OR
            test_name STREQUAL "metal_scaled_rope_qk_test" OR
            test_name STREQUAL "metal_value_norm_test")
