@@ -25,6 +25,7 @@ foreach(test_name IN ITEMS
     quantization_test
     reference_test
     rope_geometry_semantics_test
+    rope_scaling_semantics_test
     semantic_identity_test
     tensor_resolver_test
     weight_plan_test)
