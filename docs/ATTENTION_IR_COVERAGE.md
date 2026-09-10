@@ -92,7 +92,7 @@ The table is deliberately conservative. `?` means prove it rather than probably 
 | Bidirectional | ✓ | ✓ | △ | ✗ |
 | Prefix-LM | ✓ | ✓ | △ | ✗ |
 | BlockSparse | ✓ | ✓ | △ | ✗ |
-| DynamicSparse | ✓ | ✗ | △ | ✗ |
+| DynamicSparse | ✓ | ✓ | △ | ✗ |
 | ALiBi | ✓ | ✓ | ✓ | ✓ |
 | Relative-position bias | ✓ | ✓ | △ | ✓ |
 | No position encoding | ✓ | ✓ | ✓ | ✓ |
@@ -146,7 +146,9 @@ Therefore CUDA bidirectional, Prefix-LM, BlockSparse, DynamicSparse, and relativ
 
 ## CPU evidence already present
 
-The CPU attention policy has explicit visibility semantics for all six pattern variants in `CpuAttentionPattern::allows()`, including future-read semantics for bidirectional and Prefix-LM. That policy-level representation does not imply executable DynamicSparse support: `cpu_attention_capabilities()` currently declares `dynamic_sparse = false`, so the compiler rejects it before execution.
+CPU DynamicSparse is executable for the declared standard-attention ordinary-KV surface. It is content-ranked rather than a position-only mask: causal candidate blocks are scored by the maximum scaled Q·K among visible tokens, canonical top-K insertion provides deterministic lower-block tie breaking, and only the selected blocks participate in the final attention. The paged CPU implementation supports both FP32 and BF16 ordinary KV storage; INT8 remains rejected by the independent CPU state contract.
+
+`cpu_dynamic_sparse_attention_test` compares selected blocks with a dense host oracle and checks final output for FP32/BF16, negative scores, ties, partial/tail blocks, nontrivial later winners, decode, and paged prefill. The parallel paged entry point currently falls back explicitly to the same semantic implementation and reports that it did not take the parallel fast path. Compiler/capability tests constrain DynamicSparse to standard attention plus ordinary KV rather than overclaiming latent support. Vectorized block-scoring remains a performance follow-up, not a semantic gap.
 
 CPU lowers and scores ALiBi and `RelativePositionBiasSpec`, including bidirectional relative buckets. Independent query-only, key-only, and mixed Q/K normalization are handled without assuming that both norms exist.
 
