@@ -33,7 +33,7 @@ The largest remaining semantic gaps are:
 3. completion of CUDA relative-position bias outside ordinary unidirectional standard attention, including bidirectional tables, latent execution, and MTP tensor ownership;
 4. Metal sparse patterns, latent attention, and general layout/paging ownership.
 
-Metal is no longer treated as unaudited. Its runtime has explicit full-causal and sliding-window paths over ordinary Q/K/V attention, constrained no-bias Bidirectional and Prefix-LM batched prefill, ALiBi, relative-position bias, no-position attention, standard RoPE, ordinary three-axis interleaved and sectioned M-RoPE in token/decode and batched prefill, all currently modeled Q/K normalization modes, value RMSNorm before KV publication, current-value orthogonalization, ordinary sigmoid output gates, and shared-KV publisher/consumer execution. Unsupported sparse, latent, partial-width/scaled M-RoPE, RoPE-scaling, and biased dense non-causal semantics are rejected before execution rather than silently approximated.
+Metal is no longer treated as unaudited. Its runtime has explicit full-causal and sliding-window paths over ordinary Q/K/V attention, constrained no-bias Bidirectional and Prefix-LM batched prefill, ALiBi, relative-position bias, no-position attention, full- and partial-width unscaled standard RoPE, ordinary three-axis interleaved and sectioned M-RoPE in token/decode and batched prefill, all currently modeled Q/K normalization modes, value RMSNorm before KV publication, current-value orthogonalization, ordinary sigmoid output gates, and shared-KV publisher/consumer execution. Unsupported sparse, latent, partial-width/scaled M-RoPE, standard RoPE scaling, and biased dense non-causal semantics are rejected before execution rather than silently approximated.
 
 Packed HeadWise attention gates are not a Metal limitation: the IR now rejects that combination globally because the packed projection is head-dimension-wide while HeadWise semantics require one scalar per head. Packed gates therefore have a canonical representation only for OutputWise/ElementWise semantics.
 
@@ -178,7 +178,7 @@ The runtime supports:
 - no-bias Bidirectional and Prefix-LM over standard ordinary-BF16 attention with full-prompt batched prefill;
 - ALiBi and relative-position bias over both causal patterns;
 - no-position Q/K preparation;
-- full-width unscaled RoPE with `SplitHalf` and `AdjacentPairs` pairing;
+- full-width and partial-width unscaled standard RoPE with `SplitHalf` and `AdjacentPairs` pairing;
 - ordinary three-axis interleaved and sectioned M-RoPE with SplitHalf pairing in token/decode and batched prefill;
 - ordinary private and shared BF16 KV state;
 - standard attention execution;
@@ -219,7 +219,13 @@ Relative-position bias uses the same bucket contract as CPU: exact-distance buck
 
 `NoPositionEncodingSpec` has a position-free Q/K path rather than a synthetic zero-angle RoPE path.
 
-Standard RoPE dispatches by `RopePairingKind`. Metal currently requires `rotary_fraction == 1.0` and `NoRopeScaling` and rejects other RoPE forms before execution.
+Standard RoPE dispatches by `RopePairingKind` and supports full-width or partial-width unscaled rotation. `RopePositionSpec::resolved_rotary_dimension()` owns the width resolution used by host dispatch and matches the existing CPU truncation semantics. The host keeps the pairing in the low `position_mode` bits and encodes a non-full rotary dimension in the upper bits; full-width modes keep their original values. MSL rotates only `rotary_dimension / 2` pairs and derives ordinary RoPE frequency from that resolved width. Components outside the rotated prefix are not position-rotated, while query scaling still applies across the complete query head.
+
+Partial ordinary RoPE intentionally uses standalone Q/K normalization followed by the position-preparation kernel instead of widening the fused norm+position ABI. Full-width ordinary RoPE keeps the existing fused per-head Q/K normalization fast path. Token/decode and batched-prefill use the same encoded position contract.
+
+`metal_partial_rope_test` uses the real CPU `cpu_qk_norm_only` plus `cpu_rope` path as its oracle. It covers token and batch execution, `SplitHalf` and `AdjacentPairs`, partial width 4/8 and full width 8/8, transformed Q/K, and published K/V cache contents. The hosted Apple workflow compiles the production Metal shader and builds/links this test target; runtime GPU execution remains an eligible-device/local gate under the current CI configuration.
+
+All standard RoPE scaling variants other than `NoRopeScaling` remain rejected before execution. Partial fractions must resolve to a positive even rotary dimension.
 
 Ordinary M-RoPE now mirrors the canonical `rope_geometry.hpp` axis contract in MSL. Interleaved layout cycles axes with `pair % 3`; sectioned layout selects axes from the two declared section boundaries. `PromptEmbedding::rope_positions` supplies one position triplet per prefill token and `next_rope_position` survives decode and snapshots. Every M-RoPE dispatch carries the layout as an explicit `uint32_t` ABI scalar rather than relying on a host `bool` layout.
 
@@ -244,17 +250,17 @@ Q/K normalization no longer depends on a fake all-ones tensor being interpreted 
 The runtime now distinguishes the semantic cases explicitly:
 
 ```text
-both Q and K PerHead, ordinary KV-owning position
+both Q and K PerHead, ordinary KV-owning full-width standard RoPE
     -> fused norm + position fast path
 
-shared-KV consumer / M-RoPE / mixed / WholeVector / one side absent / both absent
+partial standard RoPE / shared-KV consumer / M-RoPE / mixed / WholeVector / one side absent / both absent
     -> normalize each locally owned side independently
     -> position-only Q/K preparation
 ```
 
-Per-head normalization has standalone token and batch kernels for mixed, M-RoPE, and shared-consumer cases. Whole-vector normalization reuses the ordinary Metal RMSNorm path with the projection-wide weight shape emitted by the weight plan. Weightless norms synthesize an all-ones weight at the semantic norm width, while a truly absent norm skips RMS normalization entirely.
+Per-head normalization has standalone token and batch kernels for partial standard RoPE, mixed, M-RoPE, and shared-consumer cases. Whole-vector normalization reuses the ordinary Metal RMSNorm path with the projection-wide weight shape emitted by the weight plan. Weightless norms synthesize an all-ones weight at the semantic norm width, while a truly absent norm skips RMS normalization entirely.
 
-This preserves the fused hot path for the common ordinary per-head/per-head case without conflating absence, granularity, weightless semantics, M-RoPE position handling, or shared-KV ownership.
+This preserves the fused hot path for the common full-width ordinary per-head/per-head case without conflating partial rotary width, absence, granularity, weightless semantics, M-RoPE position handling, or shared-KV ownership.
 
 ### Value normalization
 
@@ -282,7 +288,7 @@ Metal still rejects before device/pipeline execution:
 - attention bias combined with Bidirectional or Prefix-LM;
 - Prefix-LM with a non-positive prefix length or prefill that does not contain the complete prefix;
 - Bidirectional/Prefix-LM prefill when the runtime cannot use batched execution;
-- partial-width or scaled standard RoPE;
+- scaled standard RoPE and malformed partial rotary widths;
 - M-RoPE forms outside full-width, unscaled, three-axis SplitHalf theta-10000 execution;
 - external-memory sources;
 - non-BF16 KV state semantics;
