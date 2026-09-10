@@ -35,14 +35,14 @@ Out of scope for this closure plan:
 
 The executable capability declarations are the source of truth, not the documentation matrix.
 
-The table below records the current executable state after closure Stages 0-3:
+The table below records the current executable state after closure Stages 0-4:
 
 | Capability | CPU | CUDA | Metal | Closure action |
 | --- | --- | --- | --- | --- |
 | Full causal | yes | yes | yes | regression only |
 | Sliding window | yes | yes | yes | regression only |
-| Bidirectional | yes | yes, constrained | no | implement Metal |
-| Prefix-LM | yes | yes, constrained | no | implement Metal |
+| Bidirectional | yes | yes, constrained | yes, constrained | declared dense no-bias scope closed; regression only |
+| Prefix-LM | yes | yes, constrained | yes, constrained | declared dense no-bias scope closed; regression only |
 | BlockSparse | yes | yes, constrained | no | implement Metal |
 | DynamicSparse | yes, constrained | yes | no | implement Metal |
 | ALiBi | yes | yes | yes | regression only |
@@ -192,31 +192,30 @@ The canonical content-ranked selection contract in `src/celeg/attention/dynamic_
 
 ## Stage 4 — Add Metal dense non-causal pattern support
 
-Implement Bidirectional and Prefix-LM before sparse patterns because they exercise future-read semantics without introducing sparse selection/storage complexity.
+**Status: complete for the declared standard-attention ordinary-BF16 no-bias surface.** Biased Bidirectional/Prefix-LM combinations remain explicit rejections rather than being approximated by causal or biased kernels.
 
-### Bidirectional
+### Implemented result
 
-- prefill must be able to read all keys belonging to the available sequence, including keys after the current query position;
-- decode at the current sequence tail can reuse a dense all-available-keys path where semantically equivalent;
-- do not accidentally keep a causal start/end bound inside a supposedly bidirectional kernel.
-
-### Prefix-LM
-
-- prefix queries may read the complete prefix, including later prefix keys;
-- post-prefix queries remain causal;
-- boundary cases at `prefix_length - 1`, `prefix_length` and `prefix_length + 1` must be explicit tests.
-
-### Implementation approach
-
-Mirror only the visibility semantics needed by Metal from `pattern_semantics.hpp`, with a probe test. Prefer one dense attention execution core parameterized by a narrow pattern mode over copy-pasted full kernels if the compiler can resolve the branch cheaply.
-
-If prefill requires all K/V rows to be published before attention begins, make that ordering explicit in the runtime instead of depending on incidental command ordering inside an existing fused path.
+1. `pattern_semantics.hpp` now owns explicit bidirectional visibility and Prefix-LM visible-sequence-length semantics; CPU consumes the same bidirectional helper so host/backend truth remains aligned.
+2. `dense_pattern.metal` mirrors those narrow rules and exposes `celeg_attention_dense_pattern_semantics_probe`, which `metal_dense_pattern_semantics_test` checks exactly against the host contract at prefix boundaries and partial-availability cases.
+3. Production batched prefill uses one `celeg_attention_batch_dense_pattern` kernel for both patterns. It changes only the visible span and reuses the existing `celeg_attention_span_one_exp` reduction/softmax core rather than copying the attention implementation.
+4. Bidirectional prefill sets each query span to all K/V rows available in the full batch. Prefix-LM prefix queries see the complete available prefix, including future prefix keys; post-prefix queries remain causal.
+5. Metal publishes all locally owned K/V rows for the prefill batch before the dense non-causal attention dispatch. Shared-KV consumers continue to address the earlier publisher-owned cache and therefore observe the publisher's complete batch state.
+6. `prefill_session()` rejects Bidirectional/Prefix-LM if the runtime would fall back to token-wise prefill. Prefix-LM also rejects a prefill shorter than `prefix_length`, preventing an incomplete prefix from being silently treated as complete.
+7. Decode at the current sequence tail reuses the existing dense causal kernel. `attention_pattern_semantics_test` explicitly proves that causal, Bidirectional, and post-prefix Prefix-LM visible sets are identical at the tail after the prefix has been completed.
+8. The causal/sliding tiled fast path remains unchanged and is simply excluded when the dense non-causal pattern mode is active.
+9. `metal_dense_noncausal_attention_test` uses zero Q·K scores and deliberately different V rows so a future-reading implementation is numerically distinguishable from causal execution: the first-row expected values differ for causal, Prefix-LM, and Bidirectional attention.
+10. Metal capability validation advertises Bidirectional and Prefix-LM only after the production path and tests exist, requires positive Prefix-LM length, and keeps attention bias rejected for these two patterns. Ordinary BF16 state and standard-execution restrictions remain governed by the existing Metal capability contract.
 
 ### Acceptance criteria
 
-- Metal-vs-CPU fixtures prove future reads for bidirectional and prefix queries;
-- token/decode and batched prefill semantics are named separately in tests;
-- existing causal/sliding performance path remains intact unless benchmark evidence justifies unification.
+- MSL dense-pattern semantics match the canonical host contract exactly;
+- production batched prefill demonstrably reads future keys for Bidirectional and prefix queries;
+- Prefix-LM boundary and incomplete-prefix behavior is explicit;
+- decode-tail reuse is justified by an executable semantic equivalence test rather than assumption;
+- token-wise prefill cannot silently produce causal semantics for a future-reading pattern;
+- existing causal/sliding performance paths remain intact;
+- biased dense non-causal combinations remain stable pre-dispatch rejections.
 
 ## Stage 5 — Close standard Metal RoPE parity
 
@@ -445,7 +444,7 @@ The order below minimizes architectural rework and gets useful parity quickly:
 1. Metal sectioned MRoPE                            [complete]
 2. Metal value norm                                 [complete]
 3. CPU DynamicSparse                                [complete]
-4. Metal Bidirectional + Prefix-LM
+4. Metal Bidirectional + Prefix-LM                  [complete]
 5. Metal partial/scaled RoPE
 6. Metal BlockSparse
 7. Metal DynamicSparse
@@ -459,7 +458,7 @@ The order below minimizes architectural rework and gets useful parity quickly:
 15. final capability/CI gate
 ```
 
-Some remaining work can proceed in parallel after Stage 3:
+Some remaining work can proceed in parallel after Stage 4:
 
 - CPU INT8 is independent of Metal shader work;
 - Metal RoPE scaling is mostly independent of Metal sparse execution;

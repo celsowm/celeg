@@ -29,11 +29,11 @@ That is not the same as saying the complete `AttentionSpec` IR is implemented en
 The largest remaining semantic gaps are:
 
 1. a backend-neutral external-memory / cross-attention lifecycle beyond the scoped CPU preprojected-K/V baseline;
-2. formal backend/mode coverage for bidirectional and Prefix-LM;
+2. broader mode/combination coverage around constrained dense non-causal patterns;
 3. completion of CUDA relative-position bias outside ordinary unidirectional standard attention, including bidirectional tables, latent execution, and MTP tensor ownership;
 4. Metal sparse patterns, latent attention, and general layout/paging ownership.
 
-Metal is no longer treated as unaudited. Its runtime has explicit full-causal and sliding-window paths over ordinary Q/K/V attention, ALiBi, relative-position bias, no-position attention, standard RoPE, ordinary three-axis interleaved and sectioned M-RoPE in token/decode and batched prefill, all currently modeled Q/K normalization modes, value RMSNorm before KV publication, current-value orthogonalization, ordinary sigmoid output gates, and shared-KV publisher/consumer execution. Unsupported pattern, latent, partial-width/scaled M-RoPE, and RoPE-scaling semantics are rejected before execution rather than silently approximated.
+Metal is no longer treated as unaudited. Its runtime has explicit full-causal and sliding-window paths over ordinary Q/K/V attention, constrained no-bias Bidirectional and Prefix-LM batched prefill, ALiBi, relative-position bias, no-position attention, standard RoPE, ordinary three-axis interleaved and sectioned M-RoPE in token/decode and batched prefill, all currently modeled Q/K normalization modes, value RMSNorm before KV publication, current-value orthogonalization, ordinary sigmoid output gates, and shared-KV publisher/consumer execution. Unsupported sparse, latent, partial-width/scaled M-RoPE, RoPE-scaling, and biased dense non-causal semantics are rejected before execution rather than silently approximated.
 
 Packed HeadWise attention gates are not a Metal limitation: the IR now rejects that combination globally because the packed projection is head-dimension-wide while HeadWise semantics require one scalar per head. Packed gates therefore have a canonical representation only for OutputWise/ElementWise semantics.
 
@@ -89,8 +89,8 @@ The table is deliberately conservative. `?` means prove it rather than probably 
 |---|---:|---:|---:|---:|
 | Full causal | ✓ | ✓ | ✓ | ✓ |
 | Sliding window | ✓ | ✓ | ✓ | ✓ |
-| Bidirectional | ✓ | ✓ | △ | ✗ |
-| Prefix-LM | ✓ | ✓ | △ | ✗ |
+| Bidirectional | ✓ | ✓ | △ | △ |
+| Prefix-LM | ✓ | ✓ | △ | △ |
 | BlockSparse | ✓ | ✓ | △ | ✗ |
 | DynamicSparse | ✓ | ✓ | △ | ✗ |
 | ALiBi | ✓ | ✓ | ✓ | ✓ |
@@ -114,6 +114,8 @@ The table is deliberately conservative. `?` means prove it rather than probably 
 | External-memory / cross-attention | IR only | △ | ✗ | ✗ |
 
 CUDA relative-position bias is `△` because the ordinary unidirectional standard-attention surface is implemented, but bidirectional relative tables, latent execution, and MTP relative-bias tensor ownership remain explicit rejections. The implemented standard surface covers BF16 and INT8 KV, contiguous decode, paged decode, batch-pointer packed decode, graph decode, and contiguous batched prefill. Bias selection is lowered from `AttentionSpec` rather than inferred from incidental buffer presence.
+
+Metal Bidirectional and Prefix-LM are `△`, not unconditional `✓`. Their declared implementation is standard attention over ordinary BF16 state with no attention bias. Full-prompt batched prefill provides future-key reads; token-wise prefill is rejected for these patterns, and Prefix-LM requires the supplied prefill to contain the complete prefix. Decode at the current tail reuses the dense causal kernel only where the visible-key sets are semantically identical.
 
 Metal ordinary KV storage remains `△` for contiguous/paged because the runtime uses an internal page-sized physical layout without yet exposing the same general page-table/layout capability surface as CUDA/CPU.
 
@@ -173,6 +175,7 @@ Metal has an explicit backend capability contract consumed during model initiali
 The runtime supports:
 
 - full causal and sliding-window attention;
+- no-bias Bidirectional and Prefix-LM over standard ordinary-BF16 attention with full-prompt batched prefill;
 - ALiBi and relative-position bias over both causal patterns;
 - no-position Q/K preparation;
 - full-width unscaled RoPE with `SplitHalf` and `AdjacentPairs` pairing;
@@ -191,6 +194,20 @@ The runtime supports:
 ### Sliding window
 
 Sliding-window execution reads `SlidingWindowPattern::window` directly from the compiled attention semantics. Decode and batched-prefill have normal and cooperative kernels, and each query starts at `max(0, sequence_length - window)`.
+
+### Dense non-causal patterns
+
+Bidirectional and Prefix-LM share one production batch kernel, `celeg_attention_batch_dense_pattern`. The kernel does not duplicate the attention reduction: it constructs the ordinary batch span, changes only its visible sequence extent, then calls the same `celeg_attention_span_one_exp` core used by the existing batched attention family.
+
+For Bidirectional prefill, every query sees all K/V rows available in the full prefill batch. For Prefix-LM, queries inside the prefix see the complete available prefix, including later prefix keys, while queries at or after `prefix_length` see only keys through their own position. The MSL extent/visibility helpers are probe-tested exactly against the canonical host rules in `pattern_semantics.hpp`.
+
+The runtime publishes the batch's locally owned K/V rows before dispatching dense non-causal attention. Shared-KV consumers continue to alias the earlier publisher's cache and therefore read the publisher-owned full-batch state. The causal/sliding tiled fast path is not changed; it is simply not selected when the dense non-causal pattern mode is active.
+
+Future-reading semantics are protected at the session boundary. Bidirectional and Prefix-LM reject prefill if Metal would have to use token-wise prefill, because that fallback cannot observe future K/V. Prefix-LM additionally requires the prefill to contain the complete configured prefix. Decode at the current sequence tail reuses the existing dense causal kernel only after an executable host semantic test proves the visible-key set is identical for causal, Bidirectional, and post-prefix Prefix-LM at that position.
+
+`metal_dense_pattern_semantics_test` compares the MSL helper decisions with the canonical host contract at prefix boundaries and partial-availability cases. `metal_dense_noncausal_attention_test` exercises the production batch kernel with `Q·K = 0` and deliberately distinct V rows: causal, Prefix-LM, and Bidirectional therefore have known, different first-query outputs, so a hidden causal bound cannot satisfy the fixture.
+
+The declared Metal surface remains constrained: these two patterns currently require no attention bias, standard execution, and ordinary BF16 KV state. Those restrictions are capability-validated before dispatch and keep the aggregate cells at `△`.
 
 ### Biases
 
@@ -261,7 +278,10 @@ The sigmoid gate is applied to the per-head attention result after any current-v
 
 Metal still rejects before device/pipeline execution:
 
-- bidirectional, Prefix-LM, BlockSparse, and DynamicSparse patterns;
+- BlockSparse and DynamicSparse patterns;
+- attention bias combined with Bidirectional or Prefix-LM;
+- Prefix-LM with a non-positive prefix length or prefill that does not contain the complete prefix;
+- Bidirectional/Prefix-LM prefill when the runtime cannot use batched execution;
 - partial-width or scaled standard RoPE;
 - M-RoPE forms outside full-width, unscaled, three-axis SplitHalf theta-10000 execution;
 - external-memory sources;
@@ -296,7 +316,7 @@ Coverage includes a physical capability-matrix test, compiler semantic tests, an
 
 ### Phase 3 — Bidirectional and Prefix-LM mode coverage
 
-Prove the meaningful execution-mode Cartesian product instead of relying on compiler acceptance. Prefix-LM needs boundary tests around the prefix transition; bidirectional needs explicit future-key reads.
+Metal now has a scoped full-prompt batched-prefill implementation for ordinary BF16 no-bias Bidirectional and Prefix-LM plus tail-decode equivalence. Remaining work in this phase is broader Cartesian-product coverage and any intentionally supported biased/other-state combinations rather than compiler-only acceptance.
 
 ### Phase 4 — Extend Metal deliberately
 
