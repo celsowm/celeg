@@ -34,6 +34,19 @@ void dense_noncausal_semantics() {
     CELEG_TEST_CHECK(!semantics::prefix_lm_may_read_future(8, 10, 6));
 }
 
+void dense_decode_tail_equivalence() {
+    constexpr int sequence_length = 8;
+    constexpr int query_position = sequence_length - 1;
+    constexpr int prefix_length = 4;
+    for (int key = 0; key < sequence_length; ++key) {
+        const bool causal = semantics::causal_visible(query_position, key);
+        CELEG_TEST_CHECK(causal ==
+            semantics::bidirectional_visible(query_position, key));
+        CELEG_TEST_CHECK(causal ==
+            semantics::prefix_lm_visible(query_position, key, prefix_length));
+    }
+}
+
 void sparse_semantics() {
     CELEG_TEST_CHECK(semantics::block_sparse_visible(63, 0, 16, 2, 1));
     CELEG_TEST_CHECK(semantics::block_sparse_visible(63, 32, 16, 2, 1));
@@ -92,6 +105,7 @@ void cpu_matches_canonical() {
 int main() {
     causal_and_sliding();
     dense_noncausal_semantics();
+    dense_decode_tail_equivalence();
     sparse_semantics();
     cpu_matches_canonical();
     return 0;
