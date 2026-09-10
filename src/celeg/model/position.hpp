@@ -14,8 +14,16 @@ inline double rope_frequency(const RopePositionSpec& spec, int pair,
         (rotary_dimension % 2) != 0 || position < 0) {
         throw std::invalid_argument("invalid RoPE frequency coordinates");
     }
-    const double base = spec.theta;
+    double base = spec.theta;
     const double context = static_cast<double>(position);
+    if (const auto* ntk = std::get_if<DynamicNtkRopeScaling>(&spec.scaling);
+        ntk && context > static_cast<double>(ntk->original_context)) {
+        const double ratio = ntk->factor * context /
+            static_cast<double>(ntk->original_context) - (ntk->factor - 1.0);
+        base *= std::pow(std::max(1.0, ratio),
+                         static_cast<double>(rotary_dimension) /
+                             static_cast<double>(std::max(2, rotary_dimension - 2)));
+    }
     const auto scaled = [&](double base_frequency) -> double {
         const double frequency = std::visit([&](const auto& scaling) -> double {
             using Scaling = std::decay_t<decltype(scaling)>;
@@ -86,17 +94,8 @@ inline double rope_frequency(const RopePositionSpec& spec, int pair,
         }, spec.scaling);
         return frequency;
     };
-    double frequency = scaled(std::pow(base, -2.0 * static_cast<double>(pair) /
-                                           static_cast<double>(rotary_dimension)));
-    if (const auto* ntk = std::get_if<DynamicNtkRopeScaling>(&spec.scaling);
-        ntk && context > static_cast<double>(ntk->original_context)) {
-        const double ratio = ntk->factor * context /
-            static_cast<double>(ntk->original_context) - (ntk->factor - 1.0);
-        frequency *= std::pow(std::max(1.0, ratio),
-                              static_cast<double>(rotary_dimension) /
-                                  static_cast<double>(std::max(2, rotary_dimension - 2)));
-    }
-    return frequency;
+    return scaled(std::pow(base, -2.0 * static_cast<double>(pair) /
+                                 static_cast<double>(rotary_dimension)));
 }
 
 inline float rope_attention_scale(const RopePositionSpec& spec, int position) {
