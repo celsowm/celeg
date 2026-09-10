@@ -205,6 +205,7 @@ void MetalModel::Impl::encode_attention(
                 static_cast<uint32_t>(multi->sections[0]),
                 static_cast<uint32_t>(multi->sections[1]),
                 static_cast<uint32_t>(multi->sections[2])};
+            const uint32_t interleaved = multi->interleaved ? 1u : 0u;
             set_buffer(encoder, query_buffer, 0);
             set_buffer(encoder, key_buffer, 1);
             set_buffer(encoder, value_buffer, 2);
@@ -219,6 +220,7 @@ void MetalModel::Impl::encode_attention(
             set_bytes(encoder, &layer.rope_theta, sizeof(layer.rope_theta), 11);
             set_bytes(encoder, &query_scale, sizeof(query_scale), 12);
             set_bytes(encoder, &page_tokens, sizeof(page_tokens), 13);
+            set_bytes(encoder, &interleaved, sizeof(interleaved), 14);
             dispatch(encoder, "celeg_qk_mrope_position_store_kv",
                      std::max(query_heads, prepared_key_heads));
         } else {
@@ -267,6 +269,7 @@ void MetalModel::Impl::encode_attention(
                 static_cast<uint32_t>(multi->sections[0]),
                 static_cast<uint32_t>(multi->sections[1]),
                 static_cast<uint32_t>(multi->sections[2])};
+            const uint32_t interleaved = multi->interleaved ? 1u : 0u;
             set_bytes(encoder, &position_value, sizeof(position_value), 10);
             set_bytes(encoder, resolved_position.data(), sizeof(resolved_position), 11);
             set_bytes(encoder, sections.data(), sizeof(sections), 12);
@@ -277,6 +280,7 @@ void MetalModel::Impl::encode_attention(
             set_bytes(encoder, &layer.key_norm_epsilon,
                       sizeof(layer.key_norm_epsilon), 16);
             set_bytes(encoder, &page_tokens, sizeof(page_tokens), 17);
+            set_bytes(encoder, &interleaved, sizeof(interleaved), 18);
             dispatch(encoder, "celeg_qk_norm_mrope_store_kv",
                      std::max(query_heads, prepared_key_heads));
         } else {
@@ -463,6 +467,7 @@ void MetalModel::Impl::encode_attention_batch(
                 static_cast<uint32_t>(multi->sections[0]),
                 static_cast<uint32_t>(multi->sections[1]),
                 static_cast<uint32_t>(multi->sections[2])};
+            const uint32_t interleaved = multi->interleaved ? 1u : 0u;
             set_buffer(encoder, batch_query, 0);
             set_buffer(encoder, batch_key, 1);
             set_bytes(encoder, &rows, sizeof(rows), 2);
@@ -473,6 +478,7 @@ void MetalModel::Impl::encode_attention_batch(
             set_bytes(encoder, sections.data(), sizeof(sections), 7);
             set_bytes(encoder, &layer.rope_theta, sizeof(layer.rope_theta), 8);
             set_bytes(encoder, &query_scale, sizeof(query_scale), 9);
+            set_bytes(encoder, &interleaved, sizeof(interleaved), 10);
             dispatch(encoder, "celeg_qk_mrope_position_batch",
                      static_cast<NSUInteger>(rows) * head_count);
         } else {
