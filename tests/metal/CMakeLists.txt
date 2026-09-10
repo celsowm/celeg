@@ -19,6 +19,7 @@ if(TARGET celeg_metal_backend)
         metal_mrope_sectioned_test
         metal_normalization_test
         metal_partial_rope_test
+        metal_q5k_dispatch_test
         metal_qk_store_test
         metal_quantization_test
         metal_recurrent_test
