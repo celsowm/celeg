@@ -1,0 +1,483 @@
+# Attention Backend Parity Closure Plan
+
+## Goal
+
+Close the remaining CPU and Metal attention/position/state capability gaps relative to CUDA without forcing the three backends to share execution mechanisms that should remain architecture-specific.
+
+The target is semantic and execution-mode parity where CUDA already has a real implementation. Performance parity is a second layer: once a feature is semantically correct in every backend, remove avoidable token-wise fallbacks and add optimized backend-native paths where measurement justifies them.
+
+This plan complements `docs/METAL_MROPE_GEOMETRY_PLAN.md`. That document remains the detailed implementation plan for Metal sectioned MRoPE; this document owns the broader closure order and cross-backend gates.
+
+## Scope
+
+In scope:
+
+- attention pattern parity;
+- RoPE/MRoPE geometry and scaling parity;
+- attention-state scalar/layout parity;
+- value normalization parity;
+- ordinary, projected-latent and factorized-latent attention execution;
+- token/decode, batched decode, prefill and packed/chunk execution coverage where the backend exposes those modes;
+- backend capability declarations and anti-regression tests;
+- cross-backend differential fixtures;
+- removal of avoidable semantic fallbacks after correctness is established.
+
+Out of scope for this closure plan:
+
+- external-memory support on CUDA/Metal, because CUDA does not currently provide it and therefore it is not a CPU/Metal-vs-CUDA parity gap;
+- latent MRoPE, because CUDA also rejects it today;
+- new attention semantics not already represented by the IR;
+- forcing CPU, CUDA and Metal to use identical reduction, paging, vectorization or synchronization mechanisms;
+- MoE payload layouts that CUDA itself does not support;
+- performance claims without benchmark evidence.
+
+## Baseline truth
+
+The executable capability declarations are the source of truth, not the documentation matrix.
+
+At the baseline represented by `master` after the RoPE geometry refactor:
+
+| Capability | CPU | CUDA | Metal | Closure action |
+| --- | --- | --- | --- | --- |
+| Full causal | yes | yes | yes | regression only |
+| Sliding window | yes | yes | yes | regression only |
+| Bidirectional | yes | yes, constrained | no | implement Metal |
+| Prefix-LM | yes | yes, constrained | no | implement Metal |
+| BlockSparse | yes | yes, constrained | no | implement Metal |
+| DynamicSparse | no | yes | no | implement CPU, then Metal |
+| ALiBi | yes | yes | yes | regression only |
+| Relative-position bias | yes | yes, constrained | yes | differential coverage; do not overclaim CUDA combinations |
+| Standard RoPE | full IR surface on CPU | broad scaling surface | full-width unscaled only | expand Metal |
+| Three-axis MRoPE | interleaved + sectioned geometry | interleaved + sectioned geometry | interleaved only | complete existing Metal MRoPE plan |
+| Value RMSNorm before KV store | yes | yes | no | implement Metal |
+| Ordinary BF16 KV | yes | yes | yes | regression only |
+| Ordinary INT8 KV | no | yes | no | implement CPU and Metal |
+| General ordinary KV layout/paging surface | yes | yes | partial/internal | formalize Metal before INT8/general sparse state work |
+| Projected latent attention | yes | yes | no | implement Metal |
+| Factorized latent attention | yes | yes | no | implement Metal |
+| Shared KV publisher/consumer | yes | yes | yes | regression only |
+| Current-value orthogonalization | yes | yes | yes | regression only |
+| Output gates on representable ordinary surface | yes | yes | yes | regression only |
+
+Important baseline correction: `docs/ATTENTION_IR_COVERAGE.md` currently marks CPU DynamicSparse as implemented in its table, but `CpuModelCompiler` advertises `.dynamic_sparse = false`, and `ATTENTION_CROSS_BACKEND_DRY_AUDIT.md` correctly records CPU DynamicSparse as unsupported. Stage 0 must reconcile this before any new parity claim.
+
+## Design rules
+
+### 1. Capability flags follow implementation
+
+Never flip a backend capability to `true` before all required runtime bindings and at least one execution-level test exist.
+
+The order for every new cell is:
+
+```text
+canonical semantics
+    -> backend semantic mirror/lowering if needed
+    -> runtime/state ownership
+    -> production execution
+    -> differential test
+    -> capability advertisement
+    -> documentation matrix
+```
+
+### 2. Share mathematics, not hardware scheduling
+
+Canonical host/CUDA semantic helpers remain appropriate for pure rules such as visibility, sparse selection, RoPE geometry and attention-state transitions.
+
+Metal may mirror those tiny functions in MSL with conformance probes. CPU keeps vectorized/NUMA execution; CUDA keeps warp/shared-memory specialization; Metal keeps simdgroup/threadgroup specialization.
+
+### 3. Preserve numerical contracts
+
+Do not casually centralize:
+
+- BF16/INT8 dequantization association;
+- FMA-sensitive accumulation ordering;
+- online vs three-pass attention algorithms;
+- backend-specific reduction trees;
+- cache addressing for physically different layouts.
+
+Any helper extraction touching those areas requires before/after numerical fixtures.
+
+### 4. Semantic parity before fast-path parity
+
+A correct token-wise fallback is acceptable temporarily. Once the feature is proven, add chunk/packed/cooperative paths separately and benchmark them.
+
+### 5. No undocumented partial support
+
+If a feature is supported only for BF16, standard attention, prefill, a maximum selected-block count, or another bounded surface, encode the restriction in capability validation and tests.
+
+## Stage 0 — Make backend capability truth executable
+
+### Work
+
+1. Correct the stale CPU DynamicSparse cell in `docs/ATTENTION_IR_COVERAGE.md`.
+2. Add `value_norm` as an explicit row in the coverage matrix.
+3. Replace ad-hoc aggregate assumptions with a table-driven backend capability fixture that asks the same feature questions of CPU, CUDA and Metal.
+4. Keep semantic capability separate from execution-mode capability. A backend may support a feature in standard attention but reject it for latent or packed execution.
+5. Add a small generated/reporting helper or test data structure that can be used to update the documentation matrix from the same declared truth without making Markdown the source of truth.
+
+### Acceptance criteria
+
+- CPU DynamicSparse is reported unsupported until its production implementation lands;
+- Metal value norm is reported unsupported until implemented;
+- every existing `AttentionBackendCapabilities` field has an explicit backend expectation in tests;
+- a newly added capability field causes the parity test to require decisions for CPU, CUDA and Metal.
+
+## Stage 1 — Complete Metal MRoPE geometry parity
+
+Execute `docs/METAL_MROPE_GEOMETRY_PLAN.md` fully.
+
+### Required result
+
+- Metal MSL geometry mirror exists and is probe-tested against `src/celeg/model/rope_geometry.hpp`;
+- `interleaved` is carried explicitly through all Metal MRoPE runtime ABIs;
+- token/decode, fused Q/K-norm + KV-store and batch MRoPE paths use the same layout semantics;
+- sectioned three-axis MRoPE is accepted only after kernel-level CPU-vs-Metal parity is demonstrated;
+- current interleaved output does not regress.
+
+Do not combine this with RoPE scaling or partial rotary width. Geometry must be closed first.
+
+## Stage 2 — Metal value normalization quick win
+
+CUDA and CPU already advertise `value_norm = true`; Metal currently leaves it false.
+
+### Work
+
+1. Locate the common semantic point where per-head V RMSNorm occurs before KV publication.
+2. Reuse the existing Metal normalization kernels where their arithmetic contract matches; otherwise add a narrow V-normalization kernel rather than extending Q/K-specific code with ambiguous ownership.
+3. Support private KV first, then shared-KV publisher ownership.
+4. Ensure shared-KV consumers do not normalize a value they do not own.
+5. Cover token and batched prefill paths.
+6. Flip `.value_norm = true` only after the execution tests exist.
+
+### Acceptance criteria
+
+- Metal output and stored V match CPU/CUDA semantic expectations within the established float tolerance;
+- value cache contains normalized V exactly once;
+- consumer layers never re-normalize publisher-owned V;
+- capability tests reject malformed norm widths/weights before dispatch.
+
+## Stage 3 — Implement CPU DynamicSparse
+
+The canonical content-ranked selection contract already exists in `src/celeg/attention/dynamic_sparse_semantics.hpp`, and CUDA already consumes it.
+
+### Work
+
+1. Implement a simple scalar/reference-quality CPU DynamicSparse path first using the canonical top-K block selection rules.
+2. Preserve the CUDA contract: causal candidate blocks, block score = maximum scaled Q.K over visible tokens, deterministic lower-block tie break, top `max_selected_blocks` selection.
+3. Integrate with the existing CPU attention policy/runtime without pretending DynamicSparse is a position-only mask.
+4. Cover scalar prefill and decode first.
+5. Extend chunk/packed/ragged execution using the same semantic implementation or an explicit fallback.
+6. Only then set CPU `.dynamic_sparse = true`.
+7. Optimize block scoring with AVX2/AVX-512 only after differential correctness is locked.
+
+### Acceptance criteria
+
+- CPU agrees with the canonical host selection helper for selected blocks;
+- CPU output agrees with a dense masked oracle;
+- CPU-vs-CUDA differential fixtures cover negative scores, ties and nontrivial winning blocks;
+- chunk/packed APIs either execute DynamicSparse correctly or fall back explicitly without semantic drift.
+
+## Stage 4 — Add Metal dense non-causal pattern support
+
+Implement Bidirectional and Prefix-LM before sparse patterns because they exercise future-read semantics without introducing sparse selection/storage complexity.
+
+### Bidirectional
+
+- prefill must be able to read all keys belonging to the available sequence, including keys after the current query position;
+- decode at the current sequence tail can reuse a dense all-available-keys path where semantically equivalent;
+- do not accidentally keep a causal start/end bound inside a supposedly bidirectional kernel.
+
+### Prefix-LM
+
+- prefix queries may read the complete prefix, including later prefix keys;
+- post-prefix queries remain causal;
+- boundary cases at `prefix_length - 1`, `prefix_length` and `prefix_length + 1` must be explicit tests.
+
+### Implementation approach
+
+Mirror only the visibility semantics needed by Metal from `pattern_semantics.hpp`, with a probe test. Prefer one dense attention execution core parameterized by a narrow pattern mode over copy-pasted full kernels if the compiler can resolve the branch cheaply.
+
+If prefill requires all K/V rows to be published before attention begins, make that ordering explicit in the runtime instead of depending on incidental command ordering inside an existing fused path.
+
+### Acceptance criteria
+
+- Metal-vs-CPU fixtures prove future reads for bidirectional and prefix queries;
+- token/decode and batched prefill semantics are named separately in tests;
+- existing causal/sliding performance path remains intact unless benchmark evidence justifies unification.
+
+## Stage 5 — Close standard Metal RoPE parity
+
+After MRoPE geometry is stable, expand ordinary Metal RoPE toward the CPU/CUDA surface.
+
+### Substage 5A — Partial rotary width
+
+- pass explicit rotary pair count/rotary dimension to Metal kernels;
+- rotate only the configured prefix;
+- preserve untouched tail components;
+- verify Q/K normalization still covers the intended full head independently of rotary width.
+
+### Substage 5B — RoPE scaling semantic mirror
+
+Introduce a focused Metal scaling helper mirroring the model/CUDA semantic variants:
+
+- No scaling;
+- Linear;
+- Dynamic NTK;
+- YaRN;
+- LongRoPE;
+- Llama-3 frequency scaling;
+- Proportional scaling.
+
+Do not copy the CUDA lowering struct blindly. Define a Metal-friendly ABI with explicit scalar fields and bounded factor buffers where required.
+
+Add an integer/float probe layer comparing Metal frequency results to `rope_frequency()` over representative pairs and positions before production kernels consume it.
+
+### Substage 5C — Production migration
+
+Route generic Metal RoPE/MRoPE frequency computation through the tested scaling helper while leaving trig, normalization, threadgroup shape and fused KV publication backend-specific.
+
+### Acceptance criteria
+
+- every scaling variant is either implemented and differential-tested or remains an explicit stable rejection;
+- partial-width standard RoPE matches CPU for both SplitHalf and AdjacentPairs;
+- existing full-width unscaled kernels show no unexplained regression.
+
+## Stage 6 — Add Metal BlockSparse
+
+BlockSparse is the lower-risk sparse feature because visibility is structural rather than content-ranked.
+
+### Work
+
+1. Add an MSL mirror/probe for block-sparse visibility if the existing Metal pattern mirror does not already expose it to production.
+2. Preserve the model contract from `pattern_semantics.hpp`.
+3. Implement a Metal sparse attention execution path that keeps the current three-pass versus online-softmax distinction explicit where numerical behavior requires it.
+4. Start with ordinary BF16 KV and standard attention only, matching CUDA's constrained-pattern philosophy.
+5. Cover decode and batched prefill separately.
+
+### Acceptance criteria
+
+- selected visible tokens match CPU/CUDA for representative local/global block configurations;
+- output matches a dense masked oracle;
+- unsupported bias/state combinations reject before dispatch.
+
+## Stage 7 — Add Metal DynamicSparse
+
+Only after BlockSparse and CPU DynamicSparse are stable.
+
+### Work
+
+1. Mirror the canonical content-ranked block-selection mechanics in MSL, including deterministic tie behavior.
+2. Keep Metal simdgroup reduction and candidate storage backend-specific.
+3. Start with the same explicit bound as CUDA (`max_selected_blocks <= 32`) unless Metal measurements or storage design justify a different tested limit.
+4. Implement ordinary BF16 standard-attention prefill/decode first.
+5. Add CPU-vs-CUDA-vs-Metal selected-block and output differential fixtures.
+
+### Acceptance criteria
+
+- all three backends select the same blocks for the same Q/K content;
+- ties prefer the lower block index everywhere;
+- sparse output matches a dense oracle within backend numerical tolerance;
+- no fallback silently becomes BlockSparse or causal attention.
+
+## Stage 8 — CPU INT8 ordinary KV state
+
+CUDA already has INT8 ordinary KV support; CPU explicitly rejects it.
+
+### Work
+
+1. Audit the exact state-storage metadata and scale ownership used by CUDA before designing CPU storage.
+2. Reuse the semantic quantization contract, not CUDA memory layout.
+3. Add CPU INT8 key/value load helpers whose multiplication association is explicitly tested.
+4. Add quantize/store and dequantize/read coverage for token, prefill and paged traversal.
+5. Integrate with ordinary dense attention first, then sparse patterns.
+6. Test shared-KV ownership with INT8 state before advertising that combination.
+7. Add AVX2/AVX-512/VNNI acceleration only after scalar parity.
+
+### Acceptance criteria
+
+- round-trip storage tests establish quantization/scale behavior;
+- BF16/FP32 paths remain unchanged;
+- CPU INT8 attention agrees with CUDA/reference within a quantization-appropriate tolerance;
+- no implicit widening changes the advertised state type contract.
+
+## Stage 9 — Formalize Metal ordinary KV layout/paging before INT8
+
+Metal currently uses an internal page-sized physical layout but does not expose the same general layout/paging capability surface as CPU/CUDA.
+
+### Work
+
+1. Separate semantic KV ownership from physical Metal addressing.
+2. Define one Metal storage accessor contract used by dense, sparse and future latent paths.
+3. Make contiguous vs paged/page-table addressing explicit where the IR/runtime distinguishes them.
+4. Preserve the current optimized internal layout as one implementation, not as an implicit semantic assumption.
+5. Add address/alias tests for private and shared KV, including page boundaries and prefix snapshots.
+
+### Acceptance criteria
+
+- Metal can state exactly which layout/paging combinations it supports;
+- shared-KV consumers resolve publisher-owned storage through the same accessor contract;
+- attention kernels no longer bake hidden layout assumptions that block INT8/sparse expansion.
+
+## Stage 10 — Metal INT8 ordinary KV state
+
+Build on Stage 9 rather than adding one-off INT8 branches to every kernel.
+
+### Work
+
+1. Define Metal INT8 state payload and scale buffers consistent with the semantic state contract.
+2. Add store/quantize and load/dequantize helpers with conformance tests against CUDA/host behavior.
+3. Extend dense causal/sliding first.
+4. Extend bidirectional/Prefix-LM.
+5. Extend BlockSparse/DynamicSparse only after dense INT8 is stable.
+6. Extend shared-KV publication/consumption last.
+
+### Acceptance criteria
+
+- INT8 state is a real runtime storage mode, not BF16 storage with temporary quantization;
+- no extra dequantized cache duplicates the full KV state;
+- numerical tolerance and performance/memory results are measured separately.
+
+## Stage 11 — Metal projected latent attention
+
+Do not start factorized latent until direct projected latent state ownership is correct.
+
+### Work
+
+1. Mirror the existing `CompiledAttentionExecution::Latent` ownership contract.
+2. Add Metal latent-state allocation, projection and cache addressing.
+3. Support the same current CUDA restrictions initially: standard supported patterns, no MRoPE, no unsupported relative-bias combinations, explicit latent-rank bound.
+4. Implement token/decode first, then batched prefill.
+5. Reuse existing output projection and supported gate/transform ordering only where the IR permits it.
+
+### Acceptance criteria
+
+- Metal projected-latent output matches CPU/CUDA fixtures;
+- state size and addressing are tested independently from attention output;
+- unsupported combinations fail at capability validation rather than pipeline lookup.
+
+## Stage 12 — Metal factorized latent attention
+
+### Work
+
+1. Implement factorized query/key/value latent projection ownership using the same IR contract as CPU/CUDA.
+2. Add supported factorized output gates after ungated parity is proven.
+3. Cover token/decode and batched prefill.
+4. Keep latent MRoPE rejected because it remains outside CUDA parity.
+
+### Acceptance criteria
+
+- ungated factorized execution matches CPU/CUDA;
+- supported gate granularities match the shared representation contract;
+- packed combinations remain explicit if unsupported.
+
+## Stage 13 — Remove remaining CPU semantic-performance fallbacks
+
+After CPU capability parity is reached, close execution-mode gaps that are semantically correct but slower than CUDA-style specialized paths.
+
+Highest-value candidates:
+
+- factorized latent chunk prefill;
+- factorized latent packed/ragged prefill;
+- factorized latent packed decode;
+- DynamicSparse vectorized block scoring;
+- INT8 KV vectorized dot/dequant paths.
+
+Do not replace a correct fallback until the specialized path has a differential fixture.
+
+## Stage 14 — Cross-backend differential harness
+
+Create a reusable tiny-attention fixture capable of running the same resolved attention case through every available backend.
+
+The fixture should make Q/K/V and weights deterministic and small enough that a host oracle can compute expected output.
+
+Required dimensions to vary:
+
+- pattern;
+- bias;
+- position encoding;
+- Q/K/V normalization;
+- state scalar type;
+- private/shared KV;
+- standard/latent/factorized execution;
+- token/decode/prefill mode;
+- page boundary placement;
+- GQA/MQA head mapping.
+
+The harness must report separately:
+
+1. semantic selection/visibility mismatch;
+2. state/cache mismatch;
+3. numerical output mismatch;
+4. unsupported-by-contract result.
+
+Do not use one universal floating-point tolerance. Maintain per-state/per-backend tolerances and keep exact integer semantic probes exact.
+
+## Stage 15 — Capability matrix anti-regression gate
+
+Once the new features land:
+
+1. update `ATTENTION_IR_COVERAGE.md` from tested truth;
+2. require each backend to declare every capability field;
+3. keep constrained combinations in table-driven tests;
+4. add CI jobs that at least compile CPU and CUDA capability fixtures everywhere and run Metal fixtures on eligible macOS runners;
+5. require the normal generated Metal inference shader to compile, not only isolated probe fragments;
+6. keep performance benchmarks outside semantic pass/fail gates unless a specific regression threshold is intentionally adopted.
+
+## Recommended implementation order
+
+The order below minimizes architectural rework and gets useful parity quickly:
+
+```text
+0. capability truth / stale docs
+1. Metal sectioned MRoPE
+2. Metal value norm
+3. CPU DynamicSparse
+4. Metal Bidirectional + Prefix-LM
+5. Metal partial/scaled RoPE
+6. Metal BlockSparse
+7. Metal DynamicSparse
+8. CPU INT8 KV
+9. Metal storage/layout abstraction
+10. Metal INT8 KV
+11. Metal projected latent
+12. Metal factorized latent
+13. CPU fast-path closure
+14. cross-backend differential harness hardening
+15. final capability/CI gate
+```
+
+Some work can proceed in parallel after Stage 2:
+
+- CPU DynamicSparse and CPU INT8 are independent of Metal shader work;
+- Metal RoPE scaling is mostly independent of Metal sparse execution;
+- the differential harness can grow incrementally with every stage rather than waiting until Stage 14.
+
+## Suggested commit discipline
+
+Each capability should land in reviewable slices:
+
+```text
+semantics/probe
+runtime ownership or ABI
+production kernel/path
+execution-level tests
+capability flag
+coverage docs
+optional optimization
+```
+
+Do not combine the capability flag and the first implementation attempt in one large commit. This keeps intermediate states honest and makes bisecting semantic regressions practical.
+
+## Completion criteria
+
+This closure plan is complete when:
+
+- every attention feature CUDA currently supports has either an equivalent CPU/Metal implementation or a documented architecture-specific reason it cannot sensibly apply;
+- CPU supports DynamicSparse and ordinary INT8 KV;
+- Metal supports sectioned MRoPE, value norm, bidirectional, Prefix-LM, BlockSparse, DynamicSparse, partial/scaled standard RoPE, ordinary INT8 KV, projected latent and factorized latent attention for explicitly declared modes;
+- Metal's layout/paging contract is explicit rather than hidden in kernel addressing;
+- backend capability declarations, production execution and documentation agree;
+- unsupported combinations fail before execution with stable diagnostics;
+- cross-backend differential tests cover each newly closed cell;
+- specialized fast paths never replace a correct fallback without parity tests;
+- no claim of performance improvement is made without measured benchmark evidence.
