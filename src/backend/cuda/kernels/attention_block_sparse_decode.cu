@@ -1,5 +1,7 @@
 #include "kernel_common.cuh"
 #include "kernels/attention.hpp"
+#include "celeg/attention/merge_semantics.hpp"
+#include "celeg/attention/pattern_semantics.hpp"
 
 #include <cfloat>
 

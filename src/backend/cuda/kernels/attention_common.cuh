@@ -1,7 +1,6 @@
 #pragma once
 
 #include "attention_storage.cuh"
-#include "celeg/attention/pattern_semantics.hpp"
 
 struct AttentionPrefillPosition {
     __device__ __forceinline__ int value(int row) const { return row; }
