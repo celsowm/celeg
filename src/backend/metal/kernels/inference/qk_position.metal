@@ -50,11 +50,15 @@ inline void celeg_apply_mrope_head(
     size_t base,
     uint head_dim,
     constant int* rope_position,
+    uint section0,
+    uint section1,
+    uint interleaved,
     float theta,
     float scale) {
     const uint pairs = head_dim / 2;
     for (uint pair = 0; pair < pairs; ++pair) {
-        const uint axis = pair % 3;
+        const uint axis = celeg_mrope_axis_for_pair(
+            pair, section0, section1, interleaved);
         const float frequency = pow(
             theta,
             -2.0f * static_cast<float>(pair) /
@@ -119,17 +123,21 @@ kernel void celeg_qk_mrope_position_store_kv(
     constant float& theta [[buffer(11)]],
     constant float& query_scale [[buffer(12)]],
     constant uint& page_tokens [[buffer(13)]],
+    constant uint& interleaved [[buffer(14)]],
     uint head [[thread_position_in_grid]]) {
     const uint pairs = head_dim / 2;
     if (sections[0] + sections[1] + sections[2] != pairs) return;
     if (head < query_heads) {
         const size_t base = static_cast<size_t>(head) * head_dim;
         celeg_apply_mrope_head(
-            query, base, head_dim, rope_position, theta, query_scale);
+            query, base, head_dim, rope_position,
+            sections[0], sections[1], interleaved, theta, query_scale);
     }
     if (head < key_heads) {
         const size_t base = static_cast<size_t>(head) * head_dim;
-        celeg_apply_mrope_head(key, base, head_dim, rope_position, theta, 1.0f);
+        celeg_apply_mrope_head(
+            key, base, head_dim, rope_position,
+            sections[0], sections[1], interleaved, theta, 1.0f);
         const size_t cache_base = static_cast<size_t>(cache_position) *
             static_cast<size_t>(key_heads) * head_dim + base;
         for (uint d = 0; d < head_dim; ++d) {
