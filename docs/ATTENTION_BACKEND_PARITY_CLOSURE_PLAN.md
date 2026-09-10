@@ -35,7 +35,7 @@ Out of scope for this closure plan:
 
 The executable capability declarations are the source of truth, not the documentation matrix.
 
-At the baseline represented by `master` after the RoPE geometry refactor:
+The table below records the current executable state after closure Stages 0-2:
 
 | Capability | CPU | CUDA | Metal | Closure action |
 | --- | --- | --- | --- | --- |
@@ -48,8 +48,8 @@ At the baseline represented by `master` after the RoPE geometry refactor:
 | ALiBi | yes | yes | yes | regression only |
 | Relative-position bias | yes | yes, constrained | yes | differential coverage; do not overclaim CUDA combinations |
 | Standard RoPE | full IR surface on CPU | broad scaling surface | full-width unscaled only | expand Metal |
-| Three-axis MRoPE | interleaved + sectioned geometry | interleaved + sectioned geometry | interleaved only | complete existing Metal MRoPE plan |
-| Value RMSNorm before KV store | yes | yes | no | implement Metal |
+| Three-axis MRoPE | interleaved + sectioned geometry | interleaved + sectioned geometry | interleaved + sectioned geometry | geometry parity closed; scaling/partial-width remain Stage 5 |
+| Value RMSNorm before KV store | yes | yes | yes | parity closed; regression only |
 | Ordinary BF16 KV | yes | yes | yes | regression only |
 | Ordinary INT8 KV | no | yes | no | implement CPU and Metal |
 | General ordinary KV layout/paging surface | yes | yes | partial/internal | formalize Metal before INT8/general sparse state work |
@@ -59,7 +59,7 @@ At the baseline represented by `master` after the RoPE geometry refactor:
 | Current-value orthogonalization | yes | yes | yes | regression only |
 | Output gates on representable ordinary surface | yes | yes | yes | regression only |
 
-Important baseline correction: `docs/ATTENTION_IR_COVERAGE.md` currently marks CPU DynamicSparse as implemented in its table, but `CpuModelCompiler` advertises `.dynamic_sparse = false`, and `ATTENTION_CROSS_BACKEND_DRY_AUDIT.md` correctly records CPU DynamicSparse as unsupported. Stage 0 must reconcile this before any new parity claim.
+Historical baseline correction: `docs/ATTENTION_IR_COVERAGE.md` previously marked CPU DynamicSparse as implemented even though `CpuModelCompiler` advertised `.dynamic_sparse = false`. Stage 0 reconciled the documentation with executable capability truth. CPU DynamicSparse remains unsupported until Stage 3 lands.
 
 ## Design rules
 
@@ -107,6 +107,8 @@ If a feature is supported only for BF16, standard attention, prefill, a maximum 
 
 ## Stage 0 — Make backend capability truth executable
 
+**Status: complete.**
+
 ### Work
 
 1. Correct the stale CPU DynamicSparse cell in `docs/ATTENTION_IR_COVERAGE.md`.
@@ -124,6 +126,8 @@ If a feature is supported only for BF16, standard attention, prefill, a maximum 
 
 ## Stage 1 — Complete Metal MRoPE geometry parity
 
+**Status: complete for the geometry scope.** Scaling, partial-width rotation, alternate theta/pairing/axis-count semantics remain intentionally assigned to Stage 5.
+
 Execute `docs/METAL_MROPE_GEOMETRY_PLAN.md` fully.
 
 ### Required result
@@ -138,16 +142,19 @@ Do not combine this with RoPE scaling or partial rotary width. Geometry must be 
 
 ## Stage 2 — Metal value normalization quick win
 
-CUDA and CPU already advertise `value_norm = true`; Metal currently leaves it false.
+**Status: complete.** CPU, CUDA and Metal now advertise `value_norm = true` for their declared ordinary-attention surfaces.
 
-### Work
+### Implemented result
 
-1. Locate the common semantic point where per-head V RMSNorm occurs before KV publication.
-2. Reuse the existing Metal normalization kernels where their arithmetic contract matches; otherwise add a narrow V-normalization kernel rather than extending Q/K-specific code with ambiguous ownership.
-3. Support private KV first, then shared-KV publisher ownership.
-4. Ensure shared-KV consumers do not normalize a value they do not own.
-5. Cover token and batched prefill paths.
-6. Flip `.value_norm = true` only after the execution tests exist.
+1. Metal applies V RMSNorm immediately after the locally owned value projection and before every KV publication path.
+2. Per-head V normalization reuses `celeg_head_rmsnorm_inplace` / `celeg_head_rmsnorm_batch_inplace`; whole-vector normalization reuses the existing RMSNorm token/batch kernels. No Q/K-specific shader ABI was widened.
+3. `CompiledAttentionExecution::has_key_value` is the ownership boundary: private attention and shared-KV publishers normalize V; shared-KV consumers neither project nor normalize publisher-owned V.
+4. `AttentionValueNorm` loading uses the semantic width: `head_dim` for `PerHead`, `key_value_width()` for `WholeVector`. Weighted `Scale`, `OnePlusScale`, and weightless `None` semantics therefore use the existing weight-plan/materialization contract.
+5. Resolved value-norm tensors are width-checked before device execution, and the Metal capability validator rejects invalid epsilon before dispatch.
+6. Token/decode and batched-prefill paths normalize before both fused and standalone KV publication paths.
+7. `metal_value_norm_test` uses `cpu_qk_norm_only` as the executable CPU oracle for token/batch × PerHead/WholeVector, verifies the published cache, and uses a deliberately distinguishable twice-normalized reference to guard against accidental double normalization.
+8. `attention_norm_weight_plan_test` covers weighted, `OnePlusScale`, weightless, and shared-consumer ownership; capability tests cover the supported norm surface and malformed epsilon.
+9. `.value_norm = true` and the cross-backend capability matrix were flipped only after production execution and the differential harness existed.
 
 ### Acceptance criteria
 
@@ -428,9 +435,9 @@ Once the new features land:
 The order below minimizes architectural rework and gets useful parity quickly:
 
 ```text
-0. capability truth / stale docs
-1. Metal sectioned MRoPE
-2. Metal value norm
+0. capability truth / stale docs                    [complete]
+1. Metal sectioned MRoPE                            [complete]
+2. Metal value norm                                 [complete]
 3. CPU DynamicSparse
 4. Metal Bidirectional + Prefix-LM
 5. Metal partial/scaled RoPE
