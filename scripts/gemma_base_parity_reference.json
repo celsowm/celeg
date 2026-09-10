@@ -1,0 +1,24 @@
+{
+  "repo": "google/gemma-4-E4B",
+  "note": "Base (non-instruct) checkpoint: the correct greedy behavior is to echo the prompt, not answer it. Sweep verdict for this repo is token parity against this reference, not the 'paris' substring check.",
+  "prompt": "What is the capital of France?",
+  "sampling": {
+    "temperature": 0.0,
+    "top_k": 1,
+    "top_p": 1.0,
+    "repetition_penalty": 1.0,
+    "max_new_tokens": 64,
+    "seed": 1
+  },
+  "celeg_prompt": {
+    "template_origin": "tokenizer-inference (turn-delimited, inferred from <|turn>/<turn|> tokenizer evidence)",
+    "template_fingerprint": "3003c14a01705e0d"
+  },
+  "prompt_ids": [2, 105, 2364, 107, 3689, 563, 506, 5279, 529, 7001, 236881, 106, 107, 105, 4368, 107],
+  "reference": {
+    "generator": "transformers AutoModelForCausalLM, dtype=bfloat16, device=cuda:0, greedy generate() from prompt_ids",
+    "transformers_version": "5.15.0",
+    "gen_ids": [3689, 563, 506, 5279, 529, 7001, 236881, 107, 3689, 563, 506, 5279, 529, 7001, 236881, 107, 3689, 563, 506, 5279, 529, 7001, 236881, 107, 3689, 563, 506, 5279, 529, 7001, 236881, 107, 3689, 563, 506, 5279, 529, 7001, 236881, 107, 3689, 563, 506, 5279, 529, 7001, 236881, 107, 3689, 563, 506, 5279, 529, 7001, 236881, 107, 3689, 563, 506, 5279, 529, 7001, 236881, 107],
+    "gen_text": "What is the capital of France?\nWhat is the capital of France?\nWhat is the capital of France?\nWhat is the capital of France?\nWhat is the capital of France?\nWhat is the capital of France?\nWhat is the capital of France?\nWhat is the capital of France?\n"
+  }
+}

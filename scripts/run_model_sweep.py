@@ -3,6 +3,8 @@
 Run all resolvable HF-cache models on CPU and CUDA backends.
 Classifies each: OK / FAIL / TIMEOUT / OOM, and separately whether the
 generated output is coherent text and whether it answers correctly.
+Base checkpoints listed in PARITY_MODELS are scored by token parity against
+the recorded HF greedy reference instead (PARITY-CORRECT / PARITY-DIVERGED).
 Writes results to `benchmarks/results/model_sweep_results.json` (relative to
 the repository root). Run under `CELEG_STRICT_SEMANTICS=1` so silently-dropped
 mathematics fails loudly instead of emitting garbage with exit 0.
@@ -18,6 +20,7 @@ REPO_LIST = [
     ("LiquidAI/LFM2.5-350M", "safetensors"),
     ("LiquidAI/LFM2.5-VL-450M", "safetensors"),
     ("google/gemma-4-E4B", "safetensors"),
+    ("google/gemma-4-E4B-it", "safetensors"),
     ("ibm-granite/granite-4.1-3b", "safetensors"),
     ("inclusionAI/Ling-3.0-tiny", "safetensors"),
     ("openbmb/MiniCPM5-1B", "safetensors"),
@@ -53,7 +56,31 @@ TOP_K = 1
 # natively so only the CPU run needs the override.
 CPU_EXTRA_ARGS_BY_MODEL = {
     "google/gemma-4-E4B": ["--cpu-weight-format", "bf16"],
+    "google/gemma-4-E4B-it": ["--cpu-weight-format", "bf16"],
 }
+
+# Extra sampler args applied on both backends. The gemma-4-E4B parity reference
+# was generated with no repetition penalty, while celeg-run defaults to 1.05,
+# which steers the base checkpoint off its greedy echo loop; disable it so the
+# sweep compares greedy against greedy.
+EXTRA_ARGS_BY_MODEL = {
+    "google/gemma-4-E4B": ["--repetition-penalty", "1.0"],
+}
+
+# Base checkpoints have no "correct answer": the verdict is token parity
+# against a recorded Hugging Face greedy reference instead of the EXPECTED_ANSWER
+# substring check. Reference window must match MAX_TOKENS_BY_MODEL below.
+PARITY_REFERENCE_FILE = "gemma_base_parity_reference.json"
+PARITY_MODELS = {
+    "google/gemma-4-E4B",
+}
+
+def _load_parity_reference():
+    path = _REPO_ROOT / "scripts" / PARITY_REFERENCE_FILE
+    with open(path) as f:
+        return json.load(f)["reference"]["gen_text"]
+
+MAX_TOKENS_BY_MODEL["google/gemma-4-E4B"] = 64
 
 # Resolved relative to the repository root (this script lives in `scripts/`),
 # not hardcoded to one machine's `$HOME`, so the sweep runs wherever the tree
@@ -148,19 +175,30 @@ def run_model(run_cmd, repo, backend, extra_args=None):
     except Exception as e:
         return (False, str(e), time.time() - start, "exception", False, False)
 
-def quality_label(ok, coherent, correct, err):
+def quality_label(ok, coherent, correct, err, parity=None):
     if not ok:
         return f"FAIL({err})"
+    if parity is not None:
+        return "PARITY-CORRECT" if parity else "PARITY-DIVERGED"
     if not coherent:
         return "OK-GARBLED"
     if not correct:
         return "OK-WRONG"
     return "OK-CORRECT"
 
+def parity_match(repo, generated, parity_text):
+    """Token-text parity for base checkpoints: the run must reproduce the
+    recorded HF greedy reference generation exactly (modulo trailing
+    whitespace). Returns None for non-parity models."""
+    if repo not in PARITY_MODELS:
+        return None
+    return generated.strip() == parity_text.strip()
+
 def main():
     results = {"timestamp": datetime.now().isoformat(),
                "prompt": PROMPT,
                "models": []}
+    parity_text = _load_parity_reference()
 
     for repo, wtype in REPO_LIST:
         print(f"\n{'='*60}")
@@ -169,8 +207,10 @@ def main():
 
         # CUDA run
         print(f"  CUDA:  ", end="", flush=True)
-        cuda_ok, cuda_out, cuda_time, cuda_err, cuda_coherent, cuda_correct = run_model(CUDA_RUN, repo, "cuda")
-        cuda_status = quality_label(cuda_ok, cuda_coherent, cuda_correct, cuda_err)
+        cuda_ok, cuda_out, cuda_time, cuda_err, cuda_coherent, cuda_correct = run_model(
+            CUDA_RUN, repo, "cuda", EXTRA_ARGS_BY_MODEL.get(repo))
+        cuda_parity = parity_match(repo, cuda_out, parity_text) if cuda_ok else None
+        cuda_status = quality_label(cuda_ok, cuda_coherent, cuda_correct, cuda_err, cuda_parity)
         print(cuda_status)
         if cuda_ok:
             print(f"    output: {cuda_out[:80]}")
@@ -180,9 +220,11 @@ def main():
 
         # CPU run (only if CUDA worked, or always for comparison)
         print(f"  CPU:   ", end="", flush=True)
+        cpu_extra = list(EXTRA_ARGS_BY_MODEL.get(repo, [])) + list(CPU_EXTRA_ARGS_BY_MODEL.get(repo, []))
         cpu_ok, cpu_out, cpu_time, cpu_err, cpu_coherent, cpu_correct = run_model(
-            CPU_RUN, repo, "cpu", CPU_EXTRA_ARGS_BY_MODEL.get(repo))
-        cpu_status = quality_label(cpu_ok, cpu_coherent, cpu_correct, cpu_err)
+            CPU_RUN, repo, "cpu", cpu_extra or None)
+        cpu_parity = parity_match(repo, cpu_out, parity_text) if cpu_ok else None
+        cpu_status = quality_label(cpu_ok, cpu_coherent, cpu_correct, cpu_err, cpu_parity)
         print(cpu_status)
         if cpu_ok:
             print(f"    output: {cpu_out[:80]}")
@@ -194,9 +236,11 @@ def main():
             "repo": repo,
             "weight_type": wtype,
             "cuda": {"ok": cuda_ok, "coherent": cuda_coherent, "correct": cuda_correct,
+                     "parity": cuda_parity,
                      "output": cuda_out[:200] if cuda_ok else None,
                      "error": cuda_err, "time_s": round(cuda_time, 1)},
             "cpu":  {"ok": cpu_ok, "coherent": cpu_coherent, "correct": cpu_correct,
+                     "parity": cpu_parity,
                      "output": cpu_out[:200] if cpu_ok else None,
                      "error": cpu_err, "time_s": round(cpu_time, 1)},
         })
@@ -213,17 +257,24 @@ def main():
     # Summary
     def counts(backend):
         runs = sum(1 for m in results["models"] if m[backend]["ok"])
-        correct = sum(1 for m in results["models"] if m[backend]["ok"] and m[backend]["correct"])
-        return runs, correct
+        # Base checkpoints are scored by parity only: a stray "paris" inside
+        # diverged output must not count as a correct answer.
+        def good(m):
+            if not m[backend]["ok"]:
+                return False
+            if m["repo"] in PARITY_MODELS:
+                return bool(m[backend].get("parity"))
+            return bool(m[backend]["correct"])
+        return runs, sum(1 for m in results["models"] if good(m))
     cuda_ok_count, cuda_correct_count = counts("cuda")
     cpu_ok_count, cpu_correct_count = counts("cpu")
     print(f"\nSUMMARY:")
     print(f"  Total models tested: {len(results['models'])}")
-    print(f"  CUDA: {cuda_ok_count}/{len(results['models'])} ran, {cuda_correct_count}/{len(results['models'])} answered correctly")
-    print(f"  CPU:  {cpu_ok_count}/{len(results['models'])} ran, {cpu_correct_count}/{len(results['models'])} answered correctly")
+    print(f"  CUDA: {cuda_ok_count}/{len(results['models'])} ran, {cuda_correct_count}/{len(results['models'])} correct-or-parity")
+    print(f"  CPU:  {cpu_ok_count}/{len(results['models'])} ran, {cpu_correct_count}/{len(results['models'])} correct-or-parity")
     for m in results["models"]:
-        cuda_s = quality_label(m["cuda"]["ok"], m["cuda"]["coherent"], m["cuda"]["correct"], m["cuda"]["error"])
-        cpu_s = quality_label(m["cpu"]["ok"], m["cpu"]["coherent"], m["cpu"]["correct"], m["cpu"]["error"])
+        cuda_s = quality_label(m["cuda"]["ok"], m["cuda"]["coherent"], m["cuda"]["correct"], m["cuda"]["error"], m["cuda"].get("parity"))
+        cpu_s = quality_label(m["cpu"]["ok"], m["cpu"]["coherent"], m["cpu"]["correct"], m["cpu"]["error"], m["cpu"].get("parity"))
         print(f"  {cuda_s:<18} {cpu_s:<18} {m['repo']}")
 
 if __name__ == "__main__":

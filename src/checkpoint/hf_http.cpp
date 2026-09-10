@@ -406,7 +406,12 @@ void http_download_file(const std::string& path,
         curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
         curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
         curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 30L);
-        curl_easy_setopt(curl, CURLOPT_TIMEOUT, 300L);
+        /// No total transfer timeout: multi-GB weight files legitimately take
+        /// longer than any fixed cap (a 16 GB file at 16 MB/s needs ~1000 s).
+        /// Stall detection below aborts genuinely stuck transfers instead.
+        curl_easy_setopt(curl, CURLOPT_TIMEOUT, 0L);
+        curl_easy_setopt(curl, CURLOPT_LOW_SPEED_LIMIT, 32L * 1024L);
+        curl_easy_setopt(curl, CURLOPT_LOW_SPEED_TIME, 120L);
         curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, download_write_callback);
         curl_easy_setopt(curl, CURLOPT_WRITEDATA, &state);
 
