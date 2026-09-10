@@ -14,6 +14,7 @@ if(TARGET celeg_metal_backend)
         metal_inference_test
         metal_kv_store_test
         metal_linear_binding_test
+        metal_mrope_sectioned_test
         metal_normalization_test
         metal_qk_store_test
         metal_quantization_test
