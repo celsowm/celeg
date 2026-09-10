@@ -5,6 +5,7 @@
 #include "celeg/attention/online_semantics.hpp"
 #include "celeg/attention/merge_semantics.hpp"
 #include "celeg/attention/micro_semantics.hpp"
+#include "celeg/attention/pattern_semantics.hpp"
 
 #include <algorithm>
 
