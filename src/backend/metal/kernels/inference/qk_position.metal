@@ -1,3 +1,13 @@
+inline uint celeg_standard_rope_pairing_mode(uint position_mode) {
+    return position_mode & 3u;
+}
+
+inline uint celeg_standard_rope_rotary_dim(uint position_mode, uint head_dim) {
+    const uint encoded = position_mode >> 2u;
+    if (encoded == 0u) return head_dim;
+    return min(encoded - 1u, head_dim) & ~1u;
+}
+
 inline void celeg_apply_rope_head(
     device float* values,
     size_t base,
@@ -6,13 +16,15 @@ inline void celeg_apply_rope_head(
     uint position_mode,
     float theta,
     float scale) {
-    const uint pairs = head_dim / 2;
-    if (position_mode == 1) {
+    const uint pairing_mode = celeg_standard_rope_pairing_mode(position_mode);
+    const uint rotary_dim = celeg_standard_rope_rotary_dim(position_mode, head_dim);
+    const uint pairs = rotary_dim / 2u;
+    if (pairing_mode == 1u) {
         for (uint pair = 0; pair < pairs; ++pair) {
             const float frequency = pow(
                 theta,
                 -2.0f * static_cast<float>(pair) /
-                    static_cast<float>(head_dim));
+                    static_cast<float>(rotary_dim));
             const float angle = static_cast<float>(position) * frequency;
             const float c = cos(angle);
             const float s = sin(angle);
@@ -23,17 +35,17 @@ inline void celeg_apply_rope_head(
             values[first] = x * c - y * s;
             values[second] = y * c + x * s;
         }
-    } else if (position_mode == 2) {
+    } else if (pairing_mode == 2u) {
         for (uint pair = 0; pair < pairs; ++pair) {
             const float frequency = pow(
                 theta,
                 -2.0f * static_cast<float>(pair) /
-                    static_cast<float>(head_dim));
+                    static_cast<float>(rotary_dim));
             const float angle = static_cast<float>(position) * frequency;
             const float c = cos(angle);
             const float s = sin(angle);
-            const size_t first = base + 2 * pair;
-            const size_t second = first + 1;
+            const size_t first = base + 2u * pair;
+            const size_t second = first + 1u;
             const float x = values[first];
             const float y = values[second];
             values[first] = x * c - y * s;
@@ -170,7 +182,7 @@ kernel void celeg_qk_position_batch(
         celeg_apply_rope_head(
             query, base, head_dim, position, position_mode, theta, query_scale);
     }
-    if (head < key_heads && position_mode != 0) {
+    if (head < key_heads && celeg_standard_rope_pairing_mode(position_mode) != 0u) {
         const size_t base = static_cast<size_t>(token) * key_heads * head_dim +
             static_cast<size_t>(head) * head_dim;
         celeg_apply_rope_head(
