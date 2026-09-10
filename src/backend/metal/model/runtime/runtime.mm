@@ -2,6 +2,7 @@
 
 #include "celeg/runtime/sampler.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <cstring>
 #include <stdexcept>
@@ -9,6 +10,49 @@
 #include <vector>
 
 namespace celeg {
+
+namespace {
+
+struct DensePrefillRequirements {
+    bool requires_batch = false;
+    int prefix_length = 0;
+};
+
+DensePrefillRequirements dense_prefill_requirements(
+    const CompiledModelProgram& program) {
+    DensePrefillRequirements requirements;
+    for (const CompiledLayerProgram& layer : program.layers) {
+        const auto* attention = std::get_if<CompiledAttentionProgram>(&layer.mixer);
+        if (!attention) continue;
+        if (std::holds_alternative<BidirectionalPattern>(attention->semantics.pattern)) {
+            requirements.requires_batch = true;
+        }
+        if (const auto* prefix =
+                std::get_if<PrefixLmPattern>(&attention->semantics.pattern)) {
+            requirements.requires_batch = true;
+            requirements.prefix_length =
+                std::max(requirements.prefix_length, prefix->prefix_length);
+        }
+    }
+    return requirements;
+}
+
+void validate_dense_prefill(const CompiledModelProgram& program,
+                            size_t token_count,
+                            bool batch_supported) {
+    const DensePrefillRequirements requirements =
+        dense_prefill_requirements(program);
+    if (requirements.prefix_length > static_cast<int>(token_count)) {
+        throw std::invalid_argument(
+            "Metal Prefix-LM prefill must include the complete prefix");
+    }
+    if (requirements.requires_batch && !batch_supported) {
+        throw std::invalid_argument(
+            "Metal bidirectional/Prefix-LM prefill requires batched execution");
+    }
+}
+
+}
 
 void MetalModel::Impl::apply_logits_transforms() {
     float* values = static_cast<float*>(logits.contents);
@@ -41,6 +85,8 @@ void MetalModel::prefill_session(const std::vector<int32_t>& tokens) {
     if (tokens.size() > static_cast<size_t>((*impl_).max_context)) {
         throw std::invalid_argument("Metal prefill exceeds context");
     }
+    const bool batch_supported = (*impl_).supports_prefill_batch();
+    validate_dense_prefill((*impl_).program, tokens.size(), batch_supported);
     (*impl_).reset();
     (*impl_).next_rope_position = {0, 0, 0};
     (*impl_).execution_metrics.command_encoding_ms = 0.0;
@@ -58,7 +104,7 @@ void MetalModel::prefill_session(const std::vector<int32_t>& tokens) {
         }
         (*impl_).seen[static_cast<size_t>(token)] = 1;
     }
-    if ((*impl_).supports_prefill_batch()) {
+    if (batch_supported) {
         (*impl_).encode_prefill_batch(encoder, tokens);
     } else {
         for (const int32_t token : tokens) {
@@ -92,6 +138,8 @@ void MetalModel::prefill_session(const std::vector<int32_t>& tokens,
         throw std::invalid_argument(
             "Metal M-RoPE prefill currently accepts position metadata without raw prompt embeddings");
     }
+    const bool batch_supported = (*impl_).supports_prefill_batch();
+    validate_dense_prefill((*impl_).program, tokens.size(), batch_supported);
     (*impl_).reset();
     (*impl_).next_rope_position = {0, 0, 0};
     (*impl_).execution_metrics.command_encoding_ms = 0.0;
@@ -109,7 +157,7 @@ void MetalModel::prefill_session(const std::vector<int32_t>& tokens,
         }
         (*impl_).seen[static_cast<size_t>(token)] = 1;
     }
-    if ((*impl_).supports_prefill_batch()) {
+    if (batch_supported) {
         (*impl_).encode_prefill_batch(encoder, tokens, embeddings.rope_positions);
     } else {
         for (size_t index = 0; index < tokens.size(); ++index) {
