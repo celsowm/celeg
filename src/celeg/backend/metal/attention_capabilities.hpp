@@ -11,8 +11,8 @@ inline constexpr AttentionBackendCapabilities metal_attention_capabilities() {
     return {
         .full_causal = true,
         .sliding_window = true,
-        .bidirectional = false,
-        .prefix_lm = false,
+        .bidirectional = true,
+        .prefix_lm = true,
         .block_sparse = false,
         .dynamic_sparse = false,
         .external_memory = false,
@@ -43,6 +43,19 @@ inline void validate_metal_attention_capabilities(
             sliding && sliding->window <= 0) {
             throw std::invalid_argument(
                 "Metal sliding-window attention requires a positive window");
+        }
+        if (const auto* prefix = std::get_if<PrefixLmPattern>(&attention.pattern);
+            prefix && prefix->prefix_length <= 0) {
+            throw std::invalid_argument(
+                "Metal Prefix-LM attention requires a positive prefix length");
+        }
+        const bool dense_noncausal =
+            std::holds_alternative<BidirectionalPattern>(attention.pattern) ||
+            std::holds_alternative<PrefixLmPattern>(attention.pattern);
+        if (dense_noncausal &&
+            !std::holds_alternative<NoAttentionBiasSpec>(attention.bias)) {
+            throw std::invalid_argument(
+                "Metal bidirectional/Prefix-LM attention currently requires no attention bias");
         }
         if (!std::holds_alternative<OrdinaryKvStateSpec>(attention.state)) {
             throw std::invalid_argument(
