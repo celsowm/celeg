@@ -17,6 +17,21 @@ enum CelegRopeScalingMode : uint {
     CelegRopeScalingProportional = 6u,
 };
 
+#ifndef CELEG_ROPE_SCALING_SPEC_DEFINED
+#define CELEG_ROPE_SCALING_SPEC_DEFINED
+struct CelegRopeScalingSpec {
+    uint mode;
+    uint original_context;
+    float rotary_fraction;
+    float factor;
+    float beta_fast;
+    float beta_slow;
+    float attention_factor;
+    float low_frequency_factor;
+    float high_frequency_factor;
+};
+#endif
+
 inline float celeg_rope_unscaled_frequency(
     float theta, uint pair, uint rotary_dimension) {
     return pow(theta,
