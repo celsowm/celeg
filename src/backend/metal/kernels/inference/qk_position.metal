@@ -21,10 +21,8 @@ inline void celeg_apply_rope_head(
     const uint pairs = rotary_dim / 2u;
     if (pairing_mode == 1u) {
         for (uint pair = 0; pair < pairs; ++pair) {
-            const float frequency = pow(
-                theta,
-                -2.0f * static_cast<float>(pair) /
-                    static_cast<float>(rotary_dim));
+            const float frequency =
+                celeg_rope_unscaled_frequency(theta, pair, rotary_dim);
             const float angle = static_cast<float>(position) * frequency;
             const float c = cos(angle);
             const float s = sin(angle);
@@ -37,10 +35,8 @@ inline void celeg_apply_rope_head(
         }
     } else if (pairing_mode == 2u) {
         for (uint pair = 0; pair < pairs; ++pair) {
-            const float frequency = pow(
-                theta,
-                -2.0f * static_cast<float>(pair) /
-                    static_cast<float>(rotary_dim));
+            const float frequency =
+                celeg_rope_unscaled_frequency(theta, pair, rotary_dim);
             const float angle = static_cast<float>(position) * frequency;
             const float c = cos(angle);
             const float s = sin(angle);
