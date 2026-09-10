@@ -11,7 +11,7 @@ inline constexpr AttentionBackendCapabilities cpu_attention_capabilities() {
         .bidirectional = true,
         .prefix_lm = true,
         .block_sparse = true,
-        .dynamic_sparse = false,
+        .dynamic_sparse = true,
         .external_memory = true,
         .alibi = true,
         .relative_position_bias = true,

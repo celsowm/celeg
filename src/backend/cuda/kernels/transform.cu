@@ -3,6 +3,7 @@
 #include "kernels/gemv_kernels.cuh"
 #include "gemv_launch.hpp"
 #include "rope_scaling.cuh"
+#include "celeg/model/rope_geometry.hpp"
 
 namespace celeg {
 

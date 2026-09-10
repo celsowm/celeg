@@ -44,6 +44,7 @@ set(CELEG_CPU_BACKEND_SOURCES
     src/backend/cpu/memory/external_attention_memory.cpp
     src/backend/cpu/memory/attention_policy.cpp
     src/backend/cpu/memory/paged_kv.cpp
+    src/backend/cpu/attention/dynamic_sparse.cpp
     src/backend/cpu/attention/paged_prefill.cpp
     src/backend/cpu/attention/paged_attention.cpp
     src/backend/cpu/memory/prefix_cache.cpp

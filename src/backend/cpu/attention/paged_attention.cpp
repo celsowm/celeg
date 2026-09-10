@@ -194,6 +194,12 @@ void cpu_gqa_decode_paged(const float* q, const CpuKvPagePool& pool, std::span<c
         query_position = attention_semantics::query_position_from_sequence_length(sequence_length);
     }
     if (query_position >= sequence_length) throw std::invalid_argument("paged attention query position is out of range");
+    if (const auto* dynamic = std::get_if<DynamicSparsePattern>(&pattern.storage)) {
+        cpu_gqa_decode_paged_dynamic_sparse(
+            q, pool, pages, output, sequence_length, q_heads, kv_heads,
+            head_dim, *dynamic, bias, query_position);
+        return;
+    }
     const int first_token = pattern.first_candidate(query_position);
     for (int qh = 0; qh < q_heads; ++qh) {
         const int kvh = attention_semantics::gqa_kv_head(qh, q_heads, kv_heads);

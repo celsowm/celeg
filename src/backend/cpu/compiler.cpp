@@ -16,6 +16,17 @@ void validate_cpu_attention_semantics(const CompiledModelProgram& program) {
         const auto* compiled = std::get_if<CompiledAttentionProgram>(&layer.mixer);
         if (!compiled) continue;
         const AttentionSpec& attention = compiled->semantics;
+        if (const auto* dynamic = std::get_if<DynamicSparsePattern>(&attention.pattern)) {
+            if (dynamic->block_size <= 0 || dynamic->max_selected_blocks <= 0) {
+                throw std::invalid_argument(
+                    "CPU dynamic sparse attention requires positive block geometry");
+            }
+            if (compiled->execution.kind != AttentionExecutionKind::Standard ||
+                !std::holds_alternative<OrdinaryKvStateSpec>(attention.state)) {
+                throw std::invalid_argument(
+                    "CPU dynamic sparse attention currently requires standard ordinary KV execution");
+            }
+        }
         if (const auto* ordinary = std::get_if<OrdinaryKvStateSpec>(&attention.state)) {
             if (!cpu_state_scalar_supported(ordinary->storage.key) ||
                 !cpu_state_scalar_supported(ordinary->storage.value)) {

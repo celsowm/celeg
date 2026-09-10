@@ -12,7 +12,8 @@ void alibi_matches_canonical_semantics() {
     constexpr std::array<float, 2> slopes{0.5f, 0.125f};
     celeg::AlibiBiasSpec alibi;
     alibi.slopes.assign(slopes.begin(), slopes.end());
-    const celeg::CpuAttentionBias bias = celeg::CpuAttentionBias::lower(alibi);
+    const celeg::AttentionBiasSpec stored_bias = alibi;
+    const celeg::CpuAttentionBias bias = celeg::CpuAttentionBias::lower(stored_bias);
 
     for (int head = 0; head < 2; ++head) {
         for (const auto [query, key] :
@@ -37,10 +38,11 @@ void relative_bias_matches_canonical_buckets() {
     }
 
     for (bool bidirectional : {false, true}) {
+        const celeg::RelativePositionBiasSpec relative{
+            bucket_count, max_distance, bidirectional};
+        const celeg::AttentionBiasSpec stored_bias = relative;
         const celeg::CpuAttentionBias bias = celeg::CpuAttentionBias::lower(
-            celeg::RelativePositionBiasSpec{
-                bucket_count, max_distance, bidirectional},
-            values, 1);
+            stored_bias, values, 1);
         for (const auto [query, key] :
              std::array<std::pair<int, int>, 8>{{
                  {0, 0}, {7, 0}, {31, 15}, {127, 0},

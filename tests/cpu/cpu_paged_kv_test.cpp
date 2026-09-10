@@ -97,12 +97,11 @@ static void run(celeg::CpuKvCacheMode mode) {
     CELEG_TEST_CHECK(max_error < 1e-5f);
 
     if (mode == celeg::CpuKvCacheMode::Fp32) {
-        const std::array<std::pair<celeg::AttentionPatternSpec, int>, 5> patterns = {{
+        const std::array<std::pair<celeg::AttentionPatternSpec, int>, 4> patterns = {{
             {celeg::SlidingWindowPattern{3}, sequence - 1},
             {celeg::BidirectionalPattern{}, 5},
             {celeg::PrefixLmPattern{4}, 2},
             {celeg::BlockSparsePattern{4, 1, 1}, 9},
-            {celeg::DynamicSparsePattern{4, 2}, 9},
         }};
         for (const auto& [semantic, query_position] : patterns) {
             const auto lowered = celeg::CpuAttentionPattern::lower(semantic);

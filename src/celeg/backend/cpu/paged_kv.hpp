@@ -136,14 +136,19 @@ struct CpuPagedAttentionStats {
 
 // The CPU backend needs no data beyond what the semantic pattern already
 // carries, so it reuses AttentionPatternSpec directly instead of lowering
-// into a parallel kind + flattened-payload representation.
+// into a parallel kind + flattened-payload representation. DynamicSparse is
+// deliberately not representable as an allows(query,key) predicate: its
+// selected blocks depend on Q/K content and are resolved by the paged
+// attention implementation.
 struct CpuAttentionPattern {
     AttentionPatternSpec storage = FullCausalPattern{};
 
     static CpuAttentionPattern lower(const AttentionPatternSpec& pattern) {
-        if (std::holds_alternative<DynamicSparsePattern>(pattern)) {
-            throw std::invalid_argument(
-                "CPU content-ranked dynamic sparse attention is unsupported");
+        if (const auto* dynamic = std::get_if<DynamicSparsePattern>(&pattern)) {
+            if (dynamic->block_size <= 0 || dynamic->max_selected_blocks <= 0) {
+                throw std::invalid_argument(
+                    "CPU dynamic sparse attention requires positive block geometry");
+            }
         }
         return {pattern};
     }
@@ -183,6 +188,32 @@ struct CpuAttentionBias {
     }
     float score(int query_head, int query_position, int key_position) const;
 };
+
+// Reference-quality content-ranked DynamicSparse helpers. Selection is exposed
+// for cross-backend conformance tests; production execution remains paged and
+// reads K/V through CpuKvPagePool rather than materialising a dense cache.
+std::vector<int> cpu_dynamic_sparse_select_blocks(
+    const float* query,
+    const CpuKvPagePool& pool,
+    std::span<const CpuKvPageId> pages,
+    int sequence_length,
+    int kv_head,
+    int head_dim,
+    int query_position,
+    const DynamicSparsePattern& pattern);
+
+void cpu_gqa_decode_paged_dynamic_sparse(
+    const float* q,
+    const CpuKvPagePool& pool,
+    std::span<const CpuKvPageId> pages,
+    float* output,
+    int sequence_length,
+    int q_heads,
+    int kv_heads,
+    int head_dim,
+    const DynamicSparsePattern& pattern,
+    CpuAttentionBias bias = {},
+    int query_position = -1);
 
 void cpu_gqa_decode_paged(
     const float* q,

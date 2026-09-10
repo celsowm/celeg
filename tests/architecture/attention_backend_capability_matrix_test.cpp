@@ -3,8 +3,6 @@
 #include "celeg/backend/cuda/attention_capabilities.hpp"
 #include "celeg/backend/metal/attention_capabilities.hpp"
 
-#include <cassert>
-
 namespace {
 
 using celeg::AttentionBackendCapabilities;
@@ -35,7 +33,7 @@ constexpr AttentionBackendCapabilities kExpectedCpu{
     .bidirectional = true,
     .prefix_lm = true,
     .block_sparse = true,
-    .dynamic_sparse = false,
+    .dynamic_sparse = true,
     .external_memory = true,
     .alibi = true,
     .relative_position_bias = true,
@@ -95,8 +93,8 @@ static_assert(same_capabilities(celeg::metal_attention_capabilities(), kExpected
 }
 
 int main() {
-    assert(same_capabilities(celeg::cpu_attention_capabilities(), kExpectedCpu));
-    assert(same_capabilities(celeg::cuda_attention_capabilities(), kExpectedCuda));
-    assert(same_capabilities(celeg::metal_attention_capabilities(), kExpectedMetal));
-    return 0;
+    return same_capabilities(celeg::cpu_attention_capabilities(), kExpectedCpu) &&
+           same_capabilities(celeg::cuda_attention_capabilities(), kExpectedCuda) &&
+           same_capabilities(celeg::metal_attention_capabilities(), kExpectedMetal)
+        ? 0 : 1;
 }

@@ -11,6 +11,7 @@ foreach(test_name IN ITEMS
     cpu_gguf_kernels_test
     cpu_kv_cache_test
     cpu_paged_kv_test
+    cpu_dynamic_sparse_attention_test
     cpu_parallel_attention_test
     cpu_prefix_cache_test
     cpu_numa_test
