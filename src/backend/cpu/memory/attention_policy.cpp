@@ -16,7 +16,8 @@ bool CpuAttentionPattern::allows(int query_position, int key_position) const {
             return attention_semantics::sliding_window_visible(
                 query_position, key_position, value.window);
         } else if constexpr (std::is_same_v<Pattern, BidirectionalPattern>) {
-            return query_position >= 0 && key_position >= 0;
+            return attention_semantics::bidirectional_visible(
+                query_position, key_position);
         } else if constexpr (std::is_same_v<Pattern, PrefixLmPattern>) {
             return attention_semantics::prefix_lm_visible(
                 query_position, key_position, value.prefix_length);
