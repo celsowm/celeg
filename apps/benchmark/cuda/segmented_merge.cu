@@ -1,4 +1,6 @@
 #include "kernel_common.cuh"
+#include "celeg/attention/merge_semantics.hpp"
+#include "celeg/attention/pattern_semantics.hpp"
 
 #include <cuda_runtime.h>
 
