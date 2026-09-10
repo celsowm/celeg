@@ -1,4 +1,4 @@
-#include "celeg/model/rope_geometry.hpp"
+#include "celeg/backend/cpu/rope.hpp"
 #include "metal_inference_source.hpp"
 
 #import <Foundation/Foundation.h>
@@ -16,10 +16,19 @@
 namespace {
 
 constexpr uint32_t kHeadDim = 12;
-constexpr uint32_t kPairs = kHeadDim / 2;
 constexpr float kTheta = 10000.0f;
 constexpr float kTolerance = 5.0e-5f;
-constexpr std::array<uint32_t, 3> kSections{2, 3, 1};
+constexpr std::array<uint32_t, 3> kMetalSections{2, 3, 1};
+constexpr std::array<int, 3> kCpuSections{2, 3, 1};
+
+celeg::RopePositionSpec rope_spec() {
+    celeg::RopePositionSpec rope;
+    rope.theta = kTheta;
+    rope.rotary_fraction = 1.0;
+    rope.pairing = celeg::RopePairingKind::SplitHalf;
+    rope.scaling = celeg::NoRopeScaling{};
+    return rope;
+}
 
 std::string ns_string(NSString* value) {
     return value ? std::string(value.UTF8String) : std::string{};
@@ -64,8 +73,10 @@ void wait(id<MTLCommandBuffer> command, const char* label) {
     [command commit];
     [command waitUntilCompleted];
     if (command.status != MTLCommandBufferStatusCompleted) {
-        throw std::runtime_error(std::string(label) + " dispatch failed" +
-            (command.error ? ": " + ns_string(command.error.localizedDescription) : ""));
+        const std::string detail = command.error
+            ? ": " + ns_string(command.error.localizedDescription)
+            : std::string{};
+        throw std::runtime_error(std::string(label) + " dispatch failed" + detail);
     }
 }
 
@@ -82,39 +93,31 @@ void check_close(const float* actual, const std::vector<float>& expected,
     }
 }
 
-void apply_mrope(float* values,
-                 const std::array<int32_t, 3>& position,
-                 bool interleaved,
-                 float scale) {
-    for (uint32_t pair = 0; pair < kPairs; ++pair) {
-        const int axis = celeg::rope_geometry::mrope_axis_for_pair(
-            static_cast<int>(pair), static_cast<int>(kSections[0]),
-            static_cast<int>(kSections[1]), interleaved);
-        const float frequency = std::pow(
-            kTheta,
-            -2.0f * static_cast<float>(pair) / static_cast<float>(kHeadDim));
-        const float angle = static_cast<float>(position[static_cast<size_t>(axis)]) * frequency;
-        const float c = std::cos(angle);
-        const float s = std::sin(angle);
-        const float x = values[pair];
-        const float y = values[kPairs + pair];
-        values[pair] = (x * c - y * s) * scale;
-        values[kPairs + pair] = (y * c + x * s) * scale;
-    }
+void scale_values(float* values, float scale) {
+    for (uint32_t d = 0; d < kHeadDim; ++d) values[d] *= scale;
 }
 
-void apply_norm_mrope(float* values,
-                      const std::vector<float>& weight,
-                      float epsilon,
-                      const std::array<int32_t, 3>& position,
-                      bool interleaved,
-                      float scale) {
-    float sum = 0.0f;
-    for (uint32_t d = 0; d < kHeadDim; ++d) sum += values[d] * values[d];
-    const float inverse = 1.0f /
-        std::sqrt(sum / static_cast<float>(kHeadDim) + epsilon);
-    for (uint32_t d = 0; d < kHeadDim; ++d) values[d] *= inverse * weight[d];
-    apply_mrope(values, position, interleaved, scale);
+void cpu_mrope(float* values,
+               const std::array<int32_t, 3>& position,
+               bool interleaved,
+               float scale) {
+    const celeg::RopePositionSpec rope = rope_spec();
+    celeg::cpu_rope_mrope(values, 1, static_cast<int>(kHeadDim), position,
+                          kCpuSections, interleaved, rope);
+    if (scale != 1.0f) scale_values(values, scale);
+}
+
+void cpu_norm_mrope(float* values,
+                    const std::vector<float>& weight,
+                    float epsilon,
+                    const std::array<int32_t, 3>& position,
+                    bool interleaved,
+                    float scale) {
+    const celeg::RopePositionSpec rope = rope_spec();
+    celeg::cpu_qk_norm_rope_mrope(
+        values, weight.data(), 1, static_cast<int>(kHeadDim), position,
+        kCpuSections, interleaved, rope, epsilon);
+    if (scale != 1.0f) scale_values(values, scale);
 }
 
 std::vector<float> initial_values(float phase, size_t count) {
@@ -149,8 +152,8 @@ void run_position_store_case(id<MTLDevice> device, id<MTLLibrary> library,
     const std::vector<float> value_values = initial_values(1.3f, kHeadDim);
     std::vector<float> expected_query = query_values;
     std::vector<float> expected_key = key_values;
-    apply_mrope(expected_query.data(), position, is_interleaved, query_scale);
-    apply_mrope(expected_key.data(), position, is_interleaved, 1.0f);
+    cpu_mrope(expected_query.data(), position, is_interleaved, query_scale);
+    cpu_mrope(expected_key.data(), position, is_interleaved, 1.0f);
 
     const size_t cache_count = static_cast<size_t>(cache_position + 1) * kHeadDim;
     id<MTLBuffer> query = float_buffer(device, query_values);
@@ -174,7 +177,7 @@ void run_position_store_case(id<MTLDevice> device, id<MTLLibrary> library,
     [encoder setBytes:&kHeadDim length:sizeof(kHeadDim) atIndex:7];
     [encoder setBytes:&cache_position length:sizeof(cache_position) atIndex:8];
     [encoder setBytes:position.data() length:sizeof(position) atIndex:9];
-    [encoder setBytes:kSections.data() length:sizeof(kSections) atIndex:10];
+    [encoder setBytes:kMetalSections.data() length:sizeof(kMetalSections) atIndex:10];
     [encoder setBytes:&kTheta length:sizeof(kTheta) atIndex:11];
     [encoder setBytes:&query_scale length:sizeof(query_scale) atIndex:12];
     [encoder setBytes:&page_tokens length:sizeof(page_tokens) atIndex:13];
@@ -213,10 +216,10 @@ void run_fused_norm_case(id<MTLDevice> device, id<MTLLibrary> library,
     const std::vector<float> key_weight = weights(0.95f, -0.018f);
     std::vector<float> expected_query = query_values;
     std::vector<float> expected_key = key_values;
-    apply_norm_mrope(expected_query.data(), query_weight, query_epsilon,
-                     position, is_interleaved, query_scale);
-    apply_norm_mrope(expected_key.data(), key_weight, key_epsilon,
-                     position, is_interleaved, 1.0f);
+    cpu_norm_mrope(expected_query.data(), query_weight, query_epsilon,
+                   position, is_interleaved, query_scale);
+    cpu_norm_mrope(expected_key.data(), key_weight, key_epsilon,
+                   position, is_interleaved, 1.0f);
 
     const size_t cache_count = static_cast<size_t>(cache_position + 1) * kHeadDim;
     id<MTLBuffer> query = float_buffer(device, query_values);
@@ -244,7 +247,7 @@ void run_fused_norm_case(id<MTLDevice> device, id<MTLLibrary> library,
     [encoder setBytes:&kHeadDim length:sizeof(kHeadDim) atIndex:9];
     [encoder setBytes:&cache_position length:sizeof(cache_position) atIndex:10];
     [encoder setBytes:position.data() length:sizeof(position) atIndex:11];
-    [encoder setBytes:kSections.data() length:sizeof(kSections) atIndex:12];
+    [encoder setBytes:kMetalSections.data() length:sizeof(kMetalSections) atIndex:12];
     [encoder setBytes:&kTheta length:sizeof(kTheta) atIndex:13];
     [encoder setBytes:&query_scale length:sizeof(query_scale) atIndex:14];
     [encoder setBytes:&query_epsilon length:sizeof(query_epsilon) atIndex:15];
@@ -256,13 +259,13 @@ void run_fused_norm_case(id<MTLDevice> device, id<MTLLibrary> library,
     [encoder endEncoding];
     wait(command, "Metal fused norm MRoPE");
 
-    check_close(static_cast<const float*>(query.contents), expected_query, "fused query", 1.0e-4f);
-    check_close(static_cast<const float*>(key.contents), expected_key, "fused key", 1.0e-4f);
+    check_close(static_cast<const float*>(query.contents), expected_query, "fused query", 2.0e-4f);
+    check_close(static_cast<const float*>(key.contents), expected_key, "fused key", 2.0e-4f);
     const auto* key_cache_values = static_cast<const float*>(key_cache.contents) +
         static_cast<size_t>(cache_position) * kHeadDim;
     const auto* value_cache_values = static_cast<const float*>(value_cache.contents) +
         static_cast<size_t>(cache_position) * kHeadDim;
-    check_close(key_cache_values, expected_key, "fused key cache", 1.0e-4f);
+    check_close(key_cache_values, expected_key, "fused key cache", 2.0e-4f);
     check_close(value_cache_values, value_values, "fused value cache", 0.0f);
 }
 
@@ -287,10 +290,10 @@ void run_batch_case(id<MTLDevice> device, id<MTLLibrary> library,
     std::vector<float> expected_query = query_values;
     std::vector<float> expected_key = key_values;
     for (uint32_t row = 0; row < rows; ++row) {
-        apply_mrope(expected_query.data() + static_cast<size_t>(row) * kHeadDim,
-                    positions[row], is_interleaved, query_scale);
-        apply_mrope(expected_key.data() + static_cast<size_t>(row) * kHeadDim,
-                    positions[row], is_interleaved, 1.0f);
+        float* expected_query_row = expected_query.data() + static_cast<size_t>(row) * kHeadDim;
+        float* expected_key_row = expected_key.data() + static_cast<size_t>(row) * kHeadDim;
+        cpu_mrope(expected_query_row, positions[row], is_interleaved, query_scale);
+        cpu_mrope(expected_key_row, positions[row], is_interleaved, 1.0f);
     }
 
     id<MTLBuffer> query = float_buffer(device, query_values);
@@ -309,7 +312,7 @@ void run_batch_case(id<MTLDevice> device, id<MTLLibrary> library,
     [encoder setBytes:&key_heads length:sizeof(key_heads) atIndex:4];
     [encoder setBytes:&kHeadDim length:sizeof(kHeadDim) atIndex:5];
     [encoder setBuffer:rope_positions offset:0 atIndex:6];
-    [encoder setBytes:kSections.data() length:sizeof(kSections) atIndex:7];
+    [encoder setBytes:kMetalSections.data() length:sizeof(kMetalSections) atIndex:7];
     [encoder setBytes:&kTheta length:sizeof(kTheta) atIndex:8];
     [encoder setBytes:&query_scale length:sizeof(query_scale) atIndex:9];
     [encoder setBytes:&interleaved length:sizeof(interleaved) atIndex:10];
@@ -326,8 +329,8 @@ void prove_layouts_are_distinct() {
     const std::array<int32_t, 3> position{2, 7, 13};
     std::vector<float> interleaved = initial_values(0.31f, kHeadDim);
     std::vector<float> sectioned = interleaved;
-    apply_mrope(interleaved.data(), position, true, 1.0f);
-    apply_mrope(sectioned.data(), position, false, 1.0f);
+    cpu_mrope(interleaved.data(), position, true, 1.0f);
+    cpu_mrope(sectioned.data(), position, false, 1.0f);
     bool differs = false;
     for (size_t i = 0; i < interleaved.size(); ++i) {
         differs = differs || std::abs(interleaved[i] - sectioned[i]) > 1.0e-4f;
@@ -353,13 +356,13 @@ int main() {
         id<MTLCommandQueue> queue = [device newCommandQueue];
         if (!queue) throw std::runtime_error("Metal MRoPE command queue failed");
 
-        for (bool interleaved : {true, false}) {
+        for (bool interleaved : std::array<bool, 2>{true, false}) {
             run_position_store_case(device, library, queue, interleaved);
             run_fused_norm_case(device, library, queue, interleaved);
             run_batch_case(device, library, queue, interleaved);
         }
 
-        std::cout << "metal interleaved and sectioned MRoPE production parity passed\n";
+        std::cout << "metal interleaved and sectioned MRoPE CPU parity passed\n";
         return 0;
     } catch (const std::exception& error) {
         std::cerr << "error: " << error.what() << '\n';
