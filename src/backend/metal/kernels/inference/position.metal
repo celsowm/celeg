@@ -238,6 +238,7 @@ kernel void celeg_qk_norm_mrope_store_kv(
     constant float& query_epsilon [[buffer(15)]],
     constant float& key_epsilon [[buffer(16)]],
     constant uint& page_tokens [[buffer(17)]],
+    constant uint& interleaved [[buffer(18)]],
     uint head [[thread_position_in_grid]]) {
     const uint pairs = head_dim / 2;
     if (sections[0] + sections[1] + sections[2] != pairs) return;
@@ -248,7 +249,8 @@ kernel void celeg_qk_norm_mrope_store_kv(
         const float inverse = rsqrt(sum / static_cast<float>(head_dim) + query_epsilon);
         for (uint d = 0; d < head_dim; ++d) query[base + d] *= inverse * query_weight[d];
         for (uint pair = 0; pair < pairs; ++pair) {
-            const uint axis = pair % 3;
+            const uint axis = celeg_mrope_axis_for_pair(
+                pair, sections[0], sections[1], interleaved);
             const float frequency = pow(theta, -2.0f * static_cast<float>(pair) /
                                               static_cast<float>(head_dim));
             const float angle = static_cast<float>(rope_position[axis]) * frequency;
@@ -269,7 +271,8 @@ kernel void celeg_qk_norm_mrope_store_kv(
         const float inverse = rsqrt(sum / static_cast<float>(head_dim) + key_epsilon);
         for (uint d = 0; d < head_dim; ++d) key[base + d] *= inverse * key_weight[d];
         for (uint pair = 0; pair < pairs; ++pair) {
-            const uint axis = pair % 3;
+            const uint axis = celeg_mrope_axis_for_pair(
+                pair, sections[0], sections[1], interleaved);
             const float frequency = pow(theta, -2.0f * static_cast<float>(pair) /
                                               static_cast<float>(head_dim));
             const float angle = static_cast<float>(rope_position[axis]) * frequency;
