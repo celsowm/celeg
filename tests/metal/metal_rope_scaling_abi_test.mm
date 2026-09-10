@@ -3,6 +3,7 @@
 #include <cassert>
 #include <cmath>
 #include <cstdint>
+#include <utility>
 #include <vector>
 
 using namespace celeg;
@@ -35,8 +36,8 @@ int main() {
     static_assert(static_cast<std::uint32_t>(MetalRopeScalingMode::Proportional) == 6u);
 
     {
-        const auto binding = make_metal_rope_scaling_binding(
-            rope_with(NoRopeScaling{}, 0.5));
+        const auto rope = rope_with(NoRopeScaling{}, 0.5);
+        const auto binding = make_metal_rope_scaling_binding(rope);
         assert(!binding.scaled());
         assert(close(binding.spec.rotary_fraction, 0.5f));
         assert(binding.short_factors == nullptr);
@@ -44,15 +45,15 @@ int main() {
     }
 
     {
-        const auto binding = make_metal_rope_scaling_binding(
-            rope_with(LinearRopeScaling{2.5}));
+        const auto rope = rope_with(LinearRopeScaling{2.5});
+        const auto binding = make_metal_rope_scaling_binding(rope);
         assert(binding.spec.mode == 1u);
         assert(close(binding.spec.factor, 2.5f));
     }
 
     {
-        const auto binding = make_metal_rope_scaling_binding(
-            rope_with(DynamicNtkRopeScaling{4.0, 8192}));
+        const auto rope = rope_with(DynamicNtkRopeScaling{4.0, 8192});
+        const auto binding = make_metal_rope_scaling_binding(rope);
         assert(binding.spec.mode == 2u);
         assert(close(binding.spec.factor, 4.0f));
         assert(binding.spec.original_context == 8192u);
@@ -65,7 +66,8 @@ int main() {
         yarn.beta_fast = 16.0;
         yarn.beta_slow = 2.0;
         yarn.original_context = 4096;
-        const auto binding = make_metal_rope_scaling_binding(rope_with(yarn));
+        const auto rope = rope_with(yarn);
+        const auto binding = make_metal_rope_scaling_binding(rope);
         assert(binding.spec.mode == 3u);
         assert(close(binding.spec.factor, 8.0f));
         assert(close(binding.spec.attention_factor, 1.25f));
@@ -79,11 +81,13 @@ int main() {
         long_rope.original_context = 4096;
         long_rope.short_factors = {1.0f, 1.5f, 2.0f};
         long_rope.long_factors = {2.0f, 3.0f, 4.0f};
-        const auto binding = make_metal_rope_scaling_binding(rope_with(long_rope));
+        const auto rope = rope_with(long_rope);
+        const auto binding = make_metal_rope_scaling_binding(rope);
+        const auto& stored = std::get<LongRopeScaling>(rope.scaling);
         assert(binding.spec.mode == 4u);
         assert(binding.spec.original_context == 4096u);
-        assert(binding.short_factors != nullptr);
-        assert(binding.long_factors != nullptr);
+        assert(binding.short_factors == &stored.short_factors);
+        assert(binding.long_factors == &stored.long_factors);
         assert(*binding.short_factors == long_rope.short_factors);
         assert(*binding.long_factors == long_rope.long_factors);
     }
@@ -94,7 +98,8 @@ int main() {
         llama3.original_context = 8192;
         llama3.low_frequency_factor = 1.0;
         llama3.high_frequency_factor = 4.0;
-        const auto binding = make_metal_rope_scaling_binding(rope_with(llama3));
+        const auto rope = rope_with(llama3);
+        const auto binding = make_metal_rope_scaling_binding(rope);
         assert(binding.spec.mode == 5u);
         assert(close(binding.spec.factor, 8.0f));
         assert(binding.spec.original_context == 8192u);
@@ -103,8 +108,8 @@ int main() {
     }
 
     {
-        const auto binding = make_metal_rope_scaling_binding(
-            rope_with(ProportionalRopeScaling{1.75}, 0.625));
+        const auto rope = rope_with(ProportionalRopeScaling{1.75}, 0.625);
+        const auto binding = make_metal_rope_scaling_binding(rope);
         assert(binding.spec.mode == 6u);
         assert(close(binding.spec.factor, 1.75f));
         assert(close(binding.spec.rotary_fraction, 0.625f));
