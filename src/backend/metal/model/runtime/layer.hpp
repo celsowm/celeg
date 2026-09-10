@@ -83,6 +83,7 @@ struct MetalLayer {
     MetalLinear attention_out;
     id<MTLBuffer> query_norm = nil;
     id<MTLBuffer> key_norm = nil;
+    id<MTLBuffer> value_norm = nil;
     id<MTLBuffer> key_cache = nil;
     id<MTLBuffer> value_cache = nil;
     id<MTLBuffer> alibi_slopes = nil;
