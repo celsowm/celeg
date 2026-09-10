@@ -1,5 +1,8 @@
 #include "attention_variant.hpp"
 #include "detail.hpp"
+#include "rope_scaling.hpp"
+
+#include "celeg/model/position.hpp"
 
 #include <algorithm>
 #include <array>
@@ -155,9 +158,13 @@ void MetalModel::Impl::encode_attention(
     const AlibiBiasSpec* alibi = attention_alibi(attention);
     const RelativePositionBiasSpec* relative = attention_relative_bias(attention);
     const MultiAxisRopeSpec* multi = attention.semantics.multi_axis_position();
+    const RopePositionSpec* standard_rope = attention.semantics.rope_position();
     const bool no_position = no_position_encoding(attention);
     const SigmoidAttentionGateSpec* gate = attention.semantics.output_gate
         ? &*attention.semantics.output_gate : nullptr;
+    const auto rope_scaling = standard_rope
+        ? metal_model_detail::make_metal_rope_scaling_binding(*standard_rope)
+        : metal_model_detail::MetalRopeScalingBinding{};
     if (alibi && !layer.alibi_slopes) {
         layer.alibi_slopes = buffer(alibi->slopes);
     }
@@ -205,6 +212,24 @@ void MetalModel::Impl::encode_attention(
     const float query_scale = layer.query_scale /
         (1.0f / std::sqrt(static_cast<float>(layer.head_dim)));
     const uint32_t page_tokens = static_cast<uint32_t>(layer.page_tokens);
+    const float rope_factor_dummy = 1.0f;
+    const auto bind_rope_scaling = [&](NSUInteger spec_index,
+                                       NSUInteger short_index,
+                                       NSUInteger long_index) {
+        set_bytes(encoder, &rope_scaling.spec, sizeof(rope_scaling.spec), spec_index);
+        if (rope_scaling.short_factors && !rope_scaling.short_factors->empty()) {
+            set_bytes(encoder, rope_scaling.short_factors->data(),
+                      rope_scaling.short_factors->size() * sizeof(float), short_index);
+        } else {
+            set_bytes(encoder, &rope_factor_dummy, sizeof(rope_factor_dummy), short_index);
+        }
+        if (rope_scaling.long_factors && !rope_scaling.long_factors->empty()) {
+            set_bytes(encoder, rope_scaling.long_factors->data(),
+                      rope_scaling.long_factors->size() * sizeof(float), long_index);
+        } else {
+            set_bytes(encoder, &rope_factor_dummy, sizeof(rope_factor_dummy), long_index);
+        }
+    };
     const auto normalize = [&](id<MTLBuffer> data, id<MTLBuffer> weight,
                                const std::optional<NormSpec>& norm,
                                uint32_t heads, uint32_t width) {
@@ -228,7 +253,8 @@ void MetalModel::Impl::encode_attention(
 
     const bool fused_per_head = owns_kv && !standard_rope_is_partial(attention) &&
         per_head_norm(attention.semantics.query_norm) &&
-        per_head_norm(attention.semantics.key_norm);
+        per_head_norm(attention.semantics.key_norm) &&
+        (!rope_scaling.scaled() || split_half_rope(attention));
 
     if (!fused_per_head) {
         normalize(query_buffer, layer.query_norm, attention.semantics.query_norm,
@@ -278,8 +304,14 @@ void MetalModel::Impl::encode_attention(
             set_bytes(encoder, &layer.rope_theta, sizeof(layer.rope_theta), 10);
             set_bytes(encoder, &query_scale, sizeof(query_scale), 11);
             set_bytes(encoder, &page_tokens, sizeof(page_tokens), 12);
-            dispatch(encoder, "celeg_qk_position_store_kv",
-                     std::max(query_heads, prepared_key_heads));
+            if (rope_scaling.scaled()) {
+                bind_rope_scaling(13, 14, 15);
+                dispatch(encoder, "celeg_qk_position_store_kv_scaled",
+                         std::max(query_heads, prepared_key_heads));
+            } else {
+                dispatch(encoder, "celeg_qk_position_store_kv",
+                         std::max(query_heads, prepared_key_heads));
+            }
         }
     } else {
         set_buffer(encoder, query_buffer, 0);
@@ -333,8 +365,11 @@ void MetalModel::Impl::encode_attention(
                       sizeof(layer.key_norm_epsilon), 14);
             set_bytes(encoder, &page_tokens, sizeof(page_tokens), 15);
             if (split_half_rope(attention)) {
-                id<MTLComputePipelineState> state =
-                    pipeline("celeg_qk_norm_rope_store_kv_split");
+                const std::string_view kernel = rope_scaling.scaled()
+                    ? "celeg_qk_norm_rope_store_kv_split_scaled"
+                    : "celeg_qk_norm_rope_store_kv_split";
+                if (rope_scaling.scaled()) bind_rope_scaling(16, 17, 18);
+                id<MTLComputePipelineState> state = pipeline(kernel);
                 encoder = compute_encoder(encoder);
                 order_before_dispatch(encoder);
                 [encoder setComputePipelineState:state];
@@ -342,7 +377,7 @@ void MetalModel::Impl::encode_attention(
                     std::max(query_heads, prepared_key_heads);
                 [encoder dispatchThreadgroups:MTLSizeMake(qk_groups, 1, 1)
                          threadsPerThreadgroup:MTLSizeMake(32, 1, 1)];
-                record_dispatch("celeg_qk_norm_rope_store_kv_split");
+                record_dispatch(kernel);
             } else {
                 dispatch(encoder, "celeg_qk_norm_rope_store_kv",
                          std::max(query_heads, prepared_key_heads));
@@ -350,7 +385,11 @@ void MetalModel::Impl::encode_attention(
         }
     }
 
-    const float attention_scale = 1.0f / std::sqrt(static_cast<float>(layer.head_dim));
+    float attention_scale = 1.0f / std::sqrt(static_cast<float>(layer.head_dim));
+    if (standard_rope) {
+        attention_scale *= rope_attention_scale(
+            *standard_rope, static_cast<int>(position_value));
+    }
     const uint32_t sequence_length = position_value + 1;
     const uint32_t window_size = attention_window_size(attention);
     set_buffer(encoder, query_buffer, 0);
@@ -426,9 +465,13 @@ void MetalModel::Impl::encode_attention_batch(
     const AlibiBiasSpec* alibi = attention_alibi(attention);
     const RelativePositionBiasSpec* relative = attention_relative_bias(attention);
     const MultiAxisRopeSpec* multi = attention.semantics.multi_axis_position();
+    const RopePositionSpec* standard_rope = attention.semantics.rope_position();
     const bool no_position = no_position_encoding(attention);
     const SigmoidAttentionGateSpec* gate = attention.semantics.output_gate
         ? &*attention.semantics.output_gate : nullptr;
+    const auto rope_scaling = standard_rope
+        ? metal_model_detail::make_metal_rope_scaling_binding(*standard_rope)
+        : metal_model_detail::MetalRopeScalingBinding{};
     if (alibi && !layer.alibi_slopes) {
         layer.alibi_slopes = buffer(alibi->slopes);
     }
@@ -470,6 +513,24 @@ void MetalModel::Impl::encode_attention_batch(
     const uint32_t head_count = std::max(query_heads, prepared_key_heads);
     const float query_scale = layer.query_scale /
         (1.0f / std::sqrt(static_cast<float>(layer.head_dim)));
+    const float rope_factor_dummy = 1.0f;
+    const auto bind_rope_scaling = [&](NSUInteger spec_index,
+                                       NSUInteger short_index,
+                                       NSUInteger long_index) {
+        set_bytes(encoder, &rope_scaling.spec, sizeof(rope_scaling.spec), spec_index);
+        if (rope_scaling.short_factors && !rope_scaling.short_factors->empty()) {
+            set_bytes(encoder, rope_scaling.short_factors->data(),
+                      rope_scaling.short_factors->size() * sizeof(float), short_index);
+        } else {
+            set_bytes(encoder, &rope_factor_dummy, sizeof(rope_factor_dummy), short_index);
+        }
+        if (rope_scaling.long_factors && !rope_scaling.long_factors->empty()) {
+            set_bytes(encoder, rope_scaling.long_factors->data(),
+                      rope_scaling.long_factors->size() * sizeof(float), long_index);
+        } else {
+            set_bytes(encoder, &rope_factor_dummy, sizeof(rope_factor_dummy), long_index);
+        }
+    };
     const auto normalize = [&](id<MTLBuffer> data, id<MTLBuffer> weight,
                                const std::optional<NormSpec>& norm,
                                uint32_t heads, uint32_t width) {
@@ -497,7 +558,8 @@ void MetalModel::Impl::encode_attention_batch(
     const bool fused_per_head = owns_kv && !multi &&
         !standard_rope_is_partial(attention) &&
         per_head_norm(attention.semantics.query_norm) &&
-        per_head_norm(attention.semantics.key_norm);
+        per_head_norm(attention.semantics.key_norm) &&
+        (!rope_scaling.scaled() || split_half_rope(attention));
     const bool qk_publishes_kv =
         fused_per_head && !no_position && split_half_rope(attention);
 
@@ -540,8 +602,14 @@ void MetalModel::Impl::encode_attention_batch(
             set_bytes(encoder, &position_mode, sizeof(position_mode), 7);
             set_bytes(encoder, &layer.rope_theta, sizeof(layer.rope_theta), 8);
             set_bytes(encoder, &query_scale, sizeof(query_scale), 9);
-            dispatch(encoder, "celeg_qk_position_batch",
-                     static_cast<NSUInteger>(rows) * head_count);
+            if (rope_scaling.scaled()) {
+                bind_rope_scaling(10, 11, 12);
+                dispatch(encoder, "celeg_qk_position_batch_scaled",
+                         static_cast<NSUInteger>(rows) * head_count);
+            } else {
+                dispatch(encoder, "celeg_qk_position_batch",
+                         static_cast<NSUInteger>(rows) * head_count);
+            }
         }
     } else {
         set_buffer(encoder, batch_query, 0);
@@ -568,8 +636,14 @@ void MetalModel::Impl::encode_attention_batch(
                 set_buffer(encoder, batch_value, 13);
                 set_buffer(encoder, layer.key_cache, 14);
                 set_buffer(encoder, layer.value_cache, 15);
-                dispatch(encoder, "celeg_qk_norm_rope_batch_split_store_kv",
-                         static_cast<NSUInteger>(rows) * head_count);
+                if (rope_scaling.scaled()) {
+                    bind_rope_scaling(16, 17, 18);
+                    dispatch(encoder, "celeg_qk_norm_rope_batch_split_store_kv_scaled",
+                             static_cast<NSUInteger>(rows) * head_count);
+                } else {
+                    dispatch(encoder, "celeg_qk_norm_rope_batch_split_store_kv",
+                             static_cast<NSUInteger>(rows) * head_count);
+                }
             } else {
                 dispatch(encoder, "celeg_qk_norm_rope_batch",
                          static_cast<NSUInteger>(rows) * head_count);
@@ -601,8 +675,12 @@ void MetalModel::Impl::encode_attention_batch(
         record_dispatch("celeg_store_kv_batch_2d");
     }
 
-    const float attention_scale = 1.0f /
+    float attention_scale = 1.0f /
         std::sqrt(static_cast<float>(layer.head_dim));
+    if (standard_rope) {
+        attention_scale *= rope_attention_scale(
+            *standard_rope, static_cast<int>(base_position));
+    }
     const uint32_t window_size = attention_window_size(attention);
     const uint32_t pattern_mode = dense_pattern_mode(attention);
     const uint32_t prefix_length = prefix_lm_length(attention);
