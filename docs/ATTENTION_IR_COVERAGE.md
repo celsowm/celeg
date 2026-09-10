@@ -33,7 +33,7 @@ The largest remaining semantic gaps are:
 3. completion of CUDA relative-position bias outside ordinary unidirectional standard attention, including bidirectional tables, latent execution, and MTP tensor ownership;
 4. Metal sparse patterns, latent attention, and general layout/paging ownership.
 
-Metal is no longer treated as unaudited. Its runtime has explicit full-causal and sliding-window paths over ordinary Q/K/V attention, ALiBi, relative-position bias, no-position attention, standard RoPE, ordinary three-axis interleaved M-RoPE in token/decode and batched prefill, all currently modeled Q/K normalization modes, current-value orthogonalization, ordinary sigmoid output gates, and shared-KV publisher/consumer execution. Unsupported pattern, latent, partial-width/scaled M-RoPE, and RoPE-scaling semantics are rejected before execution rather than silently approximated.
+Metal is no longer treated as unaudited. Its runtime has explicit full-causal and sliding-window paths over ordinary Q/K/V attention, ALiBi, relative-position bias, no-position attention, standard RoPE, ordinary three-axis interleaved and sectioned M-RoPE in token/decode and batched prefill, all currently modeled Q/K normalization modes, current-value orthogonalization, ordinary sigmoid output gates, and shared-KV publisher/consumer execution. Unsupported pattern, latent, partial-width/scaled M-RoPE, and RoPE-scaling semantics are rejected before execution rather than silently approximated.
 
 Packed HeadWise attention gates are not a Metal limitation: the IR now rejects that combination globally because the packed projection is head-dimension-wide while HeadWise semantics require one scalar per head. Packed gates therefore have a canonical representation only for OutputWise/ElementWise semantics.
 
@@ -117,7 +117,7 @@ CUDA relative-position bias is `△` because the ordinary unidirectional standar
 
 Metal ordinary KV storage remains `△` for contiguous/paged because the runtime uses an internal page-sized physical layout without yet exposing the same general page-table/layout capability surface as CUDA/CPU.
 
-Metal ordinary M-RoPE remains `△` because token/decode and batched prefill execute explicit three-axis positions, but the backend deliberately requires three interleaved axes, split-half pairing, full-width rotation, no RoPE scaling, and theta 10000. Unsupported forms are rejected before dispatch.
+Metal ordinary M-RoPE remains `△` because token/decode and batched prefill now execute both interleaved and sectioned three-axis layouts, but the backend still requires SplitHalf pairing, full-width rotation, no RoPE scaling, and theta 10000. Unsupported forms are rejected before dispatch.
 
 Metal shared KV is `✓` for the ordinary BF16 attention surface currently supported by Metal. Publisher/consumer execution works in token/decode and batched prefill, including current-value orthogonalization on consumers sourced directly from the publisher-owned value cache.
 
@@ -174,7 +174,7 @@ The runtime supports:
 - ALiBi and relative-position bias over both causal patterns;
 - no-position Q/K preparation;
 - full-width unscaled RoPE with `SplitHalf` and `AdjacentPairs` pairing;
-- ordinary three-axis interleaved M-RoPE with split-half pairing in token/decode and batched prefill;
+- ordinary three-axis interleaved and sectioned M-RoPE with SplitHalf pairing in token/decode and batched prefill;
 - ordinary private and shared BF16 KV state;
 - standard attention execution;
 - absent Q/K normalization;
@@ -201,11 +201,13 @@ Relative-position bias uses the same bucket contract as CPU: exact-distance buck
 
 Standard RoPE dispatches by `RopePairingKind`. Metal currently requires `rotary_fraction == 1.0` and `NoRopeScaling` and rejects other RoPE forms before execution.
 
-Ordinary M-RoPE uses the same interleaved axis assignment as the CPU oracle (`axis = pair % 3`). `PromptEmbedding::rope_positions` supplies one position triplet per prefill token and `next_rope_position` survives decode and snapshots.
+Ordinary M-RoPE now mirrors the canonical `rope_geometry.hpp` axis contract in MSL. Interleaved layout cycles axes with `pair % 3`; sectioned layout selects axes from the two declared section boundaries. `PromptEmbedding::rope_positions` supplies one position triplet per prefill token and `next_rope_position` survives decode and snapshots. Every M-RoPE dispatch carries the layout as an explicit `uint32_t` ABI scalar rather than relying on a host `bool` layout.
 
-Batched M-RoPE prefill stages one shared `[rows, 3]` position buffer and uses `celeg_qk_mrope_position_batch` after standalone Q/K normalization. Explicit prompt positions and synthesized `{position, position, position}` rows share the same batch path. This removes the former token-by-token M-RoPE prefill fallback without multiplying fused norm/position kernel combinations.
+Batched M-RoPE prefill stages one shared `[rows, 3]` position buffer and uses `celeg_qk_mrope_position_batch` after standalone Q/K normalization. Explicit prompt positions and synthesized `{position, position, position}` rows share the same batch path, and both interleaved and sectioned layouts use that same pipeline family. This avoids multiplying fused norm/position kernel combinations.
 
-The current Metal M-RoPE contract remains intentionally narrower than the IR: it requires full-width, unscaled, three-axis interleaved split-half M-RoPE with theta 10000. These restrictions are validated before device execution.
+The current Metal M-RoPE contract remains intentionally narrower than the IR: it requires full-width, unscaled, three-axis SplitHalf M-RoPE with theta 10000. Both interleaved and sectioned axis layouts are supported; partial width, scaling, other pairing modes, other axis counts, and other theta values remain rejected before device execution.
+
+Geometry is protected twice: `metal_rope_geometry_semantics_test` compares the MSL helper exactly against `rope_geometry.hpp`, while `metal_mrope_sectioned_test` exercises the production position-only, fused Q/K norm + KV publication, and batched M-RoPE kernels for both layouts and checks transformed Q/K plus KV-cache contents.
 
 ### Shared KV
 
@@ -250,7 +252,7 @@ Metal still rejects before device/pipeline execution:
 
 - bidirectional, Prefix-LM, BlockSparse, and DynamicSparse patterns;
 - partial-width or scaled standard RoPE;
-- M-RoPE forms outside full-width, unscaled, three-axis interleaved split-half theta-10000 execution;
+- M-RoPE forms outside full-width, unscaled, three-axis SplitHalf theta-10000 execution;
 - external-memory sources;
 - non-BF16 KV state semantics;
 - per-head value normalization before KV store;
