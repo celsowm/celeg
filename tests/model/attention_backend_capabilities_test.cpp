@@ -90,9 +90,19 @@ int main() {
     CELEG_TEST_CHECK(!metal_rejects([](auto& attention) {
         attention.position = valid_mrope();
     }));
+    CELEG_TEST_CHECK(!metal_rejects([](auto& attention) {
+        auto multi = valid_mrope();
+        multi.interleaved = false;
+        attention.position = multi;
+    }));
     CELEG_TEST_CHECK(metal_rejects([](auto& attention) {
         auto multi = valid_mrope();
         multi.sections = {1, 1, 1};
+        attention.position = multi;
+    }));
+    CELEG_TEST_CHECK(metal_rejects([](auto& attention) {
+        auto multi = valid_mrope();
+        multi.axes = 2;
         attention.position = multi;
     }));
     CELEG_TEST_CHECK(metal_rejects([](auto& attention) {
