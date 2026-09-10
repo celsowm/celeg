@@ -2,6 +2,11 @@ add_executable(neutral_headers_compile_test tests/architecture/neutral_headers_c
 target_include_directories(neutral_headers_compile_test PRIVATE include src)
 add_test(NAME neutral_headers_compile_test COMMAND neutral_headers_compile_test)
 
+add_executable(attention_backend_capability_matrix_test
+    tests/architecture/attention_backend_capability_matrix_test.cpp)
+target_include_directories(attention_backend_capability_matrix_test PRIVATE include src)
+add_test(NAME attention_backend_capability_matrix_test COMMAND attention_backend_capability_matrix_test)
+
 add_executable(fake_repository_backend_boundary_test
     tests/architecture/fake_repository_backend_boundary_test.cpp
     src/backend/cpu/compiler.cpp
