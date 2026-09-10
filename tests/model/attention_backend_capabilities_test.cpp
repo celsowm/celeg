@@ -208,11 +208,22 @@ int main() {
     CELEG_TEST_CHECK(metal_rejects([](auto& attention) {
         attention.pattern = celeg::SlidingWindowPattern{0};
     }));
+    CELEG_TEST_CHECK(!metal_rejects([](auto& attention) {
+        attention.pattern = celeg::BidirectionalPattern{};
+    }));
+    CELEG_TEST_CHECK(!metal_rejects([](auto& attention) {
+        attention.pattern = celeg::PrefixLmPattern{4};
+    }));
+    CELEG_TEST_CHECK(metal_rejects([](auto& attention) {
+        attention.pattern = celeg::PrefixLmPattern{0};
+    }));
     CELEG_TEST_CHECK(metal_rejects([](auto& attention) {
         attention.pattern = celeg::BidirectionalPattern{};
+        attention.bias = celeg::AlibiBiasSpec{{1.0f}};
     }));
     CELEG_TEST_CHECK(metal_rejects([](auto& attention) {
         attention.pattern = celeg::PrefixLmPattern{4};
+        attention.bias = celeg::RelativePositionBiasSpec{32, 128, false};
     }));
     CELEG_TEST_CHECK(metal_rejects([](auto& attention) {
         attention.pattern = celeg::BlockSparsePattern{16, 2, 1};
