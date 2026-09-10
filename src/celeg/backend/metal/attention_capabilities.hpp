@@ -37,6 +37,7 @@ inline void validate_metal_attention_capabilities(
         const auto* compiled = std::get_if<CompiledAttentionProgram>(&layer.mixer);
         if (!compiled) continue;
         const AttentionSpec& attention = compiled->semantics;
+        if (attention.value_norm) attention.value_norm->validate();
         if (const auto* sliding =
                 std::get_if<SlidingWindowPattern>(&attention.pattern);
             sliding && sliding->window <= 0) {
