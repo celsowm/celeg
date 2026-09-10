@@ -68,7 +68,18 @@ inline void validate_metal_attention_capabilities(
                 "Metal attention currently supports BF16 KV state only");
         }
         if (const RopePositionSpec* rope = attention.rope_position()) {
-            rope->validate(attention.head_dim);
+            if (!(rope->rotary_fraction > 0.0) ||
+                rope->rotary_fraction > 1.0 ||
+                !std::isfinite(rope->rotary_fraction)) {
+                throw std::invalid_argument(
+                    "Metal RoPE rotary fraction must be finite and in (0, 1]");
+            }
+            const int rotary_dimension =
+                rope->resolved_rotary_dimension(attention.head_dim);
+            if (rotary_dimension <= 0 || (rotary_dimension % 2) != 0) {
+                throw std::invalid_argument(
+                    "Metal RoPE rotary dimension must be positive and even");
+            }
             if (!std::holds_alternative<NoRopeScaling>(rope->scaling)) {
                 throw std::invalid_argument(
                     "Metal attention currently does not support RoPE scaling");
