@@ -24,7 +24,7 @@ int main() {
     const auto ffn_expansion = celeg::quant_matvec_kernel(
         MetalLinearStorage::Q5K, 8192, 1024, options, nil);
     assert(ffn_expansion.name == std::string_view{"celeg_matvec_q5k"});
-    assert(ffn_expansion.rows_per_group == 16);
+    assert(ffn_expansion.rows_per_threadgroup == 16);
     assert(ffn_expansion.threads == 128);
 
     assert(celeg::quant_tensor_matmul_available(
