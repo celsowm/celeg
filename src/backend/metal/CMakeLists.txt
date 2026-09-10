@@ -30,6 +30,7 @@ set(CELEG_METAL_SHADER_SOURCES
     src/backend/metal/kernels/probe.metal
     src/backend/metal/kernels/inference.metal
     src/backend/metal/kernels/inference/common.metal
+    src/backend/metal/kernels/inference/rope_geometry.metal
     src/backend/metal/kernels/inference/matvec_input.metal
     src/backend/metal/kernels/inference/matvec_dense.metal
     src/backend/metal/kernels/inference/matvec_q80.metal
@@ -103,6 +104,13 @@ file(READ "${_CELEG_METAL_RELATIVE_BIAS_SOURCE_FILE}"
     CELEG_METAL_RELATIVE_BIAS_SOURCE)
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
     "${_CELEG_METAL_RELATIVE_BIAS_SOURCE_FILE}")
+
+set(_CELEG_METAL_ROPE_GEOMETRY_SOURCE_FILE
+    "${CMAKE_CURRENT_LIST_DIR}/kernels/inference/rope_geometry.metal")
+file(READ "${_CELEG_METAL_ROPE_GEOMETRY_SOURCE_FILE}"
+    CELEG_METAL_ROPE_GEOMETRY_SOURCE)
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+    "${_CELEG_METAL_ROPE_GEOMETRY_SOURCE_FILE}")
 
 set(_CELEG_METAL_POSITION_SOURCE_FILE
     "${CMAKE_CURRENT_LIST_DIR}/kernels/inference/position.metal")
