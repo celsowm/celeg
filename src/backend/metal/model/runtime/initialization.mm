@@ -481,6 +481,15 @@ MetalModel::MetalModel(const std::string& path, int context,
                                                      static_cast<int>(index), spec.head_dim, true);
             layer.key_norm = (*impl_).load_vector(TensorRole::AttentionKeyNorm,
                                                   static_cast<int>(index), spec.head_dim, true);
+            if (spec.value_norm && attention.execution.has_key_value) {
+                const int value_norm_width =
+                    spec.value_norm->granularity == NormGranularity::PerHead
+                        ? spec.head_dim
+                        : spec.key_value_width();
+                layer.value_norm = (*impl_).load_vector(
+                    TensorRole::AttentionValueNorm, static_cast<int>(index),
+                    value_norm_width, true);
+            }
             const size_t page_count =
                 (static_cast<size_t>(context) + static_cast<size_t>(layer.page_tokens) - 1) /
                 static_cast<size_t>(layer.page_tokens);
