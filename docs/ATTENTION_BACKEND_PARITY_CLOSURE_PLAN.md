@@ -35,7 +35,7 @@ Out of scope for this closure plan:
 
 The executable capability declarations are the source of truth, not the documentation matrix.
 
-The table below records the current executable state after closure Stages 0-2:
+The table below records the current executable state after closure Stages 0-3:
 
 | Capability | CPU | CUDA | Metal | Closure action |
 | --- | --- | --- | --- | --- |
@@ -44,7 +44,7 @@ The table below records the current executable state after closure Stages 0-2:
 | Bidirectional | yes | yes, constrained | no | implement Metal |
 | Prefix-LM | yes | yes, constrained | no | implement Metal |
 | BlockSparse | yes | yes, constrained | no | implement Metal |
-| DynamicSparse | no | yes | no | implement CPU, then Metal |
+| DynamicSparse | yes, constrained | yes | no | implement Metal |
 | ALiBi | yes | yes | yes | regression only |
 | Relative-position bias | yes | yes, constrained | yes | differential coverage; do not overclaim CUDA combinations |
 | Standard RoPE | full IR surface on CPU | broad scaling surface | full-width unscaled only | expand Metal |
@@ -59,7 +59,7 @@ The table below records the current executable state after closure Stages 0-2:
 | Current-value orthogonalization | yes | yes | yes | regression only |
 | Output gates on representable ordinary surface | yes | yes | yes | regression only |
 
-Historical baseline correction: `docs/ATTENTION_IR_COVERAGE.md` previously marked CPU DynamicSparse as implemented even though `CpuModelCompiler` advertised `.dynamic_sparse = false`. Stage 0 reconciled the documentation with executable capability truth. CPU DynamicSparse remains unsupported until Stage 3 lands.
+Historical baseline correction: `docs/ATTENTION_IR_COVERAGE.md` previously marked CPU DynamicSparse as implemented even though `CpuModelCompiler` advertised `.dynamic_sparse = false`. Stage 0 reconciled the documentation with executable capability truth. Stage 3 subsequently added the scoped standard-attention ordinary-KV implementation and flipped the executable CPU capability only after production execution and tests existed.
 
 ## Design rules
 
@@ -165,24 +165,30 @@ Do not combine this with RoPE scaling or partial rotary width. Geometry must be 
 
 ## Stage 3 — Implement CPU DynamicSparse
 
-The canonical content-ranked selection contract already exists in `src/celeg/attention/dynamic_sparse_semantics.hpp`, and CUDA already consumes it.
+**Status: complete for the declared standard-attention ordinary-KV surface.** SIMD-specialized block scoring remains a Stage 13 performance follow-up; latent and INT8 state combinations are not implied by this status.
 
-### Work
+The canonical content-ranked selection contract in `src/celeg/attention/dynamic_sparse_semantics.hpp` remains the semantic owner shared with CUDA.
 
-1. Implement a simple scalar/reference-quality CPU DynamicSparse path first using the canonical top-K block selection rules.
-2. Preserve the CUDA contract: causal candidate blocks, block score = maximum scaled Q.K over visible tokens, deterministic lower-block tie break, top `max_selected_blocks` selection.
-3. Integrate with the existing CPU attention policy/runtime without pretending DynamicSparse is a position-only mask.
-4. Cover scalar prefill and decode first.
-5. Extend chunk/packed/ragged execution using the same semantic implementation or an explicit fallback.
-6. Only then set CPU `.dynamic_sparse = true`.
-7. Optimize block scoring with AVX2/AVX-512 only after differential correctness is locked.
+### Implemented result
+
+1. CPU now has a production DynamicSparse executor for standard attention over ordinary paged KV state.
+2. Selection preserves the canonical CUDA/host contract: only causal candidate blocks are considered; each block score is the maximum scaled Q·K over its visible tokens; top-K insertion is deterministic; ties prefer the lower block index.
+3. The implementation supports CPU FP32 and BF16 ordinary KV storage. CPU INT8 remains an independent Stage 8 gap.
+4. The selected blocks feed the normal attention computation using the CPU online-softmax semantics; DynamicSparse is not represented as or silently degraded to a position-only mask.
+5. Decode and paged prefill use the same semantic selection contract. The parallel paged entry point falls back explicitly to the correct semantic path rather than entering an incompatible dense/parallel fast path.
+6. `cpu_dynamic_sparse_attention_test` checks selected blocks and final output against a dense host oracle for FP32/BF16, negative scores, ties, partial/tail blocks, nontrivial later winners, decode, and paged prefill.
+7. Shared canonical DynamicSparse semantic tests cover the selection primitives used by CPU and CUDA; the dedicated CUDA semantic fixture remains separate from structural pattern visibility tests.
+8. Compiler/capability validation constrains CPU DynamicSparse to standard attention plus ordinary KV and rejects unsupported execution/state combinations before dispatch.
+9. CPU `.dynamic_sparse = true` and the coverage matrix were updated only after the production path and execution-level tests were present.
 
 ### Acceptance criteria
 
-- CPU agrees with the canonical host selection helper for selected blocks;
-- CPU output agrees with a dense masked oracle;
-- CPU-vs-CUDA differential fixtures cover negative scores, ties and nontrivial winning blocks;
-- chunk/packed APIs either execute DynamicSparse correctly or fall back explicitly without semantic drift.
+- CPU selected blocks agree with the canonical selection contract;
+- CPU output agrees with a dense masked oracle across FP32/BF16 fixtures;
+- negative scores, deterministic ties, partial blocks, and nontrivial winning blocks are covered;
+- decode and paged prefill execute the same content-ranked semantics;
+- parallel/chunked entry points either execute the feature correctly or fall back explicitly without semantic drift;
+- no latent, INT8, or SIMD fast-path support is inferred from the aggregate capability flag.
 
 ## Stage 4 — Add Metal dense non-causal pattern support
 
@@ -438,7 +444,7 @@ The order below minimizes architectural rework and gets useful parity quickly:
 0. capability truth / stale docs                    [complete]
 1. Metal sectioned MRoPE                            [complete]
 2. Metal value norm                                 [complete]
-3. CPU DynamicSparse
+3. CPU DynamicSparse                                [complete]
 4. Metal Bidirectional + Prefix-LM
 5. Metal partial/scaled RoPE
 6. Metal BlockSparse
@@ -453,9 +459,9 @@ The order below minimizes architectural rework and gets useful parity quickly:
 15. final capability/CI gate
 ```
 
-Some work can proceed in parallel after Stage 2:
+Some remaining work can proceed in parallel after Stage 3:
 
-- CPU DynamicSparse and CPU INT8 are independent of Metal shader work;
+- CPU INT8 is independent of Metal shader work;
 - Metal RoPE scaling is mostly independent of Metal sparse execution;
 - the differential harness can grow incrementally with every stage rather than waiting until Stage 14.
 
