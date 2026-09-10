@@ -83,7 +83,7 @@ constexpr AttentionBackendCapabilities kExpectedMetal{
     .standard_execution = true,
     .latent_execution = false,
     .factorized_latent_execution = false,
-    .value_norm = false,
+    .value_norm = true,
 };
 
 static_assert(sizeof(AttentionBackendCapabilities) == 16 * sizeof(bool),
