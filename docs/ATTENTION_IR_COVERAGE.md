@@ -33,7 +33,7 @@ The largest remaining semantic gaps are:
 3. completion of CUDA relative-position bias outside ordinary unidirectional standard attention, including bidirectional tables, latent execution, and MTP tensor ownership;
 4. Metal sparse patterns, latent attention, and general layout/paging ownership.
 
-Metal is no longer treated as unaudited. Its runtime has explicit full-causal and sliding-window paths over ordinary Q/K/V attention, ALiBi, relative-position bias, no-position attention, standard RoPE, ordinary three-axis interleaved and sectioned M-RoPE in token/decode and batched prefill, all currently modeled Q/K normalization modes, current-value orthogonalization, ordinary sigmoid output gates, and shared-KV publisher/consumer execution. Unsupported pattern, latent, partial-width/scaled M-RoPE, and RoPE-scaling semantics are rejected before execution rather than silently approximated.
+Metal is no longer treated as unaudited. Its runtime has explicit full-causal and sliding-window paths over ordinary Q/K/V attention, ALiBi, relative-position bias, no-position attention, standard RoPE, ordinary three-axis interleaved and sectioned M-RoPE in token/decode and batched prefill, all currently modeled Q/K normalization modes, value RMSNorm before KV publication, current-value orthogonalization, ordinary sigmoid output gates, and shared-KV publisher/consumer execution. Unsupported pattern, latent, partial-width/scaled M-RoPE, and RoPE-scaling semantics are rejected before execution rather than silently approximated.
 
 Packed HeadWise attention gates are not a Metal limitation: the IR now rejects that combination globally because the packed projection is head-dimension-wide while HeadWise semantics require one scalar per head. Packed gates therefore have a canonical representation only for OutputWise/ElementWise semantics.
 
@@ -108,7 +108,7 @@ The table is deliberately conservative. `?` means prove it rather than probably 
 | Projected latent attention | ✓ | ✓ | ✓ | ✗ |
 | Factorized latent attention | ✓ | ✓ | ✓ | ✗ |
 | Q/K normalization | ✓ | ✓ | ✓ | ✓ |
-| Value RMSNorm before KV store | ✓ | ✓ | ✓ | ✗ |
+| Value RMSNorm before KV store | ✓ | ✓ | ✓ | ✓ |
 | Output gate | ✓ | △ | ✓ | ✓ |
 | Current-value orthogonalization | ✓ | ✓ | ✓ | ✓ |
 | External-memory / cross-attention | IR only | △ | ✗ | ✗ |
@@ -182,6 +182,7 @@ The runtime supports:
 - whole-vector Q/K normalization;
 - mixed Q/K normalization granularity/presence;
 - weighted and weightless Q/K normalization;
+- per-head and whole-vector value RMSNorm before KV publication, with weighted and weightless semantics;
 - current-value orthogonalization before the attention output projection for private and shared KV attention;
 - sigmoid attention output gates in token/decode and batched-prefill paths.
 
@@ -236,6 +237,14 @@ Per-head normalization has standalone token and batch kernels for mixed, M-RoPE,
 
 This preserves the fused hot path for the common ordinary per-head/per-head case without conflating absence, granularity, weightless semantics, M-RoPE position handling, or shared-KV ownership.
 
+### Value normalization
+
+Value RMSNorm is applied after the V projection and before every ordinary KV publication path. Per-head value normalization reuses `celeg_head_rmsnorm_inplace` / `celeg_head_rmsnorm_batch_inplace`; whole-vector value normalization reuses the existing Metal RMSNorm kernels. No Q/K-specific shader ABI is widened for this feature.
+
+`CompiledAttentionExecution::has_key_value` is also the value-normalization ownership boundary. Private attention and shared-KV publishers normalize their locally projected V exactly once; shared-KV consumers neither project nor normalize V and read the publisher-owned normalized cache. Weighted `Scale`, `OnePlusScale`, and weightless `None` semantics use the existing weight-plan/loading contract. The loader validates the resolved value-norm tensor width before device execution, and the Metal capability validator rejects malformed epsilon before dispatch.
+
+`metal_value_norm_test` compares token and batched Metal normalization against `cpu_qk_norm_only` for both `PerHead` and `WholeVector`, then publishes through the ordinary production KV-store kernels and verifies the cached value. The fixture also constructs a numerically distinguishable second normalization so accidental double normalization cannot satisfy the expected single-normalization result.
+
 ### Output gate
 
 Unpacked gates use the resolved `TensorRole::AttentionGate` projection and support OutputWise, ElementWise, and HeadWise granularity. Packed gates preserve the checkpoint convention where each query head is stored as `[query_head, gate_head]`; Q is deinterleaved before Q/K normalization or position handling, while gate values stay in the packed staging buffer until they are applied.
@@ -255,7 +264,6 @@ Metal still rejects before device/pipeline execution:
 - M-RoPE forms outside full-width, unscaled, three-axis SplitHalf theta-10000 execution;
 - external-memory sources;
 - non-BF16 KV state semantics;
-- per-head value normalization before KV store;
 - latent and factorized-latent execution, including latent M-RoPE.
 
 Packed HeadWise gates are rejected earlier by the backend-neutral attention representation validator and therefore are not a Metal-specific rejection.
