@@ -16,11 +16,20 @@ void causal_and_sliding() {
     CELEG_TEST_CHECK(!semantics::sliding_window_visible(8, 9, 4));
 }
 
-void prefix_semantics() {
+void dense_noncausal_semantics() {
+    CELEG_TEST_CHECK(semantics::bidirectional_visible(0, 7));
+    CELEG_TEST_CHECK(semantics::bidirectional_visible(7, 0));
+    CELEG_TEST_CHECK(!semantics::bidirectional_visible(-1, 0));
+    CELEG_TEST_CHECK(!semantics::bidirectional_visible(0, -1));
+
     CELEG_TEST_CHECK(semantics::prefix_lm_visible(2, 5, 6));
     CELEG_TEST_CHECK(!semantics::prefix_lm_visible(2, 6, 6));
     CELEG_TEST_CHECK(semantics::prefix_lm_visible(8, 6, 6));
     CELEG_TEST_CHECK(!semantics::prefix_lm_visible(8, 9, 6));
+    CELEG_TEST_CHECK(semantics::prefix_lm_visible_sequence_length(2, 10, 6) == 6);
+    CELEG_TEST_CHECK(semantics::prefix_lm_visible_sequence_length(2, 4, 6) == 4);
+    CELEG_TEST_CHECK(semantics::prefix_lm_visible_sequence_length(8, 10, 6) == 9);
+    CELEG_TEST_CHECK(semantics::prefix_lm_visible_sequence_length(8, 7, 6) == 7);
     CELEG_TEST_CHECK(semantics::prefix_lm_may_read_future(2, 10, 6));
     CELEG_TEST_CHECK(!semantics::prefix_lm_may_read_future(8, 10, 6));
 }
@@ -49,6 +58,22 @@ void cpu_matches_canonical() {
     CELEG_TEST_CHECK(sliding.first_candidate(8) ==
         semantics::sliding_window_first_candidate(8, 4));
 
+    const celeg::CpuAttentionPattern bidirectional = celeg::CpuAttentionPattern::lower(
+        celeg::BidirectionalPattern{});
+    for (int key = 0; key < 12; ++key) {
+        CELEG_TEST_CHECK(bidirectional.allows(3, key) ==
+            semantics::bidirectional_visible(3, key));
+    }
+
+    const celeg::CpuAttentionPattern prefix = celeg::CpuAttentionPattern::lower(
+        celeg::PrefixLmPattern{6});
+    for (int key = 0; key < 12; ++key) {
+        CELEG_TEST_CHECK(prefix.allows(2, key) ==
+            semantics::prefix_lm_visible(2, key, 6));
+        CELEG_TEST_CHECK(prefix.allows(8, key) ==
+            semantics::prefix_lm_visible(8, key, 6));
+    }
+
     const celeg::CpuAttentionPattern block = celeg::CpuAttentionPattern::lower(
         celeg::BlockSparsePattern{16, 2, 1});
     for (int key = 0; key < 80; ++key) {
@@ -66,7 +91,7 @@ void cpu_matches_canonical() {
 
 int main() {
     causal_and_sliding();
-    prefix_semantics();
+    dense_noncausal_semantics();
     sparse_semantics();
     cpu_matches_canonical();
     return 0;
