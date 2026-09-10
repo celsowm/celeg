@@ -71,8 +71,8 @@ kernel void celeg_qk_norm_rope_store_kv_split(
     if (has_query) {
         const size_t base = static_cast<size_t>(head) * head_dim;
         for (uint pair = lane; pair < pairs; pair += 32u) {
-            const float frequency = pow(theta, -2.0f * static_cast<float>(pair) /
-                                               static_cast<float>(head_dim));
+            const float frequency =
+                celeg_rope_unscaled_frequency(theta, pair, head_dim);
             const float angle = static_cast<float>(position) * frequency;
             const float c = cos(angle);
             const float s = sin(angle);
@@ -87,8 +87,8 @@ kernel void celeg_qk_norm_rope_store_kv_split(
     if (has_key) {
         const size_t base = static_cast<size_t>(head) * head_dim;
         for (uint pair = lane; pair < pairs; pair += 32u) {
-            const float frequency = pow(theta, -2.0f * static_cast<float>(pair) /
-                                               static_cast<float>(head_dim));
+            const float frequency =
+                celeg_rope_unscaled_frequency(theta, pair, head_dim);
             const float angle = static_cast<float>(position) * frequency;
             const float c = cos(angle);
             const float s = sin(angle);
@@ -124,8 +124,8 @@ inline void celeg_qk_norm_rope_batch_split_head(
     for (uint d = 0; d < head_dim; ++d) sum += data[base + d] * data[base + d];
     const float inverse = rsqrt(sum / static_cast<float>(head_dim) + epsilon);
     for (uint pair = 0; pair < pairs; ++pair) {
-        const float frequency = pow(theta, -2.0f * static_cast<float>(pair) /
-                                          static_cast<float>(head_dim));
+        const float frequency =
+            celeg_rope_unscaled_frequency(theta, pair, head_dim);
         const float angle = static_cast<float>(position) * frequency;
         const float c = cos(angle);
         const float s = sin(angle);
