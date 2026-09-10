@@ -18,6 +18,7 @@ if(TARGET celeg_metal_backend)
         metal_qk_store_test
         metal_quantization_test
         metal_recurrent_test
+        metal_rope_geometry_semantics_test
         metal_tensor_test)
         set(test_source tests/metal/${test_name}.mm)
         if(test_name STREQUAL "metal_linear_binding_test")
