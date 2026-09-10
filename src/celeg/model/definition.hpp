@@ -105,6 +105,10 @@ struct RopePositionSpec {
     RopeScalingSpec scaling;
     RopePairingKind pairing = RopePairingKind::SplitHalf;
 
+    int resolved_rotary_dimension(int head_dimension) const {
+        return static_cast<int>(static_cast<float>(head_dimension) * rotary_fraction);
+    }
+
     void validate(int head_dimension) const;
 };
 
