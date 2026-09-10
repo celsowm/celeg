@@ -7,11 +7,15 @@ inline void celeg_apply_mrope_batch_head(
     size_t base,
     uint head_dim,
     device const int* position,
+    uint section0,
+    uint section1,
+    uint interleaved,
     float theta,
     float scale) {
     const uint pairs = head_dim / 2;
     for (uint pair = 0; pair < pairs; ++pair) {
-        const uint axis = pair % 3;
+        const uint axis = celeg_mrope_axis_for_pair(
+            pair, section0, section1, interleaved);
         const float frequency = pow(
             theta,
             -2.0f * static_cast<float>(pair) /
@@ -39,6 +43,7 @@ kernel void celeg_qk_mrope_position_batch(
     constant uint* sections [[buffer(7)]],
     constant float& theta [[buffer(8)]],
     constant float& query_scale [[buffer(9)]],
+    constant uint& interleaved [[buffer(10)]],
     uint index [[thread_position_in_grid]]) {
     const uint head_count = max(query_heads, key_heads);
     const uint token = index / head_count;
@@ -52,11 +57,14 @@ kernel void celeg_qk_mrope_position_batch(
     if (head < query_heads) {
         const size_t base = (static_cast<size_t>(token) * query_heads + head) * head_dim;
         celeg_apply_mrope_batch_head(
-            query, base, head_dim, position, theta, query_scale);
+            query, base, head_dim, position,
+            sections[0], sections[1], interleaved, theta, query_scale);
     }
 
     if (head < key_heads) {
         const size_t base = (static_cast<size_t>(token) * key_heads + head) * head_dim;
-        celeg_apply_mrope_batch_head(key, base, head_dim, position, theta, 1.0f);
+        celeg_apply_mrope_batch_head(
+            key, base, head_dim, position,
+            sections[0], sections[1], interleaved, theta, 1.0f);
     }
 }
