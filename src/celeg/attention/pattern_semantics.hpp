@@ -12,10 +12,19 @@ CELEG_PATTERN_SEMANTICS_INLINE int pattern_max_int(int a, int b) {
     return a > b ? a : b;
 }
 
+CELEG_PATTERN_SEMANTICS_INLINE int pattern_min_int(int a, int b) {
+    return a < b ? a : b;
+}
+
 CELEG_PATTERN_SEMANTICS_INLINE bool causal_visible(
     int query_position, int key_position) {
     return query_position >= 0 && key_position >= 0 &&
            key_position <= query_position;
+}
+
+CELEG_PATTERN_SEMANTICS_INLINE bool bidirectional_visible(
+    int query_position, int key_position) {
+    return query_position >= 0 && key_position >= 0;
 }
 
 CELEG_PATTERN_SEMANTICS_INLINE int sliding_window_first_candidate(
@@ -35,6 +44,16 @@ CELEG_PATTERN_SEMANTICS_INLINE bool prefix_lm_visible(
     return query_position < prefix_length
         ? key_position < prefix_length
         : key_position <= query_position;
+}
+
+CELEG_PATTERN_SEMANTICS_INLINE int prefix_lm_visible_sequence_length(
+    int query_position, int available_sequence_length, int prefix_length) {
+    if (query_position < 0 || available_sequence_length <= 0) return 0;
+    const int available = pattern_max_int(0, available_sequence_length);
+    if (query_position < prefix_length) {
+        return pattern_min_int(available, pattern_max_int(0, prefix_length));
+    }
+    return pattern_min_int(available, query_position + 1);
 }
 
 CELEG_PATTERN_SEMANTICS_INLINE bool block_sparse_visible(
