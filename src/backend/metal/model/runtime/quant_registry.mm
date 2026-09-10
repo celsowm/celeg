@@ -96,7 +96,11 @@ MetalMatvecKernel quant_matvec_kernel(
             return {"celeg_matvec_bf16", 2, 128, 8};
         case S::Q4_0: return {"celeg_matvec_q4_0", 16, 128, 0};
         case S::Q4K: return {"celeg_matvec_q4k", 4, 64, 0};
-        case S::Q5K: return ffn_expansion ? MetalMatvecKernel{"celeg_matvec_q5k_rows8", 32, 128, 0} : MetalMatvecKernel{"celeg_matvec_q5k", 16, 128, 0};
+        case S::Q5K:
+            // The rows8 specialization remains compiled for differential work, but it is
+            // quarantined from production selection until it has independent Q5_K parity
+            // coverage. The default kernel already has a host-reference integration test.
+            return {"celeg_matvec_q5k", 16, 128, 0};
         case S::Q6K: return MetalMatvecKernel{"celeg_matvec_q6k_llama", 4, 64, 0};
         case S::Q8_0: return m5_fast ? MetalMatvecKernel{"celeg_matvec_q8_0_m5", 2, 128, 8} : ffn_expansion || ffn_contraction ? MetalMatvecKernel{"celeg_matvec_q8_0_rows8", 32, 128, 0} : MetalMatvecKernel{"celeg_matvec_q8_0", 16, 128, 0};
     }
@@ -148,7 +152,11 @@ bool quant_fast_tensor_matmul_available(
         case S::BFloat16: return cache.tensor_fast_bf16;
         case S::Q4_0: return cache.tensor_fast_q4_0;
         case S::Q4K: return cache.tensor_fast_q4k;
-        case S::Q5K: return cache.tensor_fast_q5k;
+        case S::Q5K:
+            // Keep the relaxed Q5_K TensorOps library built, but do not advertise it
+            // to production dispatch until the specialized path has its own numeric
+            // differential fixture. Strict Q5_K remains available through tensor_matmul.
+            return false;
         case S::Q6K: return cache.tensor_fast_q6k;
         case S::Q8_0: return cache.tensor_fast_q8_0;
         case S::Float32: return false;
