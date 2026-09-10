@@ -145,9 +145,19 @@ int main() {
         multi.base.theta = 500000.0;
         attention.position = multi;
     }));
-    CELEG_TEST_CHECK(metal_rejects([](auto& attention) {
+    CELEG_TEST_CHECK(!metal_rejects([](auto& attention) {
         auto& rope = std::get<celeg::RopePositionSpec>(attention.position);
         rope.rotary_fraction = 0.5;
+        rope.pairing = celeg::RopePairingKind::SplitHalf;
+    }));
+    CELEG_TEST_CHECK(!metal_rejects([](auto& attention) {
+        auto& rope = std::get<celeg::RopePositionSpec>(attention.position);
+        rope.rotary_fraction = 0.5;
+        rope.pairing = celeg::RopePairingKind::AdjacentPairs;
+    }));
+    CELEG_TEST_CHECK(metal_rejects([](auto& attention) {
+        auto& rope = std::get<celeg::RopePositionSpec>(attention.position);
+        rope.rotary_fraction = 0.375;
     }));
     CELEG_TEST_CHECK(metal_rejects([](auto& attention) {
         auto& rope = std::get<celeg::RopePositionSpec>(attention.position);
