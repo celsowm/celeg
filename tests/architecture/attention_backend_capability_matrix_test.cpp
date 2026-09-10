@@ -68,8 +68,8 @@ constexpr AttentionBackendCapabilities kExpectedCuda{
 constexpr AttentionBackendCapabilities kExpectedMetal{
     .full_causal = true,
     .sliding_window = true,
-    .bidirectional = false,
-    .prefix_lm = false,
+    .bidirectional = true,
+    .prefix_lm = true,
     .block_sparse = false,
     .dynamic_sparse = false,
     .external_memory = false,
