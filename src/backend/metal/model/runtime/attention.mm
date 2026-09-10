@@ -70,13 +70,29 @@ bool split_half_rope(const CompiledAttentionProgram& attention) {
     return rope && rope->pairing == RopePairingKind::SplitHalf;
 }
 
+bool standard_rope_is_partial(const CompiledAttentionProgram& attention) {
+    const RopePositionSpec* rope = attention.semantics.rope_position();
+    return rope &&
+        rope->resolved_rotary_dimension(attention.semantics.head_dim) !=
+            attention.semantics.head_dim;
+}
+
 bool per_head_norm(const std::optional<NormSpec>& norm) {
     return norm && norm->granularity == NormGranularity::PerHead;
 }
 
 uint32_t standard_position_mode(const CompiledAttentionProgram& attention) {
     if (no_position_encoding(attention)) return 0;
-    return split_half_rope(attention) ? 1u : 2u;
+    const RopePositionSpec* rope = attention.semantics.rope_position();
+    if (!rope) return 0;
+    const uint32_t pairing_mode =
+        rope->pairing == RopePairingKind::SplitHalf ? 1u : 2u;
+    const uint32_t rotary_dim = static_cast<uint32_t>(
+        rope->resolved_rotary_dimension(attention.semantics.head_dim));
+    if (rotary_dim == static_cast<uint32_t>(attention.semantics.head_dim)) {
+        return pairing_mode;
+    }
+    return pairing_mode | ((rotary_dim + 1u) << 2u);
 }
 
 template <typename Layer>
@@ -210,7 +226,7 @@ void MetalModel::Impl::encode_attention(
                   key_heads, key_width);
     }
 
-    const bool fused_per_head = owns_kv &&
+    const bool fused_per_head = owns_kv && !standard_rope_is_partial(attention) &&
         per_head_norm(attention.semantics.query_norm) &&
         per_head_norm(attention.semantics.key_norm);
 
@@ -479,6 +495,7 @@ void MetalModel::Impl::encode_attention_batch(
     }
 
     const bool fused_per_head = owns_kv && !multi &&
+        !standard_rope_is_partial(attention) &&
         per_head_norm(attention.semantics.query_norm) &&
         per_head_norm(attention.semantics.key_norm);
     const bool qk_publishes_kv =
