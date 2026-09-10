@@ -41,6 +41,14 @@ const celeg::TensorRequest& request_for(const celeg::ResolvedModel& model,
     throw std::runtime_error("attention norm request missing");
 }
 
+celeg::AttentionSpec ordinary_attention() {
+    celeg::AttentionSpec attention;
+    attention.query_heads = 2;
+    attention.key_value_heads = 2;
+    attention.head_dim = 4;
+    return attention;
+}
+
 }
 
 int main() {
@@ -62,20 +70,39 @@ int main() {
     weightless_external.feed_forward = std::monostate{};
     model.graph.layers.push_back(std::move(weightless_external));
 
-    celeg::LayerSpec weightless_ordinary;
-    celeg::AttentionSpec ordinary;
-    ordinary.query_heads = 2;
-    ordinary.key_value_heads = 2;
-    ordinary.head_dim = 4;
+    celeg::LayerSpec ordinary_norms;
+    celeg::AttentionSpec ordinary = ordinary_attention();
     ordinary.query_norm = celeg::NormSpec{
         1.0e-5f, celeg::NormWeightKind::None,
         celeg::NormGranularity::PerHead};
     ordinary.key_norm = celeg::NormSpec{
         1.0e-5f, celeg::NormWeightKind::None,
         celeg::NormGranularity::WholeVector};
-    weightless_ordinary.mixer = ordinary;
-    weightless_ordinary.feed_forward = std::monostate{};
-    model.graph.layers.push_back(std::move(weightless_ordinary));
+    ordinary.value_norm = celeg::NormSpec{
+        2.0e-5f, celeg::NormWeightKind::OnePlusScale,
+        celeg::NormGranularity::WholeVector};
+    ordinary_norms.mixer = ordinary;
+    ordinary_norms.feed_forward = std::monostate{};
+    model.graph.layers.push_back(std::move(ordinary_norms));
+
+    celeg::LayerSpec weightless_value;
+    celeg::AttentionSpec weightless = ordinary_attention();
+    weightless.value_norm = celeg::NormSpec{
+        3.0e-5f, celeg::NormWeightKind::None,
+        celeg::NormGranularity::PerHead};
+    weightless_value.mixer = weightless;
+    weightless_value.feed_forward = std::monostate{};
+    model.graph.layers.push_back(std::move(weightless_value));
+
+    celeg::LayerSpec shared_consumer;
+    celeg::AttentionSpec consumer = ordinary_attention();
+    consumer.kv_sharing = celeg::SharedKvConsumer{7};
+    consumer.value_norm = celeg::NormSpec{
+        4.0e-5f, celeg::NormWeightKind::Scale,
+        celeg::NormGranularity::PerHead};
+    shared_consumer.mixer = consumer;
+    shared_consumer.feed_forward = std::monostate{};
+    model.graph.layers.push_back(std::move(shared_consumer));
 
     model.topology = celeg::compose_runtime_topology(
         celeg::CheckpointDimensions{32, 0, {}, {}, 0}, model.graph);
@@ -88,6 +115,7 @@ int main() {
     CELEG_TEST_CHECK(!has_request(model, celeg::TensorRole::AttentionKey, 0));
     CELEG_TEST_CHECK(!has_request(model, celeg::TensorRole::AttentionValue, 0));
     CELEG_TEST_CHECK(!has_request(model, celeg::TensorRole::AttentionKeyNorm, 0));
+    CELEG_TEST_CHECK(!has_request(model, celeg::TensorRole::AttentionValueNorm, 0));
     const auto& weighted = request_for(
         model, celeg::TensorRole::AttentionQueryNorm, 0);
     CELEG_TEST_CHECK(weighted.expected_shape == std::vector<int64_t>{8});
@@ -99,6 +127,19 @@ int main() {
         model, celeg::TensorRole::AttentionQueryNorm, 2));
     CELEG_TEST_CHECK(!has_request(
         model, celeg::TensorRole::AttentionKeyNorm, 2));
+
+    const auto& value_norm = request_for(
+        model, celeg::TensorRole::AttentionValueNorm, 2);
+    CELEG_TEST_CHECK(value_norm.expected_shape == std::vector<int64_t>{8});
+    CELEG_TEST_CHECK(
+        value_norm.norm_weight_kind == celeg::NormWeightKind::OnePlusScale);
+
+    CELEG_TEST_CHECK(!has_request(
+        model, celeg::TensorRole::AttentionValueNorm, 3));
+    CELEG_TEST_CHECK(!has_request(model, celeg::TensorRole::AttentionKey, 4));
+    CELEG_TEST_CHECK(!has_request(model, celeg::TensorRole::AttentionValue, 4));
+    CELEG_TEST_CHECK(!has_request(
+        model, celeg::TensorRole::AttentionValueNorm, 4));
 
     return 0;
 }
