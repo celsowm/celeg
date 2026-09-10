@@ -20,7 +20,8 @@ if(TARGET celeg_metal_backend)
         metal_quantization_test
         metal_recurrent_test
         metal_rope_geometry_semantics_test
-        metal_tensor_test)
+        metal_tensor_test
+        metal_value_norm_test)
         set(test_source tests/metal/${test_name}.mm)
         if(test_name STREQUAL "metal_linear_binding_test")
             set(test_source tests/metal/${test_name}.cpp)
@@ -29,7 +30,8 @@ if(TARGET celeg_metal_backend)
         target_include_directories(${test_name} PRIVATE
             include src tests src/backend/metal "${CMAKE_BINARY_DIR}/generated")
         target_link_libraries(${test_name} PRIVATE celeg_base celeg_metal_backend)
-        if(test_name STREQUAL "metal_mrope_sectioned_test")
+        if(test_name STREQUAL "metal_mrope_sectioned_test" OR
+           test_name STREQUAL "metal_value_norm_test")
             target_link_libraries(${test_name} PRIVATE celeg_cpu_backend)
         endif()
         if(CELEG_RUN_METAL_TESTS AND
