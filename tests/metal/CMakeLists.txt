@@ -42,6 +42,10 @@ if(TARGET celeg_metal_backend)
            test_name STREQUAL "metal_value_norm_test")
             target_link_libraries(${test_name} PRIVATE celeg_cpu_backend)
         endif()
+        if(test_name STREQUAL "metal_q5k_dispatch_test" AND
+           TARGET celeg_serve_metal)
+            target_link_libraries(${test_name} PRIVATE celeg_serve_metal)
+        endif()
         if(CELEG_RUN_METAL_TESTS AND
            NOT test_name STREQUAL "metal_inference_test" AND
            NOT test_name STREQUAL "metal_quantization_test")
