@@ -17,6 +17,7 @@ struct Args {
     std::string chat_template_file;
     int context = 4096;
     int max_new_tokens = 4;
+    bool require_output = false;
 };
 
 Args parse_args(int argc, char** argv) {
@@ -33,9 +34,11 @@ Args parse_args(int argc, char** argv) {
         else if (key == "--chat-template-file") args.chat_template_file = value();
         else if (key == "--context") args.context = std::stoi(value());
         else if (key == "--max-new-tokens") args.max_new_tokens = std::stoi(value());
+        else if (key == "--require-output") args.require_output = true;
         else if (key == "--help") {
             std::cout << "celeg-metal-run [--model DIR | --repo REPO_ID] --prompt TEXT "
-                         "[--chat-template-file PATH] [--context N] [--max-new-tokens N]\n";
+                         "[--chat-template-file PATH] [--context N] [--max-new-tokens N] "
+                         "[--require-output]\n";
             std::exit(0);
         } else if (!key.empty() && key.rfind("--", 0) != 0 &&
                    args.model.empty() && args.repo.empty()) {
@@ -77,10 +80,12 @@ int main(int argc, char** argv) {
         const auto id = service.submit(std::move(request));
         service.start();
         std::string pending;
+        size_t generated_tokens = 0;
         for (;;) {
             service.step();
             const auto event = service.poll(id, 1);
             for (const int32_t token : event.tokens) {
+                ++generated_tokens;
                 pending += prepared.tokenizer->decode({token}, true);
                 const size_t safe_size = celeg::text::complete_utf8_prefix(pending);
                 std::cout << pending.substr(0, safe_size) << std::flush;
@@ -90,6 +95,9 @@ int main(int argc, char** argv) {
         }
         service.stop();
         std::cout << pending << '\n';
+        if (args.require_output && generated_tokens == 0) {
+            throw std::runtime_error("generation produced no output tokens");
+        }
         return 0;
     } catch (const std::exception& error) {
         std::cerr << "error: " << error.what() << '\n';
