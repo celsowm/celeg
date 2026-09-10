@@ -6,6 +6,7 @@
  * includes here also lets Metal tooling inspect the complete shader locally.
  */
 #include "inference/common.metal"
+#include "inference/rope_geometry.metal"
 #include "inference/dense_matvec_rows.metal"
 #include "inference/state.metal"
 #include "inference/projection.metal"
