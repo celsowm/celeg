@@ -64,10 +64,10 @@ inline void validate_metal_attention_capabilities(
             }
         }
         if (const MultiAxisRopeSpec* multi = attention.multi_axis_position()) {
-            if (!multi->interleaved || multi->axes != 3 ||
+            if (multi->axes != 3 ||
                 multi->base.pairing != RopePairingKind::SplitHalf) {
                 throw std::invalid_argument(
-                    "Metal M-RoPE requires three interleaved axes with split-half pairing");
+                    "Metal M-RoPE requires three axes with split-half pairing");
             }
             if (std::abs(multi->base.rotary_fraction - 1.0) > 1.0e-12 ||
                 !std::holds_alternative<NoRopeScaling>(multi->base.scaling)) {
