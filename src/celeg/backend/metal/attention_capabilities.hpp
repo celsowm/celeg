@@ -80,10 +80,6 @@ inline void validate_metal_attention_capabilities(
                 throw std::invalid_argument(
                     "Metal RoPE rotary dimension must be positive and even");
             }
-            if (!std::holds_alternative<NoRopeScaling>(rope->scaling)) {
-                throw std::invalid_argument(
-                    "Metal attention currently does not support RoPE scaling");
-            }
         }
         if (const MultiAxisRopeSpec* multi = attention.multi_axis_position()) {
             if (multi->axes != 3 ||
