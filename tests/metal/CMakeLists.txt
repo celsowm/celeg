@@ -10,6 +10,8 @@ if(TARGET celeg_metal_backend)
         metal_attention_online_semantics_test
         metal_attention_pattern_semantics_test
         metal_attention_gate_test
+        metal_dense_noncausal_attention_test
+        metal_dense_pattern_semantics_test
         metal_device_test
         metal_inference_test
         metal_kv_store_test
