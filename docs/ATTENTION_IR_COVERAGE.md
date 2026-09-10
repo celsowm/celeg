@@ -83,7 +83,7 @@ Packed HeadWise attention gates are not a Metal limitation: the IR now rejects t
 
 ## Backend coverage matrix
 
-The table is deliberately conservative. `?` means prove it rather than probably absent.
+The table is deliberately conservative. `?` means prove it rather than probably absent. Executable backend capability declarations are the source of truth; this Markdown table summarizes that tested truth and must not override it.
 
 | Capability | Reference/model | CPU | CUDA | Metal |
 |---|---:|---:|---:|---:|
@@ -92,7 +92,7 @@ The table is deliberately conservative. `?` means prove it rather than probably 
 | Bidirectional | ✓ | ✓ | △ | ✗ |
 | Prefix-LM | ✓ | ✓ | △ | ✗ |
 | BlockSparse | ✓ | ✓ | △ | ✗ |
-| DynamicSparse | ✓ | ✓ | △ | ✗ |
+| DynamicSparse | ✓ | ✗ | △ | ✗ |
 | ALiBi | ✓ | ✓ | ✓ | ✓ |
 | Relative-position bias | ✓ | ✓ | △ | ✓ |
 | No position encoding | ✓ | ✓ | ✓ | ✓ |
@@ -108,6 +108,7 @@ The table is deliberately conservative. `?` means prove it rather than probably 
 | Projected latent attention | ✓ | ✓ | ✓ | ✗ |
 | Factorized latent attention | ✓ | ✓ | ✓ | ✗ |
 | Q/K normalization | ✓ | ✓ | ✓ | ✓ |
+| Value RMSNorm before KV store | ✓ | ✓ | ✓ | ✗ |
 | Output gate | ✓ | △ | ✓ | ✓ |
 | Current-value orthogonalization | ✓ | ✓ | ✓ | ✓ |
 | External-memory / cross-attention | IR only | △ | ✗ | ✗ |
@@ -145,7 +146,7 @@ Therefore CUDA bidirectional, Prefix-LM, BlockSparse, DynamicSparse, and relativ
 
 ## CPU evidence already present
 
-The CPU attention policy has explicit semantics for all six pattern variants in `CpuAttentionPattern::allows()`, including future-read semantics for bidirectional and Prefix-LM.
+The CPU attention policy has explicit visibility semantics for all six pattern variants in `CpuAttentionPattern::allows()`, including future-read semantics for bidirectional and Prefix-LM. That policy-level representation does not imply executable DynamicSparse support: `cpu_attention_capabilities()` currently declares `dynamic_sparse = false`, so the compiler rejects it before execution.
 
 CPU lowers and scores ALiBi and `RelativePositionBiasSpec`, including bidirectional relative buckets. Independent query-only, key-only, and mixed Q/K normalization are handled without assuming that both norms exist.
 
@@ -252,6 +253,7 @@ Metal still rejects before device/pipeline execution:
 - M-RoPE forms outside full-width, unscaled, three-axis interleaved split-half theta-10000 execution;
 - external-memory sources;
 - non-BF16 KV state semantics;
+- per-head value normalization before KV store;
 - latent and factorized-latent execution, including latent M-RoPE.
 
 Packed HeadWise gates are rejected earlier by the backend-neutral attention representation validator and therefore are not a Metal-specific rejection.
@@ -268,7 +270,7 @@ Intentional rejection is valid. Unsupported combinations must fail at compile/bi
 
 ### Phase 0 — Executable capability truth
 
-Keep backend semantic support explicit and tested. New `AttentionSpec` variants must acquire backend capability decisions in the same change.
+Keep backend semantic support explicit and tested. CPU, CUDA, and Metal expose explicit `AttentionBackendCapabilities` helpers consumed by production validation, and `attention_backend_capability_matrix_test` locks every current capability decision. New `AttentionSpec` capability fields must update the executable declarations and the matrix test in the same change.
 
 ### Phase 1 — External-memory / cross-attention
 
