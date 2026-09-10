@@ -171,26 +171,32 @@ void MetalModel::Impl::encode_attention(
     const float query_scale = layer.query_scale /
         (1.0f / std::sqrt(static_cast<float>(layer.head_dim)));
     const uint32_t page_tokens = static_cast<uint32_t>(layer.page_tokens);
+    const auto normalize = [&](id<MTLBuffer> data, id<MTLBuffer> weight,
+                               const std::optional<NormSpec>& norm,
+                               uint32_t heads, uint32_t width) {
+        if (!norm) return;
+        if (norm->granularity == NormGranularity::WholeVector) {
+            encode_rmsnorm(encoder, data, weight, data, width, norm->epsilon);
+            return;
+        }
+        set_buffer(encoder, data, 0);
+        set_buffer(encoder, weight, 1);
+        set_bytes(encoder, &heads, sizeof(heads), 2);
+        set_bytes(encoder, &head_dim, sizeof(head_dim), 3);
+        set_bytes(encoder, &norm->epsilon, sizeof(norm->epsilon), 4);
+        dispatch(encoder, "celeg_head_rmsnorm_inplace", heads);
+    };
+
+    if (owns_kv) {
+        normalize(value_buffer, layer.value_norm, attention.semantics.value_norm,
+                  key_heads, key_width);
+    }
+
     const bool fused_per_head = owns_kv &&
         per_head_norm(attention.semantics.query_norm) &&
         per_head_norm(attention.semantics.key_norm);
 
     if (!fused_per_head) {
-        const auto normalize = [&](id<MTLBuffer> data, id<MTLBuffer> weight,
-                                   const std::optional<NormSpec>& norm,
-                                   uint32_t heads, uint32_t width) {
-            if (!norm) return;
-            if (norm->granularity == NormGranularity::WholeVector) {
-                encode_rmsnorm(encoder, data, weight, data, width, norm->epsilon);
-                return;
-            }
-            set_buffer(encoder, data, 0);
-            set_buffer(encoder, weight, 1);
-            set_bytes(encoder, &heads, sizeof(heads), 2);
-            set_bytes(encoder, &head_dim, sizeof(head_dim), 3);
-            set_bytes(encoder, &norm->epsilon, sizeof(norm->epsilon), 4);
-            dispatch(encoder, "celeg_head_rmsnorm_inplace", heads);
-        };
         normalize(query_buffer, layer.query_norm, attention.semantics.query_norm,
                   query_heads, query_width);
         if (owns_kv) {
@@ -430,6 +436,30 @@ void MetalModel::Impl::encode_attention_batch(
     const uint32_t head_count = std::max(query_heads, prepared_key_heads);
     const float query_scale = layer.query_scale /
         (1.0f / std::sqrt(static_cast<float>(layer.head_dim)));
+    const auto normalize = [&](id<MTLBuffer> data, id<MTLBuffer> weight,
+                               const std::optional<NormSpec>& norm,
+                               uint32_t heads, uint32_t width) {
+        if (!norm) return;
+        if (norm->granularity == NormGranularity::WholeVector) {
+            encode_rmsnorm_batch(encoder, data, weight, data,
+                                 rows, width, norm->epsilon);
+            return;
+        }
+        set_buffer(encoder, data, 0);
+        set_buffer(encoder, weight, 1);
+        set_bytes(encoder, &rows, sizeof(rows), 2);
+        set_bytes(encoder, &heads, sizeof(heads), 3);
+        set_bytes(encoder, &head_dim, sizeof(head_dim), 4);
+        set_bytes(encoder, &norm->epsilon, sizeof(norm->epsilon), 5);
+        dispatch(encoder, "celeg_head_rmsnorm_batch_inplace",
+                 static_cast<NSUInteger>(rows) * heads);
+    };
+
+    if (owns_kv) {
+        normalize(batch_value, layer.value_norm, attention.semantics.value_norm,
+                  key_heads, key_width);
+    }
+
     const bool fused_per_head = owns_kv && !multi &&
         per_head_norm(attention.semantics.query_norm) &&
         per_head_norm(attention.semantics.key_norm);
@@ -437,24 +467,6 @@ void MetalModel::Impl::encode_attention_batch(
         fused_per_head && !no_position && split_half_rope(attention);
 
     if (!fused_per_head) {
-        const auto normalize = [&](id<MTLBuffer> data, id<MTLBuffer> weight,
-                                   const std::optional<NormSpec>& norm,
-                                   uint32_t heads, uint32_t width) {
-            if (!norm) return;
-            if (norm->granularity == NormGranularity::WholeVector) {
-                encode_rmsnorm_batch(encoder, data, weight, data,
-                                     rows, width, norm->epsilon);
-                return;
-            }
-            set_buffer(encoder, data, 0);
-            set_buffer(encoder, weight, 1);
-            set_bytes(encoder, &rows, sizeof(rows), 2);
-            set_bytes(encoder, &heads, sizeof(heads), 3);
-            set_bytes(encoder, &head_dim, sizeof(head_dim), 4);
-            set_bytes(encoder, &norm->epsilon, sizeof(norm->epsilon), 5);
-            dispatch(encoder, "celeg_head_rmsnorm_batch_inplace",
-                     static_cast<NSUInteger>(rows) * heads);
-        };
         normalize(batch_query, layer.query_norm, attention.semantics.query_norm,
                   query_heads, query_width);
         if (owns_kv) {
