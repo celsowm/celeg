@@ -35,7 +35,7 @@ Out of scope for this closure plan:
 
 The executable capability declarations are the source of truth, not the documentation matrix.
 
-The table below records the current executable state after closure Stages 0-4:
+The table below records the current executable state after closure Stages 0-4 and Substage 5A:
 
 | Capability | CPU | CUDA | Metal | Closure action |
 | --- | --- | --- | --- | --- |
@@ -47,8 +47,8 @@ The table below records the current executable state after closure Stages 0-4:
 | DynamicSparse | yes, constrained | yes | no | implement Metal |
 | ALiBi | yes | yes | yes | regression only |
 | Relative-position bias | yes | yes, constrained | yes | differential coverage; do not overclaim CUDA combinations |
-| Standard RoPE | full IR surface on CPU | broad scaling surface | full-width unscaled only | expand Metal |
-| Three-axis MRoPE | interleaved + sectioned geometry | interleaved + sectioned geometry | interleaved + sectioned geometry | geometry parity closed; scaling/partial-width remain Stage 5 |
+| Standard RoPE | full IR surface on CPU | broad scaling surface | unscaled full/partial-width, both pairings | scaling remains Stage 5B/5C |
+| Three-axis MRoPE | interleaved + sectioned geometry | interleaved + sectioned geometry | interleaved + sectioned geometry | geometry parity closed; scaling/partial-width remain Stage 5B/5C |
 | Value RMSNorm before KV store | yes | yes | yes | parity closed; regression only |
 | Ordinary BF16 KV | yes | yes | yes | regression only |
 | Ordinary INT8 KV | no | yes | no | implement CPU and Metal |
@@ -219,14 +219,25 @@ The canonical content-ranked selection contract in `src/celeg/attention/dynamic_
 
 ## Stage 5 — Close standard Metal RoPE parity
 
+**Status: in progress. Substage 5A is complete; RoPE scaling work in 5B/5C remains pending.**
+
 After MRoPE geometry is stable, expand ordinary Metal RoPE toward the CPU/CUDA surface.
 
 ### Substage 5A — Partial rotary width
 
-- pass explicit rotary pair count/rotary dimension to Metal kernels;
-- rotate only the configured prefix;
-- preserve untouched tail components;
-- verify Q/K normalization still covers the intended full head independently of rotary width.
+**Status: complete for ordinary unscaled RoPE.**
+
+Implemented result:
+
+1. `RopePositionSpec::resolved_rotary_dimension()` owns the host/runtime rotary-width resolution used by the Metal dispatch contract and matches the existing CPU truncation semantics.
+2. Standard Metal `position_mode` now preserves the existing low pairing bits while encoding a non-full rotary dimension in the upper bits. Full-width modes retain their original compact values.
+3. `qk_position.metal` decodes the rotary dimension, rotates exactly `rotary_dimension / 2` pairs, and derives ordinary RoPE frequency from the resolved rotary dimension. Components outside the rotated prefix are left untouched by the position transform.
+4. Both `SplitHalf` and `AdjacentPairs` use the same width decoding. The existing Q scaling still applies across the complete query head independently of rotary width.
+5. Partial ordinary RoPE intentionally bypasses the fused per-head Q/K-normalization + position path and uses the already-supported standalone normalization followed by position preparation. Full-width ordinary RoPE retains the fused fast path unchanged.
+6. Token/decode and batched-prefill runtime paths carry the same encoded position mode; no attention, softmax, KV-layout, or scaling ABI changed.
+7. `metal_partial_rope_test` uses the real CPU `cpu_qk_norm_only` + `cpu_rope` path as oracle and covers token plus batch, `SplitHalf` plus `AdjacentPairs`, partial width 4/8 plus the existing full width 8/8, transformed Q/K, and published K/V cache contents.
+8. Metal capability validation accepts finite partial fractions whose resolved rotary dimension is positive and even, continues to reject all `RopeScalingSpec` variants other than `NoRopeScaling`, and does not duplicate full-model validation such as theta ownership.
+9. The hosted Apple workflow compiles the production Metal shader and builds/links the backend plus the differential test target. Runtime GPU execution of Metal tests remains the existing eligible-device/local gate because the hosted workflow configures `CELEG_RUN_METAL_TESTS=OFF`.
 
 ### Substage 5B — RoPE scaling semantic mirror
 
@@ -251,8 +262,9 @@ Route generic Metal RoPE/MRoPE frequency computation through the tested scaling 
 ### Acceptance criteria
 
 - every scaling variant is either implemented and differential-tested or remains an explicit stable rejection;
-- partial-width standard RoPE matches CPU for both SplitHalf and AdjacentPairs;
-- existing full-width unscaled kernels show no unexplained regression.
+- partial-width standard RoPE has a registered CPU-vs-Metal differential harness for both SplitHalf and AdjacentPairs;
+- existing full-width unscaled kernels show no unexplained build or capability regression;
+- runtime execution of the Metal differential fixture is required on an eligible Metal device before making a device-executed numerical parity claim.
 
 ## Stage 6 — Add Metal BlockSparse
 
@@ -445,7 +457,8 @@ The order below minimizes architectural rework and gets useful parity quickly:
 2. Metal value norm                                 [complete]
 3. CPU DynamicSparse                                [complete]
 4. Metal Bidirectional + Prefix-LM                  [complete]
-5. Metal partial/scaled RoPE
+5A. Metal partial standard RoPE                     [complete]
+5B/5C. Metal scaled RoPE
 6. Metal BlockSparse
 7. Metal DynamicSparse
 8. CPU INT8 KV
