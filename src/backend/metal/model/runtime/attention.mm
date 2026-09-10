@@ -18,6 +18,24 @@ uint32_t attention_window_size(const CompiledAttentionProgram& attention) {
     return 0;
 }
 
+uint32_t dense_pattern_mode(const CompiledAttentionProgram& attention) {
+    if (std::holds_alternative<BidirectionalPattern>(attention.semantics.pattern)) {
+        return 1u;
+    }
+    if (std::holds_alternative<PrefixLmPattern>(attention.semantics.pattern)) {
+        return 2u;
+    }
+    return 0u;
+}
+
+uint32_t prefix_lm_length(const CompiledAttentionProgram& attention) {
+    if (const auto* prefix =
+            std::get_if<PrefixLmPattern>(&attention.semantics.pattern)) {
+        return static_cast<uint32_t>(prefix->prefix_length);
+    }
+    return 0u;
+}
+
 const AlibiBiasSpec* attention_alibi(const CompiledAttentionProgram& attention) {
     return std::get_if<AlibiBiasSpec>(&attention.semantics.bias);
 }
@@ -569,6 +587,8 @@ void MetalModel::Impl::encode_attention_batch(
     const float attention_scale = 1.0f /
         std::sqrt(static_cast<float>(layer.head_dim));
     const uint32_t window_size = attention_window_size(attention);
+    const uint32_t pattern_mode = dense_pattern_mode(attention);
+    const uint32_t prefix_length = prefix_lm_length(attention);
     set_buffer(encoder, batch_query, 0);
     set_buffer(encoder, layer.key_cache, 1);
     set_buffer(encoder, layer.value_cache, 2);
@@ -584,7 +604,7 @@ void MetalModel::Impl::encode_attention_batch(
     bool tiled_encoded = false;
     const bool tiled_candidate =
         options.numerical_policy == MetalNumericalPolicy::Fast &&
-        relative == nullptr && alibi == nullptr &&
+        relative == nullptr && alibi == nullptr && pattern_mode == 0u &&
         window_size == 0u && base_position == 0u && head_dim == 64u &&
         (rows % kTiledAttentionQueries) == 0u;
     if (tiled_candidate) {
@@ -608,24 +628,31 @@ void MetalModel::Impl::encode_attention_batch(
     }
 
     if (!tiled_encoded) {
-        if (relative) {
-            const uint32_t bucket_count = static_cast<uint32_t>(relative->bucket_count);
-            const uint32_t max_distance = static_cast<uint32_t>(relative->max_distance);
-            const uint32_t bidirectional = relative->bidirectional ? 1u : 0u;
-            set_bytes(encoder, &window_size, sizeof(window_size), 11);
-            set_buffer(encoder, layer.relative_bias, 12);
-            set_bytes(encoder, &bucket_count, sizeof(bucket_count), 13);
-            set_bytes(encoder, &max_distance, sizeof(max_distance), 14);
-            set_bytes(encoder, &bidirectional, sizeof(bidirectional), 15);
-        } else if (alibi) {
-            set_bytes(encoder, &window_size, sizeof(window_size), 11);
-            set_buffer(encoder, layer.alibi_slopes, 12);
-        } else if (window_size > 0) {
-            set_bytes(encoder, &window_size, sizeof(window_size), 11);
+        if (pattern_mode != 0u) {
+            set_bytes(encoder, &pattern_mode, sizeof(pattern_mode), 11);
+            set_bytes(encoder, &prefix_length, sizeof(prefix_length), 12);
+            encode_attention_span(encoder, "celeg_attention_batch_dense_pattern",
+                                  query_heads, rows, head_dim);
+        } else {
+            if (relative) {
+                const uint32_t bucket_count = static_cast<uint32_t>(relative->bucket_count);
+                const uint32_t max_distance = static_cast<uint32_t>(relative->max_distance);
+                const uint32_t bidirectional = relative->bidirectional ? 1u : 0u;
+                set_bytes(encoder, &window_size, sizeof(window_size), 11);
+                set_buffer(encoder, layer.relative_bias, 12);
+                set_bytes(encoder, &bucket_count, sizeof(bucket_count), 13);
+                set_bytes(encoder, &max_distance, sizeof(max_distance), 14);
+                set_bytes(encoder, &bidirectional, sizeof(bidirectional), 15);
+            } else if (alibi) {
+                set_bytes(encoder, &window_size, sizeof(window_size), 11);
+                set_buffer(encoder, layer.alibi_slopes, 12);
+            } else if (window_size > 0) {
+                set_bytes(encoder, &window_size, sizeof(window_size), 11);
+            }
+            const std::string_view attention_kernel =
+                select_batch_attention_kernel(relative != nullptr, alibi != nullptr, window_size);
+            encode_attention_span(encoder, attention_kernel, query_heads, rows, head_dim);
         }
-        const std::string_view attention_kernel =
-            select_batch_attention_kernel(relative != nullptr, alibi != nullptr, window_size);
-        encode_attention_span(encoder, attention_kernel, query_heads, rows, head_dim);
     }
 
     if (const auto* transform = attention_output_transform(attention)) {
