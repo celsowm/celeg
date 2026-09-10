@@ -29,11 +29,13 @@ CELEG_PATTERN_SEMANTICS_INLINE bool bidirectional_visible(
 
 CELEG_PATTERN_SEMANTICS_INLINE int sliding_window_first_candidate(
     int query_position, int window) {
+    if (window <= 0) return 0;
     return pattern_max_int(0, query_position - window + 1);
 }
 
 CELEG_PATTERN_SEMANTICS_INLINE bool sliding_window_visible(
     int query_position, int key_position, int window) {
+    if (window <= 0) return causal_visible(query_position, key_position);
     return causal_visible(query_position, key_position) &&
            key_position >= sliding_window_first_candidate(query_position, window);
 }
