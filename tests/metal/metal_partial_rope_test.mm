@@ -101,17 +101,32 @@ uint32_t position_mode(celeg::RopePairingKind pairing, uint32_t rotary_dim) {
     return pairing_mode | ((rotary_dim + 1u) << 2u);
 }
 
+celeg::RopePositionSpec rope_spec(celeg::RopePairingKind pairing,
+                                  uint32_t rotary_dim) {
+    celeg::RopePositionSpec rope;
+    rope.theta = kTheta;
+    rope.rotary_fraction = static_cast<double>(rotary_dim) /
+        static_cast<double>(kHeadDim);
+    rope.scaling = celeg::NoRopeScaling{};
+    rope.pairing = pairing;
+    if (rope.resolved_rotary_dimension(static_cast<int>(kHeadDim)) !=
+        static_cast<int>(rotary_dim)) {
+        throw std::logic_error("partial RoPE fixture resolved unexpected rotary dimension");
+    }
+    return rope;
+}
+
 void cpu_prepare(std::vector<float>& data, uint32_t rows,
                  uint32_t base_position, celeg::RopePairingKind pairing,
                  uint32_t rotary_dim, bool query) {
     const std::vector<float> weight = norm_weight();
+    const celeg::RopePositionSpec rope = rope_spec(pairing, rotary_dim);
     for (uint32_t row = 0; row < rows; ++row) {
         float* row_data = data.data() + static_cast<size_t>(row) * kWidth;
         celeg::cpu_qk_norm_only(row_data, weight.data(), static_cast<int>(kHeads),
                                 static_cast<int>(kHeadDim), kEpsilon);
         celeg::cpu_rope(row_data, static_cast<int>(kHeads), static_cast<int>(kHeadDim),
-                        static_cast<int>(base_position + row), kTheta, pairing,
-                        static_cast<int>(rotary_dim));
+                        static_cast<int>(base_position + row), rope);
         if (query) {
             for (uint32_t d = 0; d < kWidth; ++d) row_data[d] *= kQueryScale;
         }
