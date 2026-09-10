@@ -24,6 +24,7 @@ inline constexpr AttentionBackendCapabilities metal_attention_capabilities() {
         .standard_execution = true,
         .latent_execution = false,
         .factorized_latent_execution = false,
+        .value_norm = false,
     };
 }
 
