@@ -77,6 +77,26 @@ int main() {
         attention.key_norm->weight_kind = celeg::NormWeightKind::None;
     }));
     CELEG_TEST_CHECK(!metal_rejects([](auto& attention) {
+        attention.value_norm = celeg::NormSpec{
+            1.0e-5f, celeg::NormWeightKind::Scale,
+            celeg::NormGranularity::PerHead};
+    }));
+    CELEG_TEST_CHECK(!metal_rejects([](auto& attention) {
+        attention.value_norm = celeg::NormSpec{
+            2.0e-5f, celeg::NormWeightKind::OnePlusScale,
+            celeg::NormGranularity::WholeVector};
+    }));
+    CELEG_TEST_CHECK(!metal_rejects([](auto& attention) {
+        attention.value_norm = celeg::NormSpec{
+            3.0e-5f, celeg::NormWeightKind::None,
+            celeg::NormGranularity::PerHead};
+    }));
+    CELEG_TEST_CHECK(metal_rejects([](auto& attention) {
+        attention.value_norm = celeg::NormSpec{
+            0.0f, celeg::NormWeightKind::Scale,
+            celeg::NormGranularity::PerHead};
+    }));
+    CELEG_TEST_CHECK(!metal_rejects([](auto& attention) {
         attention.position = celeg::NoPositionEncodingSpec{};
     }));
     CELEG_TEST_CHECK(!metal_rejects([](auto& attention) {
