@@ -25,6 +25,7 @@ if(TARGET celeg_metal_backend)
         metal_quantization_test
         metal_recurrent_test
         metal_rope_geometry_semantics_test
+        metal_rope_scaling_abi_test
         metal_rope_scaling_semantics_test
         metal_tensor_test
         metal_value_norm_test)
