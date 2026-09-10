@@ -17,6 +17,13 @@ enum CelegRopeScalingMode : uint {
     CelegRopeScalingProportional = 6u,
 };
 
+inline float celeg_rope_unscaled_frequency(
+    float theta, uint pair, uint rotary_dimension) {
+    return pow(theta,
+               -2.0f * static_cast<float>(pair) /
+                   static_cast<float>(rotary_dimension));
+}
+
 inline CelegRopePairComponents celeg_rope_pair_components(
     uint pair, uint pair_count, uint pairing_mode) {
     if (pairing_mode == 1u) {
@@ -59,9 +66,7 @@ inline float celeg_rope_scaled_frequency(
                     static_cast<float>(rotary_dimension) / denominator);
     }
 
-    float result = pow(base,
-                       -2.0f * static_cast<float>(pair) /
-                           static_cast<float>(rotary_dimension));
+    float result = celeg_rope_unscaled_frequency(base, pair, rotary_dimension);
     if (scaling_mode == CelegRopeScalingNone ||
         scaling_mode == CelegRopeScalingDynamicNtk) {
         return result;
