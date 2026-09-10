@@ -8,6 +8,8 @@ inline uint celeg_standard_rope_rotary_dim(uint position_mode, uint head_dim) {
     return min(encoded - 1u, head_dim) & ~1u;
 }
 
+#ifndef CELEG_ROPE_SCALING_SPEC_DEFINED
+#define CELEG_ROPE_SCALING_SPEC_DEFINED
 struct CelegRopeScalingSpec {
     uint mode;
     uint original_context;
@@ -19,6 +21,7 @@ struct CelegRopeScalingSpec {
     float low_frequency_factor;
     float high_frequency_factor;
 };
+#endif
 
 inline void celeg_apply_rope_head(
     device float* values,
@@ -77,11 +80,13 @@ inline void celeg_apply_rope_head_scaled(
     device const float* long_factors,
     float scale) {
     const uint pairing_mode = celeg_standard_rope_pairing_mode(position_mode);
+    if (pairing_mode != 1u && pairing_mode != 2u) return;
     const uint rotary_dim = celeg_standard_rope_rotary_dim(position_mode, head_dim);
     const uint pairs = rotary_dim / 2u;
+    const uint geometry_pairing_mode = pairing_mode == 2u ? 1u : 0u;
     for (uint pair = 0; pair < pairs; ++pair) {
         const CelegRopePairComponents components =
-            celeg_rope_pair_components(pair, pairs, pairing_mode);
+            celeg_rope_pair_components(pair, pairs, geometry_pairing_mode);
         const float frequency = celeg_rope_scaled_frequency(
             theta,
             scaling.rotary_fraction,
