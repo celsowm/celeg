@@ -68,10 +68,7 @@ inline void validate_metal_attention_capabilities(
                 "Metal attention currently supports BF16 KV state only");
         }
         if (const RopePositionSpec* rope = attention.rope_position()) {
-            if (std::abs(rope->rotary_fraction - 1.0) > 1.0e-12) {
-                throw std::invalid_argument(
-                    "Metal attention currently requires full-width RoPE");
-            }
+            rope->validate(attention.head_dim);
             if (!std::holds_alternative<NoRopeScaling>(rope->scaling)) {
                 throw std::invalid_argument(
                     "Metal attention currently does not support RoPE scaling");
