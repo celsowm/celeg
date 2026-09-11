@@ -87,17 +87,25 @@ inline void validate_metal_attention_capabilities(
                 throw std::invalid_argument(
                     "Metal M-RoPE requires three axes with split-half pairing");
             }
-            if (std::abs(multi->base.rotary_fraction - 1.0) > 1.0e-12 ||
-                !std::holds_alternative<NoRopeScaling>(multi->base.scaling)) {
+            if (!std::holds_alternative<NoRopeScaling>(multi->base.scaling)) {
                 throw std::invalid_argument(
-                    "Metal M-RoPE currently requires full-width unscaled RoPE");
+                    "Metal M-RoPE currently requires unscaled RoPE");
+            }
+            if (!(multi->base.rotary_fraction > 0.0) ||
+                multi->base.rotary_fraction > 1.0 ||
+                !std::isfinite(multi->base.rotary_fraction)) {
+                throw std::invalid_argument(
+                    "Metal M-RoPE rotary fraction must be finite and in (0, 1]");
             }
             if (!(multi->base.theta > 0.0) || !std::isfinite(multi->base.theta)) {
                 throw std::invalid_argument(
                     "Metal M-RoPE theta must be finite and positive");
             }
-            const int pairs = attention.head_dim / 2;
-            if (multi->sections[0] + multi->sections[1] + multi->sections[2] != pairs) {
+            const int pairs =
+                multi->base.resolved_rotary_dimension(attention.head_dim) / 2;
+            if (pairs <= 0 || multi->sections[0] <= 0 || multi->sections[1] <= 0 ||
+                multi->sections[2] <= 0 ||
+                multi->sections[0] + multi->sections[1] + multi->sections[2] != pairs) {
                 throw std::invalid_argument(
                     "Metal M-RoPE sections do not match the rotary dimension");
             }

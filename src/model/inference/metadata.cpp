@@ -552,7 +552,8 @@ NormalizedModelMetadata normalize_model_metadata(const CheckpointMetadata& metad
                                    "rope_theta restated inside rope_scaling"});
     }
     std::optional<float> rotary_fraction = aliases<float>(
-        metadata, {"rotary_fraction", "partial_rotary_factor"}, result.evidence,
+        metadata, {"rotary_fraction", "partial_rotary_factor",
+                   "rope_parameters.partial_rotary_factor"}, result.evidence,
         "rotary_fraction");
     std::vector<int> mrope_sections = token_list(metadata, "rope_parameters.mrope_section");
     if (mrope_sections.empty()) mrope_sections = token_list(metadata, "mrope_section");

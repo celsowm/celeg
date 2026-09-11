@@ -460,28 +460,33 @@ kernel void celeg_qk_norm_mrope_store_kv(
     constant uint& page_tokens [[buffer(17)]],
     constant uint& interleaved [[buffer(18)]],
     uint head [[thread_position_in_grid]]) {
-    const uint pairs = head_dim / 2;
-    if (sections[0] + sections[1] + sections[2] != pairs) return;
+    const uint mrope_pairs =
+        sections[0] + sections[1] + sections[2];
+    if (mrope_pairs == 0u || mrope_pairs * 2u > head_dim) return;
+    const float mrope_rotary_dim = static_cast<float>(mrope_pairs * 2u);
     if (head < query_heads) {
         const size_t base = static_cast<size_t>(head) * head_dim;
         float sum = 0.0f;
         for (uint d = 0; d < head_dim; ++d) sum += query[base + d] * query[base + d];
         const float inverse = rsqrt(sum / static_cast<float>(head_dim) + query_epsilon);
         for (uint d = 0; d < head_dim; ++d) query[base + d] *= inverse * query_weight[d];
-        for (uint pair = 0; pair < pairs; ++pair) {
+        for (uint pair = 0; pair < mrope_pairs; ++pair) {
             const uint axis = celeg_mrope_axis_for_pair(
                 pair, sections[0], sections[1], interleaved);
             const float frequency = pow(theta, -2.0f * static_cast<float>(pair) /
-                                              static_cast<float>(head_dim));
+                                               mrope_rotary_dim);
             const float angle = static_cast<float>(rope_position[axis]) * frequency;
             const float c = cos(angle);
             const float s = sin(angle);
             const size_t first = base + pair;
-            const size_t second = base + pairs + pair;
+            const size_t second = base + mrope_pairs + pair;
             const float x = query[first];
             const float y = query[second];
-            query[first] = (x * c - y * s) * query_scale;
-            query[second] = (y * c + x * s) * query_scale;
+            query[first] = x * c - y * s;
+            query[second] = y * c + x * s;
+        }
+        if (query_scale != 1.0f) {
+            for (uint d = 0; d < head_dim; ++d) query[base + d] *= query_scale;
         }
     }
     if (head < key_heads) {
@@ -490,16 +495,16 @@ kernel void celeg_qk_norm_mrope_store_kv(
         for (uint d = 0; d < head_dim; ++d) sum += key[base + d] * key[base + d];
         const float inverse = rsqrt(sum / static_cast<float>(head_dim) + key_epsilon);
         for (uint d = 0; d < head_dim; ++d) key[base + d] *= inverse * key_weight[d];
-        for (uint pair = 0; pair < pairs; ++pair) {
+        for (uint pair = 0; pair < mrope_pairs; ++pair) {
             const uint axis = celeg_mrope_axis_for_pair(
                 pair, sections[0], sections[1], interleaved);
             const float frequency = pow(theta, -2.0f * static_cast<float>(pair) /
-                                              static_cast<float>(head_dim));
+                                               mrope_rotary_dim);
             const float angle = static_cast<float>(rope_position[axis]) * frequency;
             const float c = cos(angle);
             const float s = sin(angle);
             const size_t first = base + pair;
-            const size_t second = base + pairs + pair;
+            const size_t second = base + mrope_pairs + pair;
             const float x = key[first];
             const float y = key[second];
             key[first] = x * c - y * s;

@@ -16,6 +16,7 @@ if(TARGET celeg_metal_backend)
         metal_inference_test
         metal_kv_store_test
         metal_linear_binding_test
+        metal_mrope_partial_test
         metal_mrope_sectioned_test
         metal_mrope_theta_test
         metal_mrope_theta_fused_test
@@ -41,7 +42,8 @@ if(TARGET celeg_metal_backend)
         target_include_directories(${test_name} PRIVATE
             include src tests src/backend/metal "${CMAKE_BINARY_DIR}/generated")
         target_link_libraries(${test_name} PRIVATE celeg_base celeg_metal_backend)
-        if(test_name STREQUAL "metal_mrope_sectioned_test" OR
+        if(test_name STREQUAL "metal_mrope_partial_test" OR
+           test_name STREQUAL "metal_mrope_sectioned_test" OR
            test_name STREQUAL "metal_mrope_theta_test" OR
            test_name STREQUAL "metal_mrope_theta_fused_test" OR
            test_name STREQUAL "metal_mrope_theta_batch_test" OR

@@ -130,9 +130,23 @@ int main() {
         multi.base.pairing = celeg::RopePairingKind::AdjacentPairs;
         attention.position = multi;
     }));
+    CELEG_TEST_CHECK(!metal_rejects([](auto& attention) {
+        attention.head_dim = 12;
+        auto multi = valid_mrope();
+        multi.base.rotary_fraction = 0.5;
+        multi.sections = {1, 1, 1};
+        attention.position = multi;
+    }));
     CELEG_TEST_CHECK(metal_rejects([](auto& attention) {
         auto multi = valid_mrope();
         multi.base.rotary_fraction = 0.5;
+        attention.position = multi;
+    }));
+    CELEG_TEST_CHECK(metal_rejects([](auto& attention) {
+        attention.head_dim = 12;
+        auto multi = valid_mrope();
+        multi.base.rotary_fraction = 0.5;
+        multi.sections = {3, 0, 0};
         attention.position = multi;
     }));
     CELEG_TEST_CHECK(metal_rejects([](auto& attention) {
