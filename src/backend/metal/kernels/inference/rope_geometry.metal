@@ -118,7 +118,7 @@ inline float celeg_rope_scaled_frequency(
         const float wavelength = 2.0f * pi / result;
         if (wavelength < original / high_frequency_factor) return result;
         if (wavelength > original / low_frequency_factor) return result / factor;
-        const float span = low_frequency_factor - high_frequency_factor;
+        const float span = high_frequency_factor - low_frequency_factor;
         const float blend = span > 0.0f
             ? (wavelength * high_frequency_factor / original - 1.0f) / span
             : 0.0f;

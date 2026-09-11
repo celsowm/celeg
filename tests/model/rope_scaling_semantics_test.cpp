@@ -1,7 +1,7 @@
 #include "celeg/model/position.hpp"
 
+#include "support/assertions.hpp"
 #include <algorithm>
-#include <cassert>
 #include <cmath>
 #include <vector>
 
@@ -24,7 +24,7 @@ void check_no_scaling() {
     spec.theta = 10000.0;
     spec.scaling = celeg::NoRopeScaling{};
     for (const int pair : {0, 1, 3}) {
-        assert(near(celeg::rope_frequency(spec, pair, 8, 4096),
+        CELEG_TEST_CHECK(near(celeg::rope_frequency(spec, pair, 8, 4096),
                     base_frequency(spec.theta, pair, 8)));
     }
 }
@@ -34,7 +34,7 @@ void check_linear() {
     spec.theta = 10000.0;
     spec.scaling = celeg::LinearRopeScaling{4.0};
     for (const int pair : {0, 1, 3}) {
-        assert(near(celeg::rope_frequency(spec, pair, 8, 4096),
+        CELEG_TEST_CHECK(near(celeg::rope_frequency(spec, pair, 8, 4096),
                     base_frequency(spec.theta, pair, 8) / 4.0));
     }
 }
@@ -46,7 +46,7 @@ void check_dynamic_ntk() {
 
     for (const int position : {0, 127, 128}) {
         for (const int pair : {0, 1, 3}) {
-            assert(near(celeg::rope_frequency(spec, pair, 8, position),
+            CELEG_TEST_CHECK(near(celeg::rope_frequency(spec, pair, 8, position),
                         base_frequency(spec.theta, pair, 8)));
         }
     }
@@ -57,13 +57,13 @@ void check_dynamic_ntk() {
     for (const int pair : {0, 1, 2, 3}) {
         const double expected = base_frequency(adjusted_theta, pair, 8);
         const double actual = celeg::rope_frequency(spec, pair, 8, position);
-        assert(near(actual, expected));
+        CELEG_TEST_CHECK(near(actual, expected));
     }
 
     // Pair zero is invariant under a theta/base change. The former host
     // implementation multiplied the completed frequency and therefore made
     // pair zero greater than one after the context boundary.
-    assert(near(celeg::rope_frequency(spec, 0, 8, position), 1.0));
+    CELEG_TEST_CHECK(near(celeg::rope_frequency(spec, 0, 8, position), 1.0));
 }
 
 void check_yarn() {
@@ -86,9 +86,9 @@ void check_yarn() {
         const double extrapolation = 1.0 - ramp;
         const double expected = base *
             (extrapolation + (1.0 - extrapolation) / 4.0);
-        assert(near(celeg::rope_frequency(spec, pair, 8, 8192), expected));
+        CELEG_TEST_CHECK(near(celeg::rope_frequency(spec, pair, 8, 8192), expected));
     }
-    assert(std::abs(celeg::rope_attention_scale(spec, 8192) - 1.69f) < 1.0e-6f);
+    CELEG_TEST_CHECK(std::abs(celeg::rope_attention_scale(spec, 8192) - 1.69f) < 1.0e-6f);
 }
 
 void check_longrope() {
@@ -102,9 +102,9 @@ void check_longrope() {
 
     for (const int pair : {0, 1, 3}) {
         const double base = base_frequency(spec.theta, pair, 8);
-        assert(near(celeg::rope_frequency(spec, pair, 8, 128),
+        CELEG_TEST_CHECK(near(celeg::rope_frequency(spec, pair, 8, 128),
                     base / scaling.short_factors[static_cast<size_t>(pair)]));
-        assert(near(celeg::rope_frequency(spec, pair, 8, 129),
+        CELEG_TEST_CHECK(near(celeg::rope_frequency(spec, pair, 8, 129),
                     base / scaling.long_factors[static_cast<size_t>(pair)]));
     }
 }
@@ -129,7 +129,7 @@ void check_llama3() {
                 (wavelength * 4.0 / 8192.0 - 1.0) / 3.0, 0.0, 1.0);
             expected /= 1.0 + blend * 7.0;
         }
-        assert(near(celeg::rope_frequency(spec, pair, 8, 4096), expected));
+        CELEG_TEST_CHECK(near(celeg::rope_frequency(spec, pair, 8, 4096), expected));
     }
 }
 
@@ -142,7 +142,7 @@ void check_proportional() {
     for (const int pair : {0, 1}) {
         const double base = base_frequency(spec.theta, pair, rotary_dimension);
         const double expected = std::pow(base, 0.5) / 2.0;
-        assert(near(celeg::rope_frequency(
+        CELEG_TEST_CHECK(near(celeg::rope_frequency(
             spec, pair, rotary_dimension, 2048), expected));
     }
 }

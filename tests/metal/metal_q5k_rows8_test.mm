@@ -142,14 +142,17 @@ int main() {
         const auto expected = host_reference(blocks, input);
         const auto actual = metal_rows8(device, blocks, input);
         float maximum = 0.0f;
+        float magnitude = 0.0f;
         for (uint32_t row = 0; row < kRows; ++row) {
             if (!std::isfinite(actual[row])) {
                 throw std::runtime_error("Q5_K rows8 produced a non-finite value");
             }
             maximum = std::max(maximum, std::abs(expected[row] - actual[row]));
+            magnitude = std::max(magnitude, std::abs(expected[row]));
         }
-        std::cout << "Q5_K rows8 max_error=" << maximum << '\n';
-        if (!(maximum < 1.0e-3f)) {
+        std::cout << "Q5_K rows8 max_error=" << maximum
+                  << " magnitude=" << magnitude << '\n';
+        if (!(magnitude > 0.0f) || !(maximum <= 1.0e-5f * magnitude)) {
             throw std::runtime_error("Metal Q5_K rows8 differs from host reference");
         }
         return 0;

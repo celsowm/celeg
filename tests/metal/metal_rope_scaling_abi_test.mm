@@ -1,6 +1,6 @@
 #include "backend/metal/model/runtime/rope_scaling.hpp"
+#include "support/assertions.hpp"
 
-#include <cassert>
 #include <cmath>
 #include <cstdint>
 #include <utility>
@@ -38,25 +38,25 @@ int main() {
     {
         const auto rope = rope_with(NoRopeScaling{}, 0.5);
         const auto binding = make_metal_rope_scaling_binding(rope);
-        assert(!binding.scaled());
-        assert(close(binding.spec.rotary_fraction, 0.5f));
-        assert(binding.short_factors == nullptr);
-        assert(binding.long_factors == nullptr);
+        CELEG_TEST_CHECK(!binding.scaled());
+        CELEG_TEST_CHECK(close(binding.spec.rotary_fraction, 0.5f));
+        CELEG_TEST_CHECK(binding.short_factors == nullptr);
+        CELEG_TEST_CHECK(binding.long_factors == nullptr);
     }
 
     {
         const auto rope = rope_with(LinearRopeScaling{2.5});
         const auto binding = make_metal_rope_scaling_binding(rope);
-        assert(binding.spec.mode == 1u);
-        assert(close(binding.spec.factor, 2.5f));
+        CELEG_TEST_CHECK(binding.spec.mode == 1u);
+        CELEG_TEST_CHECK(close(binding.spec.factor, 2.5f));
     }
 
     {
         const auto rope = rope_with(DynamicNtkRopeScaling{4.0, 8192});
         const auto binding = make_metal_rope_scaling_binding(rope);
-        assert(binding.spec.mode == 2u);
-        assert(close(binding.spec.factor, 4.0f));
-        assert(binding.spec.original_context == 8192u);
+        CELEG_TEST_CHECK(binding.spec.mode == 2u);
+        CELEG_TEST_CHECK(close(binding.spec.factor, 4.0f));
+        CELEG_TEST_CHECK(binding.spec.original_context == 8192u);
     }
 
     {
@@ -68,12 +68,12 @@ int main() {
         yarn.original_context = 4096;
         const auto rope = rope_with(yarn);
         const auto binding = make_metal_rope_scaling_binding(rope);
-        assert(binding.spec.mode == 3u);
-        assert(close(binding.spec.factor, 8.0f));
-        assert(close(binding.spec.attention_factor, 1.25f));
-        assert(close(binding.spec.beta_fast, 16.0f));
-        assert(close(binding.spec.beta_slow, 2.0f));
-        assert(binding.spec.original_context == 4096u);
+        CELEG_TEST_CHECK(binding.spec.mode == 3u);
+        CELEG_TEST_CHECK(close(binding.spec.factor, 8.0f));
+        CELEG_TEST_CHECK(close(binding.spec.attention_factor, 1.25f));
+        CELEG_TEST_CHECK(close(binding.spec.beta_fast, 16.0f));
+        CELEG_TEST_CHECK(close(binding.spec.beta_slow, 2.0f));
+        CELEG_TEST_CHECK(binding.spec.original_context == 4096u);
     }
 
     {
@@ -84,12 +84,12 @@ int main() {
         const auto rope = rope_with(long_rope);
         const auto binding = make_metal_rope_scaling_binding(rope);
         const auto& stored = std::get<LongRopeScaling>(rope.scaling);
-        assert(binding.spec.mode == 4u);
-        assert(binding.spec.original_context == 4096u);
-        assert(binding.short_factors == &stored.short_factors);
-        assert(binding.long_factors == &stored.long_factors);
-        assert(*binding.short_factors == long_rope.short_factors);
-        assert(*binding.long_factors == long_rope.long_factors);
+        CELEG_TEST_CHECK(binding.spec.mode == 4u);
+        CELEG_TEST_CHECK(binding.spec.original_context == 4096u);
+        CELEG_TEST_CHECK(binding.short_factors == &stored.short_factors);
+        CELEG_TEST_CHECK(binding.long_factors == &stored.long_factors);
+        CELEG_TEST_CHECK(*binding.short_factors == long_rope.short_factors);
+        CELEG_TEST_CHECK(*binding.long_factors == long_rope.long_factors);
     }
 
     {
@@ -100,19 +100,19 @@ int main() {
         llama3.high_frequency_factor = 4.0;
         const auto rope = rope_with(llama3);
         const auto binding = make_metal_rope_scaling_binding(rope);
-        assert(binding.spec.mode == 5u);
-        assert(close(binding.spec.factor, 8.0f));
-        assert(binding.spec.original_context == 8192u);
-        assert(close(binding.spec.low_frequency_factor, 1.0f));
-        assert(close(binding.spec.high_frequency_factor, 4.0f));
+        CELEG_TEST_CHECK(binding.spec.mode == 5u);
+        CELEG_TEST_CHECK(close(binding.spec.factor, 8.0f));
+        CELEG_TEST_CHECK(binding.spec.original_context == 8192u);
+        CELEG_TEST_CHECK(close(binding.spec.low_frequency_factor, 1.0f));
+        CELEG_TEST_CHECK(close(binding.spec.high_frequency_factor, 4.0f));
     }
 
     {
         const auto rope = rope_with(ProportionalRopeScaling{1.75}, 0.625);
         const auto binding = make_metal_rope_scaling_binding(rope);
-        assert(binding.spec.mode == 6u);
-        assert(close(binding.spec.factor, 1.75f));
-        assert(close(binding.spec.rotary_fraction, 0.625f));
+        CELEG_TEST_CHECK(binding.spec.mode == 6u);
+        CELEG_TEST_CHECK(close(binding.spec.factor, 1.75f));
+        CELEG_TEST_CHECK(close(binding.spec.rotary_fraction, 0.625f));
     }
 
     return 0;

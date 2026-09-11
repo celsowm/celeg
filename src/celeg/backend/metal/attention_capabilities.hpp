@@ -92,6 +92,10 @@ inline void validate_metal_attention_capabilities(
                 throw std::invalid_argument(
                     "Metal M-RoPE currently requires full-width unscaled RoPE");
             }
+            if (!(multi->base.theta > 0.0) || !std::isfinite(multi->base.theta)) {
+                throw std::invalid_argument(
+                    "Metal M-RoPE theta must be finite and positive");
+            }
             const int pairs = attention.head_dim / 2;
             if (multi->sections[0] + multi->sections[1] + multi->sections[2] != pairs) {
                 throw std::invalid_argument(

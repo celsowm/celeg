@@ -69,7 +69,7 @@ inline double rope_frequency(const RopePositionSpec& spec, int pair,
                     result /= scaling.factor;
                     return result;
                 }
-                const double span = scaling.low_frequency_factor - scaling.high_frequency_factor;
+                const double span = scaling.high_frequency_factor - scaling.low_frequency_factor;
                 const double blend = span > 0.0
                     ? (wavelength * scaling.high_frequency_factor /
                        static_cast<double>(scaling.original_context) - 1.0) / span

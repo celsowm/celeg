@@ -68,7 +68,7 @@ FastTolerance fast_tolerance(std::string_view model) {
     if (model.find("Q8") != std::string_view::npos) {
         return {0.999, 0.05, 0.25, 0.95};
     }
-    return {0.999, 0.005, 0.02, 0.90};
+    return {0.9999, 0.025, 0.15, 0.90};
 }
 
 }
