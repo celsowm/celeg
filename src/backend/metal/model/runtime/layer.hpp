@@ -100,6 +100,7 @@ struct MetalLayer {
     MetalLinear ffn_up;
     MetalLinear ffn_down;
     int intermediate = 0;
+    ActivationKind ffn_activation = ActivationKind::SwiGLU;
     std::optional<Moe> moe;
 };
 

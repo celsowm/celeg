@@ -161,6 +161,21 @@ kernel void celeg_swiglu(device const float* gate_up [[buffer(0)]],
     output[index] = gate / (1.0f + exp(-gate)) * up;
 }
 
+inline float celeg_gelu_tanh_value(float value) {
+    return 0.5f * value *
+        (1.0f + tanh(0.7978845608028654f * (value + 0.044715f * value * value * value)));
+}
+
+kernel void celeg_gated_gelu_tanh(device const float* gate_up [[buffer(0)]],
+                                  device float* output [[buffer(1)]],
+                                  constant uint& width [[buffer(2)]],
+                                  uint index [[thread_position_in_grid]]) {
+    if (index >= width) return;
+    const float gate = gate_up[index];
+    const float up = gate_up[width + index];
+    output[index] = celeg_gelu_tanh_value(gate) * up;
+}
+
 kernel void celeg_qk_norm_rope_store_kv(
     device float* query [[buffer(0)]],
     device const float* query_weight [[buffer(1)]],

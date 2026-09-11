@@ -165,11 +165,11 @@ int celeg_q6k_value(device const uchar* block, uint column) {
  * @brief Widest head dimension the attention core keeps in registers.
  *
  * Each lane of a simdgroup owns every 32nd dimension of the head, so the
- * per-lane query and accumulator vectors need `head_dim / 32` slots. Eight
- * slots cover every head dimension the supported architectures use; the host
+ * per-lane query and accumulator vectors need `head_dim / 32` slots. Sixteen
+ * slots cover head dimensions up to 512 (Gemma-style global layers); the host
  * rejects wider heads rather than silently truncating them.
  */
-constant uint kCelegAttentionSlots = 8;
+constant uint kCelegAttentionSlots = 16;
 
 /// @brief Bias-free score policy for ordinary causal and sliding-window heads.
 struct CelegAttentionNoBias {

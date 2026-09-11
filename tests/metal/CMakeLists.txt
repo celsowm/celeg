@@ -13,6 +13,7 @@ if(TARGET celeg_metal_backend)
         metal_dense_noncausal_attention_test
         metal_dense_pattern_semantics_test
         metal_device_test
+        metal_gated_gelu_test
         metal_inference_test
         metal_kv_store_test
         metal_linear_binding_test
@@ -43,6 +44,7 @@ if(TARGET celeg_metal_backend)
             include src tests src/backend/metal "${CMAKE_BINARY_DIR}/generated")
         target_link_libraries(${test_name} PRIVATE celeg_base celeg_metal_backend)
         if(test_name STREQUAL "metal_mrope_partial_test" OR
+            test_name STREQUAL "metal_gated_gelu_test" OR
            test_name STREQUAL "metal_mrope_sectioned_test" OR
            test_name STREQUAL "metal_mrope_theta_test" OR
            test_name STREQUAL "metal_mrope_theta_fused_test" OR

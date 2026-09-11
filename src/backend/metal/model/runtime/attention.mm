@@ -62,7 +62,7 @@ bool no_position_encoding(const CompiledAttentionProgram& attention) {
 constexpr uint32_t kAttentionSimdgroups = 8;
 
 /// @brief Widest head dimension @c celeg_attention_span keeps in registers.
-constexpr uint32_t kAttentionMaxHeadDim = 32 * 8;
+    constexpr uint32_t kAttentionMaxHeadDim = 32 * 16;
 
 constexpr NSUInteger kTiledAttentionThreads = 128;
 constexpr NSUInteger kTiledAttentionQueries = 32;

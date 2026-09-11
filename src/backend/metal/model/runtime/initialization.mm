@@ -54,8 +54,10 @@ MetalModel::MetalModel(const std::string& path, int context,
         }
         if (const auto* dense = std::get_if<CompiledDenseFeedForwardProgram>(
                 &layer.feed_forward)) {
-            if (dense->activation != ActivationKind::SwiGLU) {
-                throw std::runtime_error("Metal native path requires SwiGLU feed-forward layers");
+            if (dense->activation != ActivationKind::SwiGLU &&
+                dense->activation != ActivationKind::GeluTanh) {
+                throw std::runtime_error(
+                    "Metal native path requires SwiGLU or GELU-tanh feed-forward layers");
             }
         } else if (const auto* moe = std::get_if<MoeLayerProgram>(&layer.feed_forward)) {
             if (moe->routed.mlp.activation != MoeActivation::SwiGLU) {
@@ -504,6 +506,7 @@ MetalModel::MetalModel(const std::string& path, int context,
         if (const auto* dense = std::get_if<CompiledDenseFeedForwardProgram>(
                 &program_layer.feed_forward)) {
             layer.intermediate = dense->intermediate_size;
+            layer.ffn_activation = dense->activation;
             layer.ffn_gate = (*impl_).load_linear(TensorRole::FfnGate,
                                                   static_cast<int>(index), layer.intermediate, hidden);
             layer.ffn_up = (*impl_).load_linear(TensorRole::FfnUp,

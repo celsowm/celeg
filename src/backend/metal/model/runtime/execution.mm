@@ -1,11 +1,21 @@
 #include "detail.hpp"
 #include "mixer_registry.hpp"
 
+#include <cstdlib>
 #include <cstring>
 #include <stdexcept>
 #include <utility>
 
 namespace celeg {
+
+/// @brief Temporary debug hook: cap Metal decode layers via
+/// `CELEG_METAL_DEBUG_MAX_LAYERS` to bisect non-finite logits layer by layer.
+/// Unset (or negative) means no cap. This is a local diagnostic, not a feature.
+size_t debug_max_layers() {
+    const char* raw = std::getenv("CELEG_METAL_DEBUG_MAX_LAYERS");
+    if (!raw || !*raw) return static_cast<size_t>(-1);
+    return static_cast<size_t>(std::atoi(raw));
+}
 
 void MetalModel::Impl::encode_token(id<MTLCommandBuffer>& command_buffer,
                                     id<MTLComputeCommandEncoder>& encoder, int32_t token,
@@ -29,7 +39,9 @@ void MetalModel::Impl::encode_token(id<MTLCommandBuffer>& command_buffer,
         }
 
         bool normed_ready = false;
+        const size_t layer_cap = debug_max_layers();
         for (size_t layer_index = 0; layer_index < layers.size(); ++layer_index) {
+            if (layer_index >= layer_cap) break;
             Layer& layer = layers[layer_index];
             const CompiledLayerProgram& program_layer = program.layers[layer_index];
             if (!normed_ready) {

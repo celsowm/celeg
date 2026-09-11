@@ -117,6 +117,20 @@ int main(int argc, char** argv) {
                 throw std::runtime_error("CPU and Metal vocabulary sizes differ");
             }
             const double batch_similarity = cosine(metal_logits, tokenized_logits);
+            if (count <= 2) {
+                size_t batch_nans = 0;
+                size_t tokenized_nans = 0;
+                for (const float value : metal_logits) batch_nans += std::isnan(value) ? 1 : 0;
+                for (const float value : tokenized_logits) {
+                    tokenized_nans += std::isnan(value) ? 1 : 0;
+                }
+                std::cout << "tokens=" << count
+                          << " batch_cosine=" << batch_similarity
+                          << " batch_nans=" << batch_nans
+                          << " tokenized_nans=" << tokenized_nans
+                          << " batch_top=" << top_index(metal_logits)
+                          << " tokenized_top=" << top_index(tokenized_logits) << '\n';
+            }
             if (!(batch_similarity > 0.999999) ||
                 top_index(metal_logits) != top_index(tokenized_logits)) {
                 throw std::runtime_error("Metal batched prefill differs from tokenized execution");

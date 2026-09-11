@@ -28,13 +28,15 @@ void MetalModel::Impl::encode_dense_feed_forward(
         tag_last_gpu_dispatch("ffn_up", layer.ffn_up);
         end_parallel_group();
     }
-    if (encode_swiglu_matvec(encoder, layer.ffn_down, gate_up, operation)) {
+    const bool gated_gelu = layer.ffn_activation == ActivationKind::GeluTanh;
+    if (!gated_gelu && encode_swiglu_matvec(encoder, layer.ffn_down, gate_up, operation)) {
         tag_last_gpu_dispatch("ffn_down", layer.ffn_down);
     } else {
         set_buffer(encoder, gate_up, 0);
         set_buffer(encoder, activated, 1);
         set_bytes(encoder, &intermediate, sizeof(intermediate), 2);
-        dispatch(encoder, "celeg_swiglu", intermediate);
+        dispatch(encoder, gated_gelu ? "celeg_gated_gelu_tanh" : "celeg_swiglu",
+                 intermediate);
         encode_matvec(encoder, layer.ffn_down, activated, operation);
         tag_last_gpu_dispatch("ffn_down", layer.ffn_down);
     }
@@ -70,19 +72,22 @@ void MetalModel::Impl::encode_dense_feed_forward_batch(
     set_buffer(encoder, batch_activated, 1);
     set_bytes(encoder, &rows, sizeof(rows), 2);
     set_bytes(encoder, &intermediate, sizeof(intermediate), 3);
-    const std::string_view swiglu_kernel =
-        options.numerical_policy == MetalNumericalPolicy::Fast
-        ? "celeg_swiglu_batch_2d_relaxed"
-        : "celeg_swiglu_batch_2d";
-    id<MTLComputePipelineState> swiglu = pipeline(swiglu_kernel);
+    const bool gated_gelu = layer.ffn_activation == ActivationKind::GeluTanh;
+    const bool relaxed = options.numerical_policy == MetalNumericalPolicy::Fast;
+    const std::string_view activation_kernel =
+        gated_gelu
+        ? (relaxed ? "celeg_gated_gelu_tanh_batch_2d_relaxed"
+                   : "celeg_gated_gelu_tanh_batch_2d")
+        : (relaxed ? "celeg_swiglu_batch_2d_relaxed" : "celeg_swiglu_batch_2d");
+    id<MTLComputePipelineState> activation = pipeline(activation_kernel);
     encoder = compute_encoder(encoder);
     order_before_dispatch(encoder);
-    [encoder setComputePipelineState:swiglu];
+    [encoder setComputePipelineState:activation];
     const NSUInteger threads_x = std::min<NSUInteger>(
-        intermediate, swiglu.maxTotalThreadsPerThreadgroup);
+        intermediate, activation.maxTotalThreadsPerThreadgroup);
     [encoder dispatchThreads:MTLSizeMake(intermediate, rows, 1)
        threadsPerThreadgroup:MTLSizeMake(threads_x, 1, 1)];
-    record_dispatch(swiglu_kernel);
+    record_dispatch(activation_kernel);
 
     encode_matmul(encoder, layer.ffn_down, batch_activated, batch_operation, rows);
     tag_last_gpu_dispatch("ffn_down", layer.ffn_down);
