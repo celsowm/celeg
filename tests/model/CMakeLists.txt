@@ -18,6 +18,7 @@ foreach(test_name IN ITEMS
     cuda_relative_bias_semantic_test
     layer_dispatch_exhaustiveness_test
     layer_inference_rule_test
+    fact_solver_test
     metadata_falsy_test
     metal_shared_kv_capability_test
     model_compiler_test
@@ -51,6 +52,17 @@ target_sources(architecture_resolution_test PRIVATE
     tests/model/architecture_resolution/support.cpp
     tests/model/architecture_resolution/topology_fixture_tests.cpp
     tests/model/architecture_resolution/yarn_tests.cpp)
+
+target_sources(automatic_inference_test PRIVATE
+    tests/model/automatic_inference/agnes_tests.cpp
+    tests/model/automatic_inference/alias_conflict_tests.cpp
+    tests/model/automatic_inference/gguf_resolution_tests.cpp
+    tests/model/automatic_inference/hf_fixtures_tests.cpp
+    tests/model/automatic_inference/hybrid_gguf_tests.cpp
+    tests/model/automatic_inference/layer_facts_tests.cpp
+    tests/model/automatic_inference/ling_hybrid_tests.cpp
+    tests/model/automatic_inference/qwen35_tests.cpp
+    tests/model/automatic_inference/support.cpp)
 
 target_include_directories(layer_inference_rule_test PRIVATE src/model)
 target_sources(model_compiler_test PRIVATE
