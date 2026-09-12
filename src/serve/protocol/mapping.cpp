@@ -56,6 +56,97 @@ celeg::ToolChoice map_tool_choice(
     return {};
 }
 
+std::size_t persistent_prefix_count(const std::vector<celeg::ChatMessage>& messages) {
+    std::size_t persistent_prefix = 0;
+    while (persistent_prefix < messages.size() &&
+           (messages[persistent_prefix].role == celeg::ChatRole::System ||
+            messages[persistent_prefix].role == celeg::ChatRole::Developer)) {
+        ++persistent_prefix;
+    }
+    return persistent_prefix;
+}
+
+struct TrimmedPrompt {
+    std::vector<celeg::ChatMessage> selected_messages;
+    std::string prompt_text;
+    std::vector<std::int32_t> prompt_tokens;
+    bool context_window_trimmed = false;
+};
+
+/// Renders the conversation and, when it exceeds the context budget,
+/// searches for the longest suffix (after the persistent system/developer
+/// prefix) that fits. Throws when no suffix fits the window.
+template <typename RenderAndEncode>
+TrimmedPrompt fit_prompt_to_context(const std::vector<celeg::ChatMessage>& messages,
+                                    std::size_t max_output_tokens,
+                                    std::size_t max_context_tokens,
+                                    RenderAndEncode render_and_encode) {
+    TrimmedPrompt trimmed;
+    trimmed.selected_messages = messages;
+    render_and_encode(trimmed.selected_messages, trimmed.prompt_text, trimmed.prompt_tokens);
+    if (max_context_tokens == 0) return trimmed;
+    if (max_output_tokens >= max_context_tokens) {
+        throw std::invalid_argument("max_tokens leaves no room for the chat prompt");
+    }
+    const std::size_t prompt_budget = max_context_tokens - max_output_tokens;
+    if (trimmed.prompt_tokens.size() <= prompt_budget) return trimmed;
+
+    const std::size_t persistent_prefix = persistent_prefix_count(messages);
+    bool found = false;
+    for (std::size_t start = persistent_prefix; start < messages.size(); ++start) {
+        std::vector<celeg::ChatMessage> candidate;
+        candidate.reserve(persistent_prefix + messages.size() - start);
+        candidate.insert(candidate.end(), messages.begin(),
+                         messages.begin() + static_cast<std::ptrdiff_t>(persistent_prefix));
+        candidate.insert(candidate.end(),
+                         messages.begin() + static_cast<std::ptrdiff_t>(start),
+                         messages.end());
+        try {
+            celeg::validate_conversation(candidate);
+        } catch (const std::invalid_argument&) {
+            continue;
+        }
+
+        std::string candidate_prompt;
+        std::vector<std::int32_t> candidate_tokens;
+        render_and_encode(candidate, candidate_prompt, candidate_tokens);
+        if (candidate_tokens.size() <= prompt_budget) {
+            trimmed.selected_messages = std::move(candidate);
+            trimmed.prompt_text = std::move(candidate_prompt);
+            trimmed.prompt_tokens = std::move(candidate_tokens);
+            trimmed.context_window_trimmed = true;
+            found = true;
+            break;
+        }
+    }
+    if (!found) {
+        throw std::invalid_argument(
+            "chat prompt exceeds the context window even after sliding-window trimming");
+    }
+    return trimmed;
+}
+
+/// Re-collects the images after a context trim: the persistent prefix keeps
+/// its images, then the surviving suffix messages re-attach their images in
+/// order; everything trimmed away drops out.
+std::vector<celeg::serve::MultimodalImage> realign_images_after_trim(
+    const std::vector<std::vector<celeg::serve::MultimodalImage>>& message_images,
+    const std::vector<celeg::ChatMessage>& messages,
+    const std::vector<celeg::ChatMessage>& selected_messages) {
+    std::vector<celeg::serve::MultimodalImage> images;
+    const auto append_images = [&images, &message_images](std::size_t index) {
+        images.insert(images.end(), message_images[index].begin(), message_images[index].end());
+    };
+    const std::size_t persistent_prefix = persistent_prefix_count(messages);
+    for (std::size_t index = 0; index < persistent_prefix; ++index) append_images(index);
+    const std::size_t first_selected_suffix = messages.size() -
+        (selected_messages.size() - persistent_prefix);
+    for (std::size_t index = first_selected_suffix; index < messages.size(); ++index) {
+        append_images(index);
+    }
+    return images;
+}
+
 }
 
 namespace celeg::serve::protocol {
@@ -247,7 +338,7 @@ GenerateRequest to_generate_request(const ChatCompletionRequest& request,
 
     const std::size_t max_output_tokens =
         request.max_tokens ? static_cast<std::size_t>(*request.max_tokens) : 128;
-    std::vector<celeg::ChatMessage> selected_messages = messages;
+    std::vector<celeg::ChatMessage> selected_messages;
     std::vector<std::int32_t> prompt_tokens;
     std::string prompt_text;
     bool context_window_trimmed = false;
@@ -261,78 +352,19 @@ GenerateRequest to_generate_request(const ChatCompletionRequest& request,
         encoded = tokenizer.encode(rendered, /*add_bos=*/false);
     };
 
-    render_and_encode(selected_messages, prompt_text, prompt_tokens);
-    if (max_context_tokens != 0) {
-        if (max_output_tokens >= max_context_tokens) {
-            throw std::invalid_argument("max_tokens leaves no room for the chat prompt");
-        }
-        const std::size_t prompt_budget = max_context_tokens - max_output_tokens;
-        if (prompt_tokens.size() > prompt_budget) {
-            std::size_t persistent_prefix = 0;
-            while (persistent_prefix < messages.size() &&
-                   (messages[persistent_prefix].role == celeg::ChatRole::System ||
-                    messages[persistent_prefix].role == celeg::ChatRole::Developer)) {
-                ++persistent_prefix;
-            }
-
-            bool found = false;
-            for (std::size_t start = persistent_prefix; start < messages.size(); ++start) {
-                std::vector<celeg::ChatMessage> candidate;
-                candidate.reserve(persistent_prefix + messages.size() - start);
-                candidate.insert(candidate.end(), messages.begin(),
-                                 messages.begin() + static_cast<std::ptrdiff_t>(persistent_prefix));
-                candidate.insert(candidate.end(),
-                                 messages.begin() + static_cast<std::ptrdiff_t>(start),
-                                 messages.end());
-                try {
-                    celeg::validate_conversation(candidate);
-                } catch (const std::invalid_argument&) {
-                    continue;
-                }
-
-                std::string candidate_prompt;
-                std::vector<std::int32_t> candidate_tokens;
-                render_and_encode(candidate, candidate_prompt, candidate_tokens);
-                if (candidate_tokens.size() <= prompt_budget) {
-                    selected_messages = std::move(candidate);
-                    prompt_text = std::move(candidate_prompt);
-                    prompt_tokens = std::move(candidate_tokens);
-                    context_window_trimmed = true;
-                    found = true;
-                    break;
-                }
-            }
-            if (!found) {
-                throw std::invalid_argument(
-                    "chat prompt exceeds the context window even after sliding-window trimming");
-            }
-        }
-    }
+    const TrimmedPrompt trimmed = fit_prompt_to_context(
+        messages, max_output_tokens, max_context_tokens, render_and_encode);
+    selected_messages = trimmed.selected_messages;
+    prompt_text = trimmed.prompt_text;
+    prompt_tokens = trimmed.prompt_tokens;
+    context_window_trimmed = trimmed.context_window_trimmed;
 
     GenerateRequest generate_request;
     generate_request.rendered_prompt = prompt_text;
     generate_request.prompt_tokens = std::move(prompt_tokens);
     generate_request.context_window_trimmed = context_window_trimmed;
     if (context_window_trimmed) {
-        images.clear();
-        const auto append_images = [&images, &message_images](std::size_t index) {
-            images.insert(images.end(), message_images[index].begin(), message_images[index].end());
-        };
-        const std::size_t persistent_prefix = [&messages] {
-            std::size_t count = 0;
-            while (count < messages.size() &&
-                   (messages[count].role == celeg::ChatRole::System ||
-                    messages[count].role == celeg::ChatRole::Developer)) {
-                ++count;
-            }
-            return count;
-        }();
-        for (std::size_t index = 0; index < persistent_prefix; ++index) append_images(index);
-        const std::size_t first_selected_suffix = messages.size() -
-            (selected_messages.size() - persistent_prefix);
-        for (std::size_t index = first_selected_suffix; index < messages.size(); ++index) {
-            append_images(index);
-        }
+        images = realign_images_after_trim(message_images, messages, selected_messages);
     }
     generate_request.images = std::move(images);
     if (!generate_request.images.empty()) {
