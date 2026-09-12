@@ -18,6 +18,7 @@ foreach(test_name IN ITEMS
     cuda_relative_bias_semantic_test
     layer_dispatch_exhaustiveness_test
     layer_inference_rule_test
+    metadata_falsy_test
     metal_shared_kv_capability_test
     model_compiler_test
     policy_test
@@ -34,6 +35,22 @@ foreach(test_name IN ITEMS
     target_link_libraries(${test_name} PRIVATE celeg_base Threads::Threads)
     add_test(NAME ${test_name} COMMAND ${test_name})
 endforeach()
+
+target_sources(architecture_resolution_test PRIVATE
+    tests/model/architecture_resolution/catalog_tests.cpp
+    tests/model/architecture_resolution/failure_modes_tests.cpp
+    tests/model/architecture_resolution/gguf_spelling_tests.cpp
+    tests/model/architecture_resolution/hybrid_kda_mla_tests.cpp
+    tests/model/architecture_resolution/identity_tests.cpp
+    tests/model/architecture_resolution/norm_layout_tests.cpp
+    tests/model/architecture_resolution/postnorm_evidence_tests.cpp
+    tests/model/architecture_resolution/rope_layer_schedule_tests.cpp
+    tests/model/architecture_resolution/sliding_window_tests.cpp
+    tests/model/architecture_resolution/stated_policy_tests.cpp
+    tests/model/architecture_resolution/structural_tests.cpp
+    tests/model/architecture_resolution/support.cpp
+    tests/model/architecture_resolution/topology_fixture_tests.cpp
+    tests/model/architecture_resolution/yarn_tests.cpp)
 
 target_include_directories(layer_inference_rule_test PRIVATE src/model)
 target_sources(model_compiler_test PRIVATE
