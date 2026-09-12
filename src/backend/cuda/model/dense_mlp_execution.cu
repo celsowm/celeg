@@ -150,11 +150,11 @@ void CudaCompiledModel::run_mlp_prefill(const LayerCommon& common_layer, int row
                    workspace_.prefill_gate_up_.data(), rows, 2 * intermediate,
                    resources_.program_.hidden);
             if (dense_semantics.activation == ActivationKind::GeluTanh) {
-                // The fused projection lays each row out as [gate | up] (row
-                // stride 2*intermediate); the block gated_gelu_tanh kernel
-                // assumes all gates precede all ups and so pairs each row's gate
-                // with the wrong row for rows > 1 -- silent garbage for GeGLU
-                // models in batched prefill.
+                /// The fused projection lays each row out as [gate | up] (row
+                /// stride 2*intermediate); the block gated_gelu_tanh kernel
+                /// assumes all gates precede all ups and so pairs each row's gate
+                /// with the wrong row for rows > 1 -- silent garbage for GeGLU
+                /// models in batched prefill.
                 launch_gated_gelu_tanh_interleaved(workspace_.prefill_gate_up_.data(),
                                                    workspace_.prefill_activated_.data(),
                                                    rows, intermediate, stream_.get());

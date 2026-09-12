@@ -18,13 +18,13 @@
 
 namespace celeg {
 
-// Independent identities only. CudaExecutionPlan::fingerprint() already mixes
-// every CudaModelOptions field (weight/kv-cache/gemm/attention modes, fusion
-// and autotune flags, MTP settings, workspace sizing, expert-offload config,
-// device capabilities, device_ordinal, max_context) -- duplicating those
-// fields here would let two independently-maintained representations of the
-// same plan drift apart. device_ordinal is kept because it is read directly
-// (not just compared) by executor placement checks.
+/// Independent identities only. CudaExecutionPlan::fingerprint() already mixes
+/// every CudaModelOptions field (weight/kv-cache/gemm/attention modes, fusion
+/// and autotune flags, MTP settings, workspace sizing, expert-offload config,
+/// device capabilities, device_ordinal, max_context) -- duplicating those
+/// fields here would let two independently-maintained representations of the
+/// same plan drift apart. device_ordinal is kept because it is read directly
+/// (not just compared) by executor placement checks.
 struct PackedCompatibilityKey {
     const SharedModelWeights* weights_identity = nullptr;
     uint64_t execution_plan_fingerprint = 0;
@@ -42,11 +42,11 @@ struct PackedExecutionServices {
     SharedModelWeights* weights = nullptr;
     ExpertResidencyWorkspace* residency_workspace = nullptr;
 
-    // A packed session is only usable once every required dependency is
-    // bound. session_identity alone was previously trusted as a proxy for
-    // overall validity, which let a partially-populated instance (e.g.
-    // constructed by hand rather than through packed_session_context())
-    // pass validity checks while other pointers stayed null.
+    /// A packed session is only usable once every required dependency is
+    /// bound. session_identity alone was previously trusted as a proxy for
+    /// overall validity, which let a partially-populated instance (e.g.
+    /// constructed by hand rather than through packed_session_context())
+    /// pass validity checks while other pointers stayed null.
     explicit operator bool() const noexcept {
         return session_identity != nullptr && execution_plan != nullptr &&
                program != nullptr && weights != nullptr &&

@@ -819,14 +819,14 @@ void launch_gated_delta_net(const __nv_bfloat16* projected_qkv,
             CELEG_KERNEL_DEBUG_SYNC(stream);
             return;
         }
-        // Generic path: loops over all `rows` internally and handles
-        // key_heads != value_heads via GQA-style `repeat`, so it is correct
-        // for any rows count and any heads configuration. Reached both for
-        // rows >= 64 (any heads config) and for rows < 64 with
-        // key_heads != value_heads -- the latter used to fall into a
-        // single-row-only kernel triple that silently left every row past
-        // row 0 uncomputed whenever a GQA-style gated-deltanet (key_heads !=
-        // value_heads, e.g. Qwen3.5) prefilled fewer than 64 tokens.
+        /// Generic path: loops over all `rows` internally and handles
+        /// key_heads != value_heads via GQA-style `repeat`, so it is correct
+        /// for any rows count and any heads configuration. Reached both for
+        /// rows >= 64 (any heads config) and for rows < 64 with
+        /// key_heads != value_heads -- the latter used to fall into a
+        /// single-row-only kernel triple that silently left every row past
+        /// row 0 uncomputed whenever a GQA-style gated-deltanet (key_heads !=
+        /// value_heads, e.g. Qwen3.5) prefilled fewer than 64 tokens.
         const int tiles = (value_head_dim + 3) / 4;
         gated_delta_sequence_prepare_kernel<<<key_heads, 256, 0, stream>>>(
             const_cast<__nv_bfloat16*>(projected_qkv), conv_weight, conv_state,

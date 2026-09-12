@@ -79,9 +79,9 @@ void bind_per_layer_input(CanonicalInferenceContext& context) {
              "checkpoint has a partial per-layer-input tower");
     }
 
-    // The per-layer width is the trailing dimension of the shared projection
-    // norm, so it is derived from the checkpoint rather than a config key that
-    // multimodal packagings nest inconsistently.
+    /// The per-layer width is the trailing dimension of the shared projection
+    /// norm, so it is derived from the checkpoint rather than a config key that
+    /// multimodal packagings nest inconsistently.
     const int input_size = projection_norm->shape.empty()
         ? 0
         : static_cast<int>(projection_norm->shape.back());

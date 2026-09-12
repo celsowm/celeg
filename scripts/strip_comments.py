@@ -110,6 +110,11 @@ def tokenize(text: str) -> list[tuple[str, str]]:
         if text[i : i + 2] == "//":
             flush()
             end = scan_line_comment(text, i)
+            marker = text[i + 2] if i + 2 < n else ""
+            if marker in "/!":
+                buf.append(text[i:end])
+                i = end
+                continue
             tokens.append(("line_comment", text[i:end]))
             i = end
             continue
@@ -118,6 +123,11 @@ def tokenize(text: str) -> list[tuple[str, str]]:
             flush()
             close = text.find("*/", i + 2)
             end = close + 2 if close != -1 else n
+            marker = text[i + 2] if i + 2 < n else ""
+            if marker in "*!":
+                buf.append(text[i:end])
+                i = end
+                continue
             tokens.append(("block_comment", text[i:end]))
             i = end
             continue
@@ -129,10 +139,14 @@ def tokenize(text: str) -> list[tuple[str, str]]:
     return tokens
 
 
-def render(tokens: list[tuple[str, str]]) -> tuple[str, int, int]:
+def render(tokens: list[tuple[str, str]], convert: bool = False) -> tuple[str, int, int]:
     """Reassemble tokens into stripped text.
 
-    Returns (text, comment_lines_removed, param_comments_preserved).
+    With convert=False prose comments are deleted. With convert=True prose
+    comments are republished as Doxygen (// -> /// and /* */ -> /** */),
+    preserving every comment byte. Returns (text, comment_lines_removed,
+    param_comments_preserved); in convert mode the same tuple reports
+    converted lines instead.
     """
     lines: list[str] = []
     cur: list[str] = []
@@ -154,6 +168,17 @@ def render(tokens: list[tuple[str, str]]) -> tuple[str, int, int]:
         has_real_code = False
         had_removed = False
 
+    def append_converted(txt: str) -> None:
+        nonlocal has_real_code, removed_count
+        parts = txt.split("\n")
+        for idx, part in enumerate(parts):
+            cur.append(part)
+            if part.strip():
+                has_real_code = True
+                removed_count += 1
+            if idx < len(parts) - 1:
+                end_line()
+
     for kind, txt in tokens:
         if kind == "code":
             parts = txt.split("\n")
@@ -164,12 +189,17 @@ def render(tokens: list[tuple[str, str]]) -> tuple[str, int, int]:
                 if idx < len(parts) - 1:
                     end_line()
         elif kind == "line_comment":
-            had_removed = True
+            if convert:
+                append_converted("///" + txt[2:])
+            else:
+                had_removed = True
         elif kind == "block_comment":
             if "\n" not in txt and PARAM_COMMENT_RE.match(txt):
                 cur.append(txt)
                 has_real_code = True
                 preserved_count += 1
+            elif convert:
+                append_converted("/**" + txt[2:])
             elif "\n" in txt:
                 had_removed = True
                 end_line()
@@ -181,8 +211,8 @@ def render(tokens: list[tuple[str, str]]) -> tuple[str, int, int]:
     return "\n".join(lines), removed_count, preserved_count
 
 
-def strip_comments(text: str) -> tuple[str, int, int]:
-    return render(tokenize(text))
+def strip_comments(text: str, convert: bool = False) -> tuple[str, int, int]:
+    return render(tokenize(text), convert=convert)
 
 
 # --------------------------------------------------------------------------
@@ -236,6 +266,26 @@ SELFTEST_CASES = [
         "int a = 1;\nint b = 2;\n",
     ),
     (
+        "doxygen /// comment preserved",
+        "/// Documents the next symbol.\nint x = 1;  ///  trailing doc\nint y = 2;\n",
+        "/// Documents the next symbol.\nint x = 1;  ///  trailing doc\nint y = 2;\n",
+    ),
+    (
+        "doxygen //! comment preserved",
+        "//! Qt-style doc\nint x = 1;\n",
+        "//! Qt-style doc\nint x = 1;\n",
+    ),
+    (
+        "doxygen /** */ block preserved",
+        "/** Brief.\n *  Details.\n */\nint f();\n",
+        "/** Brief.\n *  Details.\n */\nint f();\n",
+    ),
+    (
+        "doxygen /*! */ block preserved",
+        "/*! qt block */\nint g();\n",
+        "/*! qt block */\nint g();\n",
+    ),
+    (
         "multi-line block comment with code on both boundary lines",
         "foo();  /* explanation\n   of what foo does\n   in detail */  bar();\n",
         "foo();\n  bar();\n",
@@ -258,6 +308,45 @@ SELFTEST_CASES = [
 ]
 
 
+CONVERT_SELFTEST_CASES = [
+    (
+        "convert // line to ///",
+        "// first line of explanation\n// second line\nint x = 1;\n",
+        "/// first line of explanation\n/// second line\nint x = 1;\n",
+    ),
+    (
+        "convert trailing comment after code",
+        "int z = 3; // explanation\n",
+        "int z = 3; /// explanation\n",
+    ),
+    (
+        "convert single-line block comment",
+        "int z = 3; /* explain z */\n",
+        "int z = 3; /** explain z */\n",
+    ),
+    (
+        "convert multi-line block comment",
+        "/* This is a\n   long prose\n   explanation */\nint b = 2;\n",
+        "/** This is a\n   long prose\n   explanation */\nint b = 2;\n",
+    ),
+    (
+        "convert leaves doxygen alone",
+        "/// already doc\n/** block doc */\nint x = 1;\n",
+        "/// already doc\n/** block doc */\nint x = 1;\n",
+    ),
+    (
+        "convert preserves param comments",
+        "foo(/*add_bos=*/false, /*req*/ nullptr);\n",
+        "foo(/*add_bos=*/false, /*req*/ nullptr);\n",
+    ),
+    (
+        "convert leaves string literals alone",
+        'std::cout << "http://example";\n',
+        'std::cout << "http://example";\n',
+    ),
+]
+
+
 def run_selftest() -> bool:
     ok = True
     for name, input_text, expected in SELFTEST_CASES:
@@ -267,6 +356,15 @@ def run_selftest() -> bool:
         else:
             ok = False
             print(f"FAIL  {name}")
+            print(f"  expected: {expected!r}")
+            print(f"  actual:   {actual!r}")
+    for name, input_text, expected in CONVERT_SELFTEST_CASES:
+        actual, _, _ = strip_comments(input_text, convert=True)
+        if actual == expected:
+            print(f"PASS  convert:{name}")
+        else:
+            ok = False
+            print(f"FAIL  convert:{name}")
             print(f"  expected: {expected!r}")
             print(f"  actual:   {actual!r}")
     return ok
@@ -279,12 +377,12 @@ def run_selftest() -> bool:
 BOM = b"\xef\xbb\xbf"
 
 
-def process_file(path: Path, apply: bool) -> tuple[int, int, bool]:
+def process_file(path: Path, apply: bool, convert: bool) -> tuple[int, int, bool]:
     raw = path.read_bytes()
     has_bom = raw.startswith(BOM)
     text = raw[len(BOM) :].decode("utf-8") if has_bom else raw.decode("utf-8")
 
-    new_text, removed, preserved = strip_comments(text)
+    new_text, removed, preserved = strip_comments(text, convert=convert)
     changed = new_text != text
 
     if apply and changed:
@@ -311,6 +409,11 @@ def main() -> int:
     parser.add_argument("--apply", action="store_true", help="write changes to disk (default is dry-run)")
     parser.add_argument("--selftest", action="store_true", help="run tokenizer self-tests and exit")
     parser.add_argument(
+        "--convert",
+        action="store_true",
+        help="republish prose comments as Doxygen (// -> ///, /* */ -> /** */) instead of deleting them",
+    )
+    parser.add_argument(
         "--paths",
         nargs="+",
         default=DEFAULT_SCOPE,
@@ -336,7 +439,7 @@ def main() -> int:
     total_changed_files = 0
 
     for path in files:
-        removed, preserved, changed = process_file(path, apply=args.apply)
+        removed, preserved, changed = process_file(path, apply=args.apply, convert=args.convert)
         total_removed += removed
         total_preserved += preserved
         if changed:
@@ -345,9 +448,10 @@ def main() -> int:
             print(f"{'apply' if args.apply else 'dry-run'}  {rel}  -{removed} lines, {preserved} preserved")
 
     mode = "Applied" if args.apply else "Would change (dry-run)"
+    verb = "converted to Doxygen" if args.convert else "removed"
     print(
         f"\n{mode}: {total_changed_files}/{len(files)} files, "
-        f"{total_removed} comment lines removed, {total_preserved} param comments preserved."
+        f"{total_removed} comment lines {verb}, {total_preserved} param comments preserved."
     )
     return 0
 

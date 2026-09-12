@@ -33,7 +33,7 @@ celeg::HostTensorView view(celeg::TensorDType dtype, std::vector<int64_t> shape,
 }
 
 int main() {
-    // rows=2, cols=32 -> packed_cols=16, scale_cols=2 (block size 16).
+    /// rows=2, cols=32 -> packed_cols=16, scale_cols=2 (block size 16).
     MemoryRepository repository;
     std::vector<uint8_t> packed(2 * 16);
     for (size_t i = 0; i < packed.size(); ++i) packed[i] = static_cast<uint8_t>(i);
@@ -48,14 +48,14 @@ int main() {
     CELEG_TEST_CHECK(matrix.packed == packed);
     CELEG_TEST_CHECK(matrix.block_scales == block_scales);
     CELEG_TEST_CHECK(matrix.global_scale == 3.0f);
-    CELEG_TEST_CHECK(matrix.input_global_scale == 1.0f);  // no sidecar -> default
+    CELEG_TEST_CHECK(matrix.input_global_scale == 1.0f);  /// no sidecar -> default
 
     const std::vector<float> input_scale = {0.5f};
     repository.tensors.emplace("w.input_global_scale", view(celeg::TensorDType::F32, {1}, input_scale));
     const auto with_input_scale = celeg::load_packed_nvfp4_matrix(repository, "w", {2, 32});
     CELEG_TEST_CHECK(with_input_scale.input_global_scale == 0.5f);
 
-    // Missing the global-scale sidecar -> not detected as packed NVFP4.
+    /// Missing the global-scale sidecar -> not detected as packed NVFP4.
     MemoryRepository incomplete;
     incomplete.tensors.emplace("w_packed", view(celeg::TensorDType::U8, {2, 16}, packed));
     incomplete.tensors.emplace("w_scale", view(celeg::TensorDType::F8_E4M3, {2, 2}, block_scales));

@@ -166,11 +166,11 @@ TokenizerDefinition load_tokenizer_definition_json(const std::string& path, std:
         if (token.text == "<|endoftext|>") endoftext_id = token.id;
         if (token.text == "<pad>" || token.text == "<|pad|>") definition.pad_id = token.id;
     }
-    // <|endoftext|> stands in for BOS whenever the vocabulary has no
-    // dedicated BOS-family token, independent of what serves as EOS: a
-    // chat-tuned tokenizer can have both an explicit turn-end token (e.g.
-    // <|im_end|>) and a config-declared bos_token_id of <|endoftext|> at
-    // the same time (Qwen-family tokenizers are a common example).
+    /// <|endoftext|> stands in for BOS whenever the vocabulary has no
+    /// dedicated BOS-family token, independent of what serves as EOS: a
+    /// chat-tuned tokenizer can have both an explicit turn-end token (e.g.
+    /// <|im_end|>) and a config-declared bos_token_id of <|endoftext|> at
+    /// the same time (Qwen-family tokenizers are a common example).
     if (endoftext_id >= 0 && !explicit_bos) {
         definition.bos_id = endoftext_id;
         definition.has_bos = true;

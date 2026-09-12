@@ -168,7 +168,7 @@ std::vector<TreeFile> list_repo_files(const std::string& repo_id,
 
 }
 
-#else  // !_WIN32
+#else  /// !_WIN32
 
 namespace {
 

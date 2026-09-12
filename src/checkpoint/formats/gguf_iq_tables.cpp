@@ -1,13 +1,13 @@
-// GGUF IQ-quantization lookup tables.
-//
-// The IQ formats encode each group of 8 weights as an index into a fixed
-// codebook plus a sign mask, so a decoder is useless without these tables.
-// The values are transcribed verbatim from ggml's ggml-common.h (llama.cpp,
-// MIT licence) and must match it bit for bit: any divergence silently
-// produces wrong weights rather than an error.
-//
-// They live in a translation unit rather than a header so the ~11 KB of
-// constants exists once in celeg_base, which both backends already link.
+/// GGUF IQ-quantization lookup tables.
+///
+/// The IQ formats encode each group of 8 weights as an index into a fixed
+/// codebook plus a sign mask, so a decoder is useless without these tables.
+/// The values are transcribed verbatim from ggml's ggml-common.h (llama.cpp,
+/// MIT licence) and must match it bit for bit: any divergence silently
+/// produces wrong weights rather than an error.
+///
+/// They live in a translation unit rather than a header so the ~11 KB of
+/// constants exists once in celeg_base, which both backends already link.
 
 #include "celeg/checkpoint/gguf_iq_tables.hpp"
 

@@ -216,12 +216,12 @@ bool repository_has_tensor(const IWeightRepository& repository,
         has_packed_fp8_matrix(repository, name) || has_packed_nvfp4_matrix(repository, name);
 }
 
-// Decides, once, whether this MoE layer's routed-expert weights are packed
-// into a single [num_experts, ...] tensor pair or stored as individually
-// named per-expert tensors. This is checkpoint-family information that
-// backends must consume from the resolved plan rather than re-deriving by
-// probing `repository->contains()` on literal tensor-name spellings during
-// setup (see docs/EXTENSIBILITY_REFACTORING_PLAN.md, Phase 3).
+/// Decides, once, whether this MoE layer's routed-expert weights are packed
+/// into a single [num_experts, ...] tensor pair or stored as individually
+/// named per-expert tensors. This is checkpoint-family information that
+/// backends must consume from the resolved plan rather than re-deriving by
+/// probing `repository->contains()` on literal tensor-name spellings during
+/// setup (see docs/EXTENSIBILITY_REFACTORING_PLAN.md, Phase 3).
 bool moe_routed_experts_are_packed(int layer, int physical_layer,
                                    const ITensorNamingPolicy& naming_policy,
                                    const IWeightRepository* repository) {

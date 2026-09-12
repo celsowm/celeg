@@ -8,11 +8,11 @@ namespace celeg::attention_semantics {
 #define CELEG_DYNAMIC_SPARSE_INLINE inline
 #endif
 
-// DynamicSparsePattern is content-ranked, not a position-only visibility mask.
-// Every causal block is ranked by the maximum scaled Q.K score among its
-// causally visible tokens. At most max_selected_blocks are retained; equal
-// scores prefer the lower block index so CPU reference code and accelerators
-// can make exactly the same selection.
+/// DynamicSparsePattern is content-ranked, not a position-only visibility mask.
+/// Every causal block is ranked by the maximum scaled Q.K score among its
+/// causally visible tokens. At most max_selected_blocks are retained; equal
+/// scores prefer the lower block index so CPU reference code and accelerators
+/// can make exactly the same selection.
 CELEG_DYNAMIC_SPARSE_INLINE bool dynamic_sparse_score_better(
     float candidate_score, int candidate_block,
     float incumbent_score, int incumbent_block) {
@@ -34,9 +34,9 @@ CELEG_DYNAMIC_SPARSE_INLINE void dynamic_sparse_initialize(
     }
 }
 
-// Keeps the selected slots ordered best-to-worst. This is not required by the
-// attention kernel, but makes tie behavior and cross-backend conformance
-// deterministic and directly testable.
+/// Keeps the selected slots ordered best-to-worst. This is not required by the
+/// attention kernel, but makes tie behavior and cross-backend conformance
+/// deterministic and directly testable.
 CELEG_DYNAMIC_SPARSE_INLINE void dynamic_sparse_insert_top_block(
     int candidate_block, float candidate_score,
     int* blocks, float* scores, int count) {

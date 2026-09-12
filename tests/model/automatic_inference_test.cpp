@@ -120,12 +120,12 @@ std::shared_ptr<MemoryRepository> gguf_repository() {
 }
 
 celeg::CheckpointMetadata no_rope_gguf_metadata() {
-    // Same structural/tensor grammar as gguf_metadata() (ordinary attention
-    // tensors, via gguf_repository()), but declares a GGUF architecture that
-    // is known to never apply RoPE despite carrying an active-looking
-    // "rope.freq_base"/"rope.dimension_count". This mirrors the real
-    // Nemotron-H bug: vestigial rope hparams inherited from a related
-    // architecture family that the reference graph never consumes.
+    /// Same structural/tensor grammar as gguf_metadata() (ordinary attention
+    /// tensors, via gguf_repository()), but declares a GGUF architecture that
+    /// is known to never apply RoPE despite carrying an active-looking
+    /// "rope.freq_base"/"rope.dimension_count". This mirrors the real
+    /// Nemotron-H bug: vestigial rope hparams inherited from a related
+    /// architecture family that the reference graph never consumes.
     celeg::CheckpointMetadata result = gguf_metadata();
     result.values["general.architecture"] = std::string("mamba2");
     for (const std::string_view suffix : {"embedding_length", "feed_forward_length",
@@ -301,18 +301,18 @@ celeg::CheckpointMetadata qwen35_metadata() {
     result.values["mrope_section"] = std::vector<int64_t>{2, 1, 1};
     result.values["mrope_interleaved"] = true;
     result.values["tie_word_embeddings"] = true;
-    // Qwen3.5's linear_attn geometry: key heads/dim independent from value
-    // heads/dim, both distinct from num_attention_heads (full-attention
-    // query heads).
+    /// Qwen3.5's linear_attn geometry: key heads/dim independent from value
+    /// heads/dim, both distinct from num_attention_heads (full-attention
+    /// query heads).
     result.values["linear_num_key_heads"] = int64_t(2);
     result.values["linear_key_head_dim"] = int64_t(4);
     result.values["linear_num_value_heads"] = int64_t(3);
     result.values["linear_value_head_dim"] = int64_t(4);
     result.values["linear_conv_kernel_dim"] = int64_t(4);
-    // Layer 0 is linear_attn, layer 1 is full_attention -- matches
-    // qwen35_repository() below. Exercises the "linear_attention" token in
-    // the generic per-layer attention-pattern parser (distinct from the
-    // "gdn"/"gated_delta_net" synonyms it already recognized).
+    /// Layer 0 is linear_attn, layer 1 is full_attention -- matches
+    /// qwen35_repository() below. Exercises the "linear_attention" token in
+    /// the generic per-layer attention-pattern parser (distinct from the
+    /// "gdn"/"gated_delta_net" synonyms it already recognized).
     result.values["layer_types"] =
         std::vector<std::string>{"linear_attention", "full_attention"};
     return result;
@@ -342,8 +342,8 @@ std::shared_ptr<MemoryRepository> qwen35_repository() {
             result->add(la + "out_proj.weight", {32, 12});
         } else {
             const std::string sa = prefix + ".self_attn.";
-            // Output gate fused into q_proj (double width), as Qwen3.5's
-            // full-attention layers store it.
+            /// Output gate fused into q_proj (double width), as Qwen3.5's
+            /// full-attention layers store it.
             result->add(sa + "q_proj.weight", {64, 32});
             result->add(sa + "k_proj.weight", {32, 32});
             result->add(sa + "v_proj.weight", {32, 32});
@@ -496,10 +496,10 @@ int main() {
     CELEG_TEST_CHECK(gguf_model.graph.hidden == 8);
     CELEG_TEST_CHECK(gguf_model.graph.layers.size() == 2);
     CELEG_TEST_CHECK(celeg::explain_resolution(gguf_checkpoint).failures.empty());
-    // A GGUF architecture absent from the no-RoPE profile, with active
-    // "rope.freq_base" metadata, must resolve to a real RopePositionSpec:
-    // generic inference does not treat all GGUF checkpoints as position-free,
-    // only the ones the format boundary declares as such.
+    /// A GGUF architecture absent from the no-RoPE profile, with active
+    /// "rope.freq_base" metadata, must resolve to a real RopePositionSpec:
+    /// generic inference does not treat all GGUF checkpoints as position-free,
+    /// only the ones the format boundary declares as such.
     CELEG_TEST_CHECK(std::holds_alternative<celeg::RopePositionSpec>(
         std::get<celeg::AttentionSpec>(gguf_model.graph.layers[0].mixer).position));
 
@@ -508,10 +508,10 @@ int main() {
     no_rope_checkpoint.repository = gguf_repository();
     const celeg::ResolvedModel no_rope_model =
         catalog.select(no_rope_checkpoint.metadata).resolve(no_rope_checkpoint);
-    // Same tensor grammar and same "active-looking" rope hparams as
-    // gguf_model above, but a GGUF architecture the format boundary knows
-    // never applies RoPE: the resolved attention layer must carry
-    // NoPositionEncodingSpec regardless of the vestigial rope metadata.
+    /// Same tensor grammar and same "active-looking" rope hparams as
+    /// gguf_model above, but a GGUF architecture the format boundary knows
+    /// never applies RoPE: the resolved attention layer must carry
+    /// NoPositionEncodingSpec regardless of the vestigial rope metadata.
     CELEG_TEST_CHECK(std::holds_alternative<celeg::NoPositionEncodingSpec>(
         std::get<celeg::AttentionSpec>(no_rope_model.graph.layers[0].mixer).position));
     CELEG_TEST_CHECK(celeg::explain_resolution(no_rope_checkpoint).failures.empty());
@@ -582,13 +582,13 @@ int main() {
     }
     CELEG_TEST_CHECK(conflicting_scope_rejected);
 
-    // NormalizedModelMetadata::position_encoding is the single canonical
-    // representation of inferred positional semantics: a checkpoint carrying
-    // "active-looking" rope hparams under a no-RoPE GGUF architecture must
-    // resolve to NoPositionEncodingSpec (not a RoPE payload the runtime
-    // happens to ignore), and a checkpoint under an ordinary GGUF
-    // architecture with the same hparams must resolve to a real
-    // InferredRopePosition carrying those values through unmodified.
+    /// NormalizedModelMetadata::position_encoding is the single canonical
+    /// representation of inferred positional semantics: a checkpoint carrying
+    /// "active-looking" rope hparams under a no-RoPE GGUF architecture must
+    /// resolve to NoPositionEncodingSpec (not a RoPE payload the runtime
+    /// happens to ignore), and a checkpoint under an ordinary GGUF
+    /// architecture with the same hparams must resolve to a real
+    /// InferredRopePosition carrying those values through unmodified.
     const auto no_rope_facts = celeg::normalize_model_metadata(no_rope_gguf_metadata());
     CELEG_TEST_CHECK(no_rope_facts.attention.position_encoding.global.has_value());
     CELEG_TEST_CHECK(std::holds_alternative<celeg::NoPositionEncodingSpec>(
@@ -628,12 +628,12 @@ int main() {
         ling_model.graph.layers[1].feed_forward));
     CELEG_TEST_CHECK(celeg::explain_resolution(ling_checkpoint).failures.empty());
 
-    // Qwen3.5: one linear_attn (gated-DeltaNet) layer followed by one
-    // full-attention layer combining a q_proj-fused output gate, partial
-    // rotary (0.25 of head_dim -> here 0.5, scaled for the tiny synthetic
-    // head_dim), and interleaved M-RoPE sectioning -- the exact feature
-    // combination Phase 2 needed to prove out for the generic/automatic
-    // architecture path (no per-model descriptor).
+    /// Qwen3.5: one linear_attn (gated-DeltaNet) layer followed by one
+    /// full-attention layer combining a q_proj-fused output gate, partial
+    /// rotary (0.25 of head_dim -> here 0.5, scaled for the tiny synthetic
+    /// head_dim), and interleaved M-RoPE sectioning -- the exact feature
+    /// combination Phase 2 needed to prove out for the generic/automatic
+    /// architecture path (no per-model descriptor).
     celeg::CheckpointView qwen35_checkpoint;
     qwen35_checkpoint.metadata = qwen35_metadata();
     qwen35_checkpoint.repository = qwen35_repository();
@@ -668,21 +668,21 @@ int main() {
     CELEG_TEST_CHECK(std::abs(qwen35_mrope->base.rotary_fraction - 0.5f) < 1.0e-6f);
     CELEG_TEST_CHECK(celeg::explain_resolution(qwen35_checkpoint).failures.empty());
 
-    // Qwen3.5's `Qwen3_5RMSNorm` multiplies by `1 + weight`, not `weight`
-    // directly (the checkpoint stores a zero-centered offset) -- detected
-    // from the same `linear_attn.in_proj_qkv.weight` grammar that selects
-    // the gated-delta layer above, so every structurally-bound norm in this
-    // checkpoint (input/post-attention layernorm, q/k-norm, final norm)
-    // must resolve to `OnePlusScale`.
+    /// Qwen3.5's `Qwen3_5RMSNorm` multiplies by `1 + weight`, not `weight`
+    /// directly (the checkpoint stores a zero-centered offset) -- detected
+    /// from the same `linear_attn.in_proj_qkv.weight` grammar that selects
+    /// the gated-delta layer above, so every structurally-bound norm in this
+    /// checkpoint (input/post-attention layernorm, q/k-norm, final norm)
+    /// must resolve to `OnePlusScale`.
     CELEG_TEST_CHECK(qwen35_model.graph.final_norm.weight_kind ==
                      celeg::NormWeightKind::OnePlusScale);
     CELEG_TEST_CHECK(qwen35_model.graph.layers[0].mixer_norm.before.has_value());
     CELEG_TEST_CHECK(qwen35_model.graph.layers[0].mixer_norm.before->weight_kind ==
                      celeg::NormWeightKind::OnePlusScale);
 
-    // Agnes: `delta_attn` spelling, `agnes_*` layer-type tokens,
-    // `global_attn` full attention with a stated output gate, and a parallel
-    // FFN branch -- resolved under both layer roots the bindings accept.
+    /// Agnes: `delta_attn` spelling, `agnes_*` layer-type tokens,
+    /// `global_attn` full attention with a stated output gate, and a parallel
+    /// FFN branch -- resolved under both layer roots the bindings accept.
     const auto agnes_facts = celeg::normalize_model_metadata(agnes_metadata());
     CELEG_TEST_CHECK(agnes_facts.core.parallel_intermediate == std::optional<int>{8});
     CELEG_TEST_CHECK(agnes_facts.attention.output_gate == std::optional<bool>{true});

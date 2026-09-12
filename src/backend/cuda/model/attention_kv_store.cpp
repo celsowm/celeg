@@ -28,7 +28,7 @@ const __nv_bfloat16* latent_key_rope_for_store(
         ? model.workspace_.latent_key_rope_.data() : nullptr;
 }
 
-} // namespace
+} /// namespace
 
 void CudaCompiledModel::store_standard_attention_kv_contiguous(
     AttentionLayer& attention, AttentionLayer& owner,

@@ -3,18 +3,18 @@
 
 #include <cuda_bf16.h>
 
-// Single source of truth for w8a16_gemv_kernel's block shape: the kernel's
-// own indexing math (`warp`, `output_row`) depends on this matching the
-// launcher's block dimension exactly. Tried dropping this to 1 (one warp
-// per block, since the kernel shares no state -- no smem, no cross-warp
-// reduction -- across warps of the same block) to raise SM occupancy on
-// narrow (n ~ 1024) decode-time matrices, where `ncu --set full` measured
-// only 17% achieved occupancy / 0.13 waves at wpb=8 on a 170-SM GPU. That
-// made occupancy *worse* (12.8%) and end-to-end decode throughput did not
-// move (134.4 -> 134.9 tok/s, noise): at this kernel's ~5us duration,
-// block-dispatch overhead for many tiny 1-warp blocks dominates over the
-// SM-fill benefit. Left at 8; see docs/QUANTIZATION_SUPPORT_MATRIX.md GPU
-// decode section for the full writeup.
+/// Single source of truth for w8a16_gemv_kernel's block shape: the kernel's
+/// own indexing math (`warp`, `output_row`) depends on this matching the
+/// launcher's block dimension exactly. Tried dropping this to 1 (one warp
+/// per block, since the kernel shares no state -- no smem, no cross-warp
+/// reduction -- across warps of the same block) to raise SM occupancy on
+/// narrow (n ~ 1024) decode-time matrices, where `ncu --set full` measured
+/// only 17% achieved occupancy / 0.13 waves at wpb=8 on a 170-SM GPU. That
+/// made occupancy *worse* (12.8%) and end-to-end decode throughput did not
+/// move (134.4 -> 134.9 tok/s, noise): at this kernel's ~5us duration,
+/// block-dispatch overhead for many tiny 1-warp blocks dominates over the
+/// SM-fill benefit. Left at 8; see docs/QUANTIZATION_SUPPORT_MATRIX.md GPU
+/// decode section for the full writeup.
 #define W8A16_WARPS_PER_BLOCK 8
 
 static __inline__ __device__ float gemv_warp_sum(float value) {
@@ -57,23 +57,23 @@ static __global__ void bf16_gemv_kernel(const __nv_bfloat16* __restrict__ x,
     }
 }
 
-// K-split variant of w8a16_gemv_kernel, modelled on llama.cpp's
-// mul_mat_vec_q (.externals/llama.cpp/ggml/src/ggml-cuda/mmvq.cu): instead
-// of one warp owning a whole output row, every warp in the block cooperates
-// on the *same* row, each summing a disjoint slice of K, and the block
-// reduces across warps through shared memory at the end.
-//
-// The point is parallelism, not tiling. w8a16_gemv_kernel produces exactly
-// n warps of work for an n-row matrix, so a narrow decode-time matrix
-// (n ~ 1024) cannot fill a 170-SM GPU no matter how those warps are grouped
-// into blocks -- which is why an earlier attempt at redistributing the same
-// warps across more blocks made occupancy worse rather than better. This
-// kernel produces n * NWarps warps instead, giving the scheduler real work
-// to hide memory latency behind.
-//
-// Threads stride over K across the whole block (tid = warp*32 + lane,
-// stepping by blockDim.x), so consecutive threads read consecutive char4 --
-// each step pulls one contiguous NWarps*128-byte run out of the row.
+/// K-split variant of w8a16_gemv_kernel, modelled on llama.cpp's
+/// mul_mat_vec_q (.externals/llama.cpp/ggml/src/ggml-cuda/mmvq.cu): instead
+/// of one warp owning a whole output row, every warp in the block cooperates
+/// on the *same* row, each summing a disjoint slice of K, and the block
+/// reduces across warps through shared memory at the end.
+///
+/// The point is parallelism, not tiling. w8a16_gemv_kernel produces exactly
+/// n warps of work for an n-row matrix, so a narrow decode-time matrix
+/// (n ~ 1024) cannot fill a 170-SM GPU no matter how those warps are grouped
+/// into blocks -- which is why an earlier attempt at redistributing the same
+/// warps across more blocks made occupancy worse rather than better. This
+/// kernel produces n * NWarps warps instead, giving the scheduler real work
+/// to hide memory latency behind.
+///
+/// Threads stride over K across the whole block (tid = warp*32 + lane,
+/// stepping by blockDim.x), so consecutive threads read consecutive char4 --
+/// each step pulls one contiguous NWarps*128-byte run out of the row.
 template <int NWarps>
 static __global__ void w8a16_gemv_ksplit_kernel(
         const __nv_bfloat16* __restrict__ x,
@@ -82,8 +82,8 @@ static __global__ void w8a16_gemv_ksplit_kernel(
         __nv_bfloat16* __restrict__ y,
         int m, int n, int k, float beta) {
     const int output_row = blockIdx.x;
-    if (output_row >= n) return;  // uniform across the block, so no
-                                  // __syncthreads divergence below
+    if (output_row >= n) return;  /// uniform across the block, so no
+                                  /// __syncthreads divergence below
 
     const int tid = threadIdx.x;
     const int lane = tid & 31;
@@ -132,8 +132,8 @@ static __global__ void w8a16_gemv_ksplit_kernel(
             if (beta != 0.0f) value += beta * __bfloat162float(y[output_index]);
             y[output_index] = __float2bfloat16(value);
         }
-        // Keep the next activation row from overwriting partials[] while
-        // thread 0 is still reducing this one.
+        /// Keep the next activation row from overwriting partials[] while
+        /// thread 0 is still reducing this one.
         __syncthreads();
     }
 }

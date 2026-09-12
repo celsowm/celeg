@@ -60,9 +60,9 @@ void check_dynamic_ntk() {
         CELEG_TEST_CHECK(near(actual, expected));
     }
 
-    // Pair zero is invariant under a theta/base change. The former host
-    // implementation multiplied the completed frequency and therefore made
-    // pair zero greater than one after the context boundary.
+    /// Pair zero is invariant under a theta/base change. The former host
+    /// implementation multiplied the completed frequency and therefore made
+    /// pair zero greater than one after the context boundary.
     CELEG_TEST_CHECK(near(celeg::rope_frequency(spec, 0, 8, position), 1.0));
 }
 

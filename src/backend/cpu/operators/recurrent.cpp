@@ -92,8 +92,8 @@ void execute_cpu_mamba2_token(
     const int group_size = spec.num_heads / spec.group_count;
     for (int head = 0; head < spec.num_heads; ++head) {
         const float dt = std::log1p(std::exp(dt_raw[head] + weights.dt_bias[head]));
-        // GGUF conversion bakes A = -exp(A_log) into the stored tensor; raw
-        // safetensors checkpoints still store the untransformed A_log parameter.
+        /// GGUF conversion bakes A = -exp(A_log) into the stored tensor; raw
+        /// safetensors checkpoints still store the untransformed A_log parameter.
         const float a = spec.a_log_needs_exp ? -std::exp(weights.a_log[head]) : weights.a_log[head];
         const float decay = std::exp(dt * a);
         const int group = head / group_size;
@@ -111,10 +111,10 @@ void execute_cpu_mamba2_token(
             workspace.mamba_inner[channel] = output + weights.d[head] * x;
         }
     }
-    // Reference (ggml mamba-base.cpp / HF MambaRMSNormGated): the SiLU gate is
-    // applied to the raw SSM output BEFORE the RMS statistics are computed, and
-    // the norm is grouped by spec.group_count (matching the B/C state grouping),
-    // not a single normalization over the whole intermediate width.
+    /// Reference (ggml mamba-base.cpp / HF MambaRMSNormGated): the SiLU gate is
+    /// applied to the raw SSM output BEFORE the RMS statistics are computed, and
+    /// the norm is grouped by spec.group_count (matching the B/C state grouping),
+    /// not a single normalization over the whole intermediate width.
     for (int i = 0; i < inner; ++i) {
         const float gate = z[i];
         workspace.mamba_inner[i] *= gate / (1.0f + std::exp(-gate));

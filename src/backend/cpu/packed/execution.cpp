@@ -612,9 +612,9 @@ struct CpuCompiledModel::BatchScratch {
                                    workspace_.hidden.data(), rows);
                 rmsnorm_rows_inplace(workspace_.hidden.data(), common.per_layer_input_norm, hidden,
                                      input_plan.norm_epsilon);
-                // layer_scalar attenuates the whole hidden state, residual
-                // included (HF Gemma4TextDecoderLayer: residual add, then
-                // `*= layer_scalar`).
+                /// layer_scalar attenuates the whole hidden state, residual
+                /// included (HF Gemma4TextDecoderLayer: residual add, then
+                /// `*= layer_scalar`).
                 residual_rows(workspace_.hidden.data(), workspace_.residual.data(), hidden);
                 if (common.layer_scalar != 1.0f) {
                     rows_for([&](size_t row) {

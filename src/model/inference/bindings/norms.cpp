@@ -277,7 +277,7 @@ void infer_and_bind_layer_norms(CanonicalInferenceContext& context,
     if (!has_feed_forward && (ffn_before != nullptr || ffn_after != nullptr)) {
         const std::string arch = context.input.architecture_type;
         if (arch.find("vision") != std::string::npos || arch.find("vl") != std::string::npos || arch.find("VL") != std::string::npos) {
-            // Vision/encoder layers may have norms without FFN - allow this
+            /// Vision/encoder layers may have norms without FFN - allow this
             semantic_layer.feed_forward_norm = {};
         } else {
             fail(

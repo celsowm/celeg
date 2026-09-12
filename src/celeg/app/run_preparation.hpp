@@ -44,17 +44,17 @@ PreparedRun prepare_run(const RunInputs& inputs, bool resolve_chat_template = tr
 std::vector<std::int32_t> prepare_prompt(const RunInputs& inputs,
                                          const PreparedRun& prepared);
 
-// Whether a raw prompt should be prefixed with the checkpoint's BOS token.
-// Safetensors declares this as `add_bos_token` in tokenizer_config.json and
-// GGUF as `tokenizer.ggml.add_bos_token`; true when the checkpoint is silent,
-// matching Hugging Face's default for tokenizers that omit the field.
+/// Whether a raw prompt should be prefixed with the checkpoint's BOS token.
+/// Safetensors declares this as `add_bos_token` in tokenizer_config.json and
+/// GGUF as `tokenizer.ggml.add_bos_token`; true when the checkpoint is silent,
+/// matching Hugging Face's default for tokenizers that omit the field.
 bool raw_prompt_takes_bos(const CheckpointMetadata& metadata);
 GenerationConfig generation_config(const RunInputs& inputs);
 
-// Assigns a bare CLI token (no --model/--repo given) to `model` when it names
-// an existing local path, otherwise to `repo` (a Hugging Face repo id, e.g.
-// "org/model" or "org/model:Q4_K_M"), mirroring how other model-serving CLIs
-// accept either form positionally.
+/// Assigns a bare CLI token (no --model/--repo given) to `model` when it names
+/// an existing local path, otherwise to `repo` (a Hugging Face repo id, e.g.
+/// "org/model" or "org/model:Q4_K_M"), mirroring how other model-serving CLIs
+/// accept either form positionally.
 void assign_model_or_repo_token(const std::string& token, std::string& model,
                                 std::string& repo);
 

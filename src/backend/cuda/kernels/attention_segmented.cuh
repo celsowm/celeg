@@ -1,15 +1,15 @@
 
-// Decode attention divides the live KV range [first_token, seq_len) into equal
-// segments. The grid width and the partial buffers are sized once from the
-// context capacity (decode_attention_segments), but how many of those segments
-// are actually used is decided here, per step, from the device-side position --
-// so the work tracks the sequence that exists rather than the one that was
-// allocated for, and the grid stays static for CUDA graph capture. Both the
-// partial and the reduce kernel call this so they agree on which segments were
-// written.
+/// Decode attention divides the live KV range [first_token, seq_len) into equal
+/// segments. The grid width and the partial buffers are sized once from the
+/// context capacity (decode_attention_segments), but how many of those segments
+/// are actually used is decided here, per step, from the device-side position --
+/// so the work tracks the sequence that exists rather than the one that was
+/// allocated for, and the grid stays static for CUDA graph capture. Both the
+/// partial and the reduce kernel call this so they agree on which segments were
+/// written.
 struct DecodeSegmentPlan {
     int first_token;
-    int active;         // segments actually used this step
+    int active;         /// segments actually used this step
     int tokens_each;
 };
 
@@ -19,11 +19,11 @@ __device__ inline DecodeSegmentPlan decode_segment_plan(int seq_len, int segment
     DecodeSegmentPlan plan;
     plan.first_token = sliding_window > 0 ? max(0, seq_len - sliding_window) : 0;
     const int live = max(1, seq_len - plan.first_token);
-    // Splitting further than kDecodeTokensPerSegment shortens the partial
-    // kernel's token loop but lengthens the reduce kernel's loop over
-    // segments, and past this point the reduce loses; below min_segments there
-    // are not enough blocks to fill the device, so a short sequence is spread
-    // as widely as it has tokens.
+    /// Splitting further than kDecodeTokensPerSegment shortens the partial
+    /// kernel's token loop but lengthens the reduce kernel's loop over
+    /// segments, and past this point the reduce loses; below min_segments there
+    /// are not enough blocks to fill the device, so a short sequence is spread
+    /// as widely as it has tokens.
     const int wanted = (live + kDecodeTokensPerSegment - 1) / kDecodeTokensPerSegment;
     plan.active = min(segments, min(live, max(min_segments, wanted)));
     plan.tokens_each = (live + plan.active - 1) / plan.active;
@@ -49,7 +49,7 @@ __global__ void gqa_decode_segment_partial_kernel(
     const int lane = threadIdx.x;
     const size_t partial_index = static_cast<size_t>(query_head) * segments + segment;
     const size_t accum_base = partial_index * head_dim;
-    // No zero-fill: the reduce kernel derives the same range and skips this one.
+    /// No zero-fill: the reduce kernel derives the same range and skips this one.
     if (begin >= end) return;
 
     const int kv_head = query_head / (q_heads / kv_heads);
@@ -113,7 +113,7 @@ __global__ void gqa_decode_segment_partial_int8_kernel(
     const int lane = threadIdx.x;
     const size_t partial_index = static_cast<size_t>(query_head) * segments + segment;
     const size_t accum_base = partial_index * head_dim;
-    // No zero-fill: the reduce kernel derives the same range and skips this one.
+    /// No zero-fill: the reduce kernel derives the same range and skips this one.
     if (begin >= end) return;
     const int kv_head = query_head / (q_heads / kv_heads);
     const __nv_bfloat16* query = q + static_cast<size_t>(query_head) * head_dim;
@@ -169,9 +169,9 @@ __global__ void gqa_decode_segment_reduce_kernel(
     const int seq_len = *position + 1;
     const DecodeSegmentPlan plan =
         decode_segment_plan(seq_len, segments, min_segments, sliding_window);
-    // tokens_each is a ceiling, so the tail segments of `active` can be empty;
-    // they are exactly the ones the partial kernel skipped, and since `begin`
-    // is monotonic the first empty one ends the range.
+    /// tokens_each is a ceiling, so the tail segments of `active` can be empty;
+    /// they are exactly the ones the partial kernel skipped, and since `begin`
+    /// is monotonic the first empty one ends the range.
     int written = plan.active;
     for (int segment = 0; segment < plan.active; ++segment) {
         if (plan.first_token + segment * plan.tokens_each >= seq_len) {
@@ -292,14 +292,14 @@ int decode_attention_blocks_target() {
                                    device) != cudaSuccess) {
             multiprocessors = 1;
         }
-        // Each (head, segment) is one warp-sized block, and the token loop
-        // inside it is a chain of dependent loads, so several blocks per SM
-        // are needed to hide that latency.
+        /// Each (head, segment) is one warp-sized block, and the token loop
+        /// inside it is a chain of dependent loads, so several blocks per SM
+        /// are needed to hide that latency.
         return multiprocessors * 8;
     }();
     return value;
 }
-}  // namespace
+}  /// namespace
 
 int decode_attention_min_segments(int query_heads) {
     if (query_heads <= 0) return 1;
@@ -308,12 +308,12 @@ int decode_attention_min_segments(int query_heads) {
 
 int decode_attention_segments(int query_heads, int max_context) {
     if (query_heads <= 0 || max_context <= 0) return 1;
-    // Grid width and buffer size only: how many segments are *used* is decided
-    // per step by decode_segment_plan from the live sequence length. This has
-    // to cover the widest split that plan can ask for, which is a full context
-    // divided kDecodeTokensPerSegment tokens at a time. Segments past the live
-    // range exit immediately and cost nothing (measured at 13.0us for 6144
-    // blocks against 13.1us for 768).
+    /// Grid width and buffer size only: how many segments are *used* is decided
+    /// per step by decode_segment_plan from the live sequence length. This has
+    /// to cover the widest split that plan can ask for, which is a full context
+    /// divided kDecodeTokensPerSegment tokens at a time. Segments past the live
+    /// range exit immediately and cost nothing (measured at 13.0us for 6144
+    /// blocks against 13.1us for 768).
     const int context_bound =
         (max_context + kDecodeTokensPerSegment - 1) / kDecodeTokensPerSegment;
     return std::max({1, decode_attention_min_segments(query_heads), context_bound});

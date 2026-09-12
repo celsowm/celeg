@@ -48,10 +48,10 @@ struct InferenceProposal {
     friend bool operator==(const InferenceProposal&, const InferenceProposal&) = default;
 };
 
-// Inferred positional-encoding outcome for a checkpoint's attention layers.
-// Exactly one alternative is ever populated, so an inferred RoPE payload can
-// never coexist with a "no position encoding" conclusion, and generic
-// semantic code consumes only this variant -- never an architecture name.
+/// Inferred positional-encoding outcome for a checkpoint's attention layers.
+/// Exactly one alternative is ever populated, so an inferred RoPE payload can
+/// never coexist with a "no position encoding" conclusion, and generic
+/// semantic code consumes only this variant -- never an architecture name.
 struct UnresolvedPositionEncoding {};
 
 struct InferredRopePosition {
@@ -60,9 +60,9 @@ struct InferredRopePosition {
     RopePairingKind pairing = RopePairingKind::SplitHalf;
     RopeScalingSpec scaling;
 
-    // Multi-axis (M-RoPE) sectioning, e.g. Qwen-VL/Qwen3.5's [temporal,
-    // height, width] rotary split. Empty when the checkpoint uses ordinary
-    // single-axis RoPE.
+    /// Multi-axis (M-RoPE) sectioning, e.g. Qwen-VL/Qwen3.5's [temporal,
+    /// height, width] rotary split. Empty when the checkpoint uses ordinary
+    /// single-axis RoPE.
     std::vector<int> mrope_sections;
     bool mrope_interleaved = false;
 
@@ -293,11 +293,11 @@ struct GatedDeltaFacts {
     std::optional<float> decay_lower_bound;
     DecayParameterEncoding decay_encoding = DecayParameterEncoding::LogA;
 
-    // Fused-projection dialects (HF `linear_num_key_heads` etc.) keep
-    // independent key/value geometry, unlike the factorized dialect above
-    // where a single head count serves both roles — a separate set of
-    // fields avoids `aliases()` treating differing key vs. value head
-    // counts as conflicting metadata for the same fact.
+    /// Fused-projection dialects (HF `linear_num_key_heads` etc.) keep
+    /// independent key/value geometry, unlike the factorized dialect above
+    /// where a single head count serves both roles — a separate set of
+    /// fields avoids `aliases()` treating differing key vs. value head
+    /// counts as conflicting metadata for the same fact.
     std::optional<int> linear_key_heads;
     std::optional<int> linear_value_heads;
     std::optional<int> linear_key_dim;
@@ -454,10 +454,10 @@ public:
 
 class ResolutionAssembler {
 public:
-    // `repository` lets weight-plan resolution confirm candidate tensor
-    // names actually exist in the checkpoint rather than trusting the
-    // first candidate blindly. Pass nullptr only when no checkpoint
-    // repository is available (e.g. synthetic facts in tests).
+    /// `repository` lets weight-plan resolution confirm candidate tensor
+    /// names actually exist in the checkpoint rather than trusting the
+    /// first candidate blindly. Pass nullptr only when no checkpoint
+    /// repository is available (e.g. synthetic facts in tests).
     ResolvedModel assemble(const CanonicalModelFacts& facts,
                            const IWeightRepository* repository) const;
 };

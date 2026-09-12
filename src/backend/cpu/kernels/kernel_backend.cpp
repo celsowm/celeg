@@ -46,7 +46,7 @@ const std::array<CpuKernelBackend, 11>& backend_table() {
     return table;
 }
 
-}  // namespace
+}  /// namespace
 
 bool CpuKernelBackend::supports_hw(const CpuCapabilities& caps) const {
     switch (isa) {
@@ -111,4 +111,4 @@ const CpuKernelBackend& cpu_resolve_kernel_backend(CpuIsa requested,
         "requested CPU ISA is detected by the API but its native kernel is not implemented");
 }
 
-}  // namespace celeg
+}  /// namespace celeg

@@ -301,7 +301,7 @@ struct CpuWorkspace {
     std::vector<std::shared_ptr<const CpuExpertWeights>>& moe_cached_experts =
         feed_forward.moe_cached_experts;
 
-    // Legacy chunk alias references for non-overlapping chunk forward paths
+    /// Legacy chunk alias references for non-overlapping chunk forward paths
     std::vector<float>& chunk_hidden = common.hidden;
     std::vector<float>& chunk_residual = common.residual;
     std::vector<float>& chunk_normed = common.normed;

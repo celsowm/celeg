@@ -42,13 +42,13 @@ public:
     }
 };
 
-// A checkpoint whose MoE tensors use deliberately unconventional spellings
-// that no backend's (former) literal-substring sniffing would recognize.
-// The naming policy is the only thing that knows how to find them; the
-// weight plan must still resolve the correct role/locator for each,
-// proving that layout decisions (packed vs individual) and per-tensor
-// binding both flow from the resolved plan rather than from backends
-// re-matching tensor-name spellings themselves.
+/// A checkpoint whose MoE tensors use deliberately unconventional spellings
+/// that no backend's (former) literal-substring sniffing would recognize.
+/// The naming policy is the only thing that knows how to find them; the
+/// weight plan must still resolve the correct role/locator for each,
+/// proving that layout decisions (packed vs individual) and per-tensor
+/// binding both flow from the resolved plan rather than from backends
+/// re-matching tensor-name spellings themselves.
 class PoisonedMoeRepository final : public celeg::IWeightRepository {
 public:
     bool contains(std::string_view name) const override {
@@ -79,9 +79,9 @@ class PoisonedMoeNamingPolicy final : public celeg::ITensorNamingPolicy {
 public:
     std::vector<std::string> candidates(
         const celeg::TensorRequest& request) const override {
-        // Deliberately offer decoy candidates first (conventional spellings
-        // that do NOT exist in the repository) to prove selection is driven
-        // by existence, not by pattern order or literal recognition.
+        /// Deliberately offer decoy candidates first (conventional spellings
+        /// that do NOT exist in the repository) to prove selection is driven
+        /// by existence, not by pattern order or literal recognition.
         if (request.role == celeg::TensorRole::MoeExpertGate &&
             request.layer == 0 && request.expert == 0) {
             return {"model.layers.0.mlp.experts.0.gate_proj.weight",
@@ -163,18 +163,18 @@ void run_poisoned_moe_layout_test() {
         return static_cast<const celeg::TensorRequest*>(nullptr);
     };
 
-    // Layer 0: individual experts, resolved to the poisoned spelling even
-    // though a conventional-looking decoy candidate was offered first.
+    /// Layer 0: individual experts, resolved to the poisoned spelling even
+    /// though a conventional-looking decoy candidate was offered first.
     const auto* gate0 = find_one(celeg::TensorRole::MoeExpertGate, 0, 0);
     CELEG_TEST_CHECK(gate0 != nullptr);
     CELEG_TEST_CHECK(gate0->source_name.has_value());
     CELEG_TEST_CHECK(*gate0->source_name == "poison.layer0.expert0.gate");
 
-    // Layer 1: no individual per-expert request should have been planned at
-    // all -- the plan itself decided this layer is packed (using the same
-    // existence-checked naming-policy candidates), so a backend consuming
-    // this plan never needs to sniff repo.contains() on literal spellings
-    // to find that out.
+    /// Layer 1: no individual per-expert request should have been planned at
+    /// all -- the plan itself decided this layer is packed (using the same
+    /// existence-checked naming-policy candidates), so a backend consuming
+    /// this plan never needs to sniff repo.contains() on literal spellings
+    /// to find that out.
     CELEG_TEST_CHECK(find_one(celeg::TensorRole::MoeExpertGate, 1, 0) == nullptr);
     const auto* packed_gate_up = find_one(celeg::TensorRole::MoePackedGateUp, 1, -1);
     CELEG_TEST_CHECK(packed_gate_up != nullptr);
@@ -185,8 +185,8 @@ void run_poisoned_moe_layout_test() {
     CELEG_TEST_CHECK(packed_down->source_name.has_value());
     CELEG_TEST_CHECK(*packed_down->source_name == "poison.layer1.packed_down");
 
-    // The router bias is planned whenever the MoE semantics say one exists,
-    // so backends read its resolved name instead of probing spellings.
+    /// The router bias is planned whenever the MoE semantics say one exists,
+    /// so backends read its resolved name instead of probing spellings.
     const auto* bias0 = find_one(celeg::TensorRole::MoeRouterBias, 0, -1);
     CELEG_TEST_CHECK(bias0 != nullptr);
     CELEG_TEST_CHECK(bias0->source_name.has_value());
@@ -196,8 +196,8 @@ void run_poisoned_moe_layout_test() {
     CELEG_TEST_CHECK(bias1->source_name.has_value());
     CELEG_TEST_CHECK(*bias1->source_name == "poison.layer1.router_bias");
 
-    // The per-layer resolved-name bundle backends consume must carry the
-    // same poisoned spellings and the same layout decision as the plan.
+    /// The per-layer resolved-name bundle backends consume must carry the
+    /// same poisoned spellings and the same layout decision as the plan.
     const celeg::MoeExpertTensorNames individual_names =
         celeg::moe_expert_tensor_names(requests, 0, 1);
     CELEG_TEST_CHECK(!individual_names.packed());

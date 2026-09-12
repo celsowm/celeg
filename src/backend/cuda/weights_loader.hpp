@@ -25,11 +25,11 @@ void dequantize_gguf_to_bf16(const HostTensorView& tensor,
 
 class WeightLoader {
 public:
-    // Resolves the storage/quantization mode for a given checkpoint tensor
-    // name. Lets a single loader mix formats across tensors (e.g. a
-    // checkpoint whose quantization_config assigns different formats to
-    // different tensor names); the common case is a resolver that ignores
-    // the name and always returns the same mode.
+    /// Resolves the storage/quantization mode for a given checkpoint tensor
+    /// name. Lets a single loader mix formats across tensors (e.g. a
+    /// checkpoint whose quantization_config assigns different formats to
+    /// different tensor names); the common case is a resolver that ignores
+    /// the name and always returns the same mode.
     using WeightModeResolver = std::function<WeightMode(const std::string&)>;
 
     WeightLoader(std::shared_ptr<SharedModelWeights> weights,
@@ -105,9 +105,9 @@ public:
         const MoeExpertTensorNames& names,
         int num_experts, int moe_intermediate, int hidden);
 
-    // The mode used when no resolver was supplied (or, with a resolver, the
-    // mode it was seeded from). Per-tensor callers should use
-    // resolve_weight_mode(name) instead.
+    /// The mode used when no resolver was supplied (or, with a resolver, the
+    /// mode it was seeded from). Per-tensor callers should use
+    /// resolve_weight_mode(name) instead.
     WeightMode weight_mode() const { return weight_mode_; }
 
 private:

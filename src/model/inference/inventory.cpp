@@ -965,12 +965,12 @@ TensorInventory::TensorInventory(std::vector<TensorInventoryEntry> entries)
             if (expected_words != packed_words) continue;
             derived.push_back({base, {rows, cols}, TensorDType::Quantized});
         } else if (entry.dtype == TensorDType::U8 && entry.shape.size() == 2) {
-            // NVFP4-pack-quantized (compressed-tensors): "<base>_packed" is
-            // [rows, cols/2] nibble-packed, alongside a per-16-block
-            // "<base>_scale" and a per-tensor "<base>_global_scale". See
-            // celeg/checkpoint/packed/nvfp4.hpp, which loads the same three
-            // sidecars by the same naming convention once the loader binds
-            // this derived entry to an actual weight.
+            /// NVFP4-pack-quantized (compressed-tensors): "<base>_packed" is
+            /// [rows, cols/2] nibble-packed, alongside a per-16-block
+            /// "<base>_scale" and a per-tensor "<base>_global_scale". See
+            /// celeg/checkpoint/packed/nvfp4.hpp, which loads the same three
+            /// sidecars by the same naming convention once the loader binds
+            /// this derived entry to an actual weight.
             const auto scale_it = by_name.find(base + "_scale");
             const auto global_scale_it = by_name.find(base + "_global_scale");
             if (scale_it == by_name.end() || global_scale_it == by_name.end() ||
@@ -1019,10 +1019,10 @@ TensorInventory build_tensor_inventory(const IWeightRepository& repository) {
     std::vector<TensorInventoryEntry> entries;
     for (const std::string& name : repository.names()) {
         const HostTensorView tensor = repository.tensor(name);
-        // Rank 5 covers the vision-tower temporal patch-embed conv
-        // (SafetensorProjectionProvider requires exactly rank 5: [hidden,
-        // channels, temporal, patch_h, patch_w]); nothing else in the
-        // generic inference pipeline depends on this bound being tighter.
+        /// Rank 5 covers the vision-tower temporal patch-embed conv
+        /// (SafetensorProjectionProvider requires exactly rank 5: [hidden,
+        /// channels, temporal, patch_h, patch_w]); nothing else in the
+        /// generic inference pipeline depends on this bound being tighter.
         if (name.empty() || tensor.shape.size() > 5) {
             inference_detail::fail(
                 ResolutionFailureKind::UnsupportedTensorLayout,

@@ -36,4 +36,4 @@ inline std::size_t complete_utf8_prefix(std::string_view text) {
     return cursor;
 }
 
-}  // namespace celeg::text
+}  /// namespace celeg::text

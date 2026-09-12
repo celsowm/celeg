@@ -39,8 +39,8 @@ AttentionVariant resolve_attention_variant(
     v.fused_per_head = owns_kv && !v.multi_axis &&
         per_head(attention.semantics.query_norm) && per_head(attention.semantics.key_norm);
     v.qk_publishes_kv = v.fused_per_head && !v.no_position && v.split_half_rope;
-    // tiled candidate mirrors attention.mm:568-573 (fast, no bias, window 0, base 0, hd 64, rows%32==0)
-    // The full gate (relative/alibi/window/base) is checked by caller; here we record geometry only.
+    /// tiled candidate mirrors attention.mm:568-573 (fast, no bias, window 0, base 0, hd 64, rows%32==0)
+    /// The full gate (relative/alibi/window/base) is checked by caller; here we record geometry only.
     v.tiled_candidate = head_dim == 64 && (rows % 32 == 0);
     if (v.fused_per_head) {
         if (v.no_position) v.qk_kernel = "celeg_qk_norm_batch_no_position";

@@ -46,21 +46,21 @@ struct AttentionSegmentation {
     float* partial_accum = nullptr;
 };
 
-// Decode-time attention splits the *live* KV range into a fixed number of
-// equal segments rather than into fixed-size chunks of the context capacity.
-// The segment count is a property of the device, so the grid and the partial
-// buffers are the same size at any context length (which keeps CUDA graph
-// capture happy), while the work inside each block scales with the sequence
-// actually present. `segments` indexes partial_max/denom/accum exactly as
-// `chunks` does for the prefill path.
-// Tokens one block walks before it is worth paying for another segment. The
-// block's token loop is serial, but so is the reduce's loop over segments, so
-// this trades one against the other; 32 is where they balance (measured).
+/// Decode-time attention splits the *live* KV range into a fixed number of
+/// equal segments rather than into fixed-size chunks of the context capacity.
+/// The segment count is a property of the device, so the grid and the partial
+/// buffers are the same size at any context length (which keeps CUDA graph
+/// capture happy), while the work inside each block scales with the sequence
+/// actually present. `segments` indexes partial_max/denom/accum exactly as
+/// `chunks` does for the prefill path.
+/// Tokens one block walks before it is worth paying for another segment. The
+/// block's token loop is serial, but so is the reduce's loop over segments, so
+/// this trades one against the other; 32 is where they balance (measured).
 inline constexpr int kDecodeTokensPerSegment = 32;
 
 struct AttentionDecodeSegmentation {
-    int segments = 0;       // allocated/grid width, an upper bound
-    int min_segments = 0;   // enough blocks to fill this device
+    int segments = 0;       /// allocated/grid width, an upper bound
+    int min_segments = 0;   /// enough blocks to fill this device
     float* partial_max = nullptr;
     float* partial_denom = nullptr;
     float* partial_accum = nullptr;

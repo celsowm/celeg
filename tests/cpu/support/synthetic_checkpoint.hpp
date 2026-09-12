@@ -101,4 +101,4 @@ inline void write_safetensors_checkpoint(
     }
 }
 
-}  // namespace celeg::test_support
+}  /// namespace celeg::test_support

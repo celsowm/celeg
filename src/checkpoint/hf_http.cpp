@@ -252,7 +252,7 @@ void http_download_file(const std::string& path,
 
 }
 
-#else  // !_WIN32: POSIX libcurl transport
+#else  /// !_WIN32: POSIX libcurl transport
 
 #include <curl/curl.h>
 
@@ -305,7 +305,7 @@ size_t download_write_callback(char* ptr, size_t size, size_t nmemb,
     return got;
 }
 
-}  // namespace
+}  /// namespace
 
 std::string url_encode(const std::string& value) {
     static constexpr char hex[] = "0123456789ABCDEF";

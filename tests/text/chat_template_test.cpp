@@ -101,9 +101,9 @@ int main() {
         CELEG_TEST_CHECK(rendered.find("<|turn>model\n") != std::string::npos);
     }
 
-    // The {% generation %} block must render only when a generation prompt is
-    // requested, mirroring add_generation_prompt semantics, with no model-specific
-    // branching.
+    /// The {% generation %} block must render only when a generation prompt is
+    /// requested, mirroring add_generation_prompt semantics, with no model-specific
+    /// branching.
     celeg::CheckpointMetadata generation_template;
     generation_template.values["chat_template"] = std::string(
         "{{ bos_token }}{% for message in messages %}<|im_start|>{{ message.role }}\n"
@@ -146,8 +146,8 @@ int main() {
         celeg::resolve_interaction(macro_metadata, tokenizer);
     CELEG_TEST_CHECK(macro_resolved.format({}) == "abe!cd");
 
-    // strftime_now must render the current local time via a C strftime format
-    // rather than emitting the literal format string.
+    /// strftime_now must render the current local time via a C strftime format
+    /// rather than emitting the literal format string.
     celeg::CheckpointMetadata strftime_metadata;
     strftime_metadata.values["chat_template"] =
         std::string("Date: {{ strftime_now(\"%d %B %Y\") }}");

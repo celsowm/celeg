@@ -223,11 +223,11 @@ float cpu_gguf_dot_scalar(const std::byte* packed_row, GgmlType type,
         }
         return total;
     }
-    // The IQ formats share a shape: the packed magnitudes are small signed
-    // integers, and every sub-block carries a float multiplier. Accumulating
-    // the integer products per sub-block and applying the multiplier once
-    // keeps the inner loop in integer arithmetic, exactly as the K-quants
-    // above do.
+    /// The IQ formats share a shape: the packed magnitudes are small signed
+    /// integers, and every sub-block carries a float multiplier. Accumulating
+    /// the integer products per sub-block and applying the multiplier once
+    /// keeps the inner loop in integer arithmetic, exactly as the K-quants
+    /// above do.
     if (type == GgmlType::IQ2_S) {
         const auto* weights = reinterpret_cast<const gguf_iq::BlockIq2S*>(packed_row);
         for (size_t b = 0; b < blocks; ++b) {
@@ -235,8 +235,8 @@ float cpu_gguf_dot_scalar(const std::byte* packed_row, GgmlType type,
             const CpuQ8KBlock& x = activation[b];
             float block_total = 0.0f;
             for (int ib32 = 0; ib32 < 8; ++ib32) {
-                // The two halves of a sub-block use the two nibbles of
-                // scales[ib32], so they accumulate separately.
+                /// The two halves of a sub-block use the two nibbles of
+                /// scales[ib32], so they accumulate separately.
                 int dot[2] = {0, 0};
                 for (int i = 0; i < 32; ++i) {
                     const int col = ib32 * 32 + i;

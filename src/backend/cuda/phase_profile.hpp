@@ -99,7 +99,7 @@ void report_phase_profile(
     std::fprintf(stderr, "  %-10s %8.4f %s\n", "TOTAL", total / steps, unit);
 }
 
-}  // namespace detail
+}  /// namespace detail
 
 enum class DecodePhase : int {
     Sampling = 0,
@@ -210,4 +210,4 @@ private:
 
 PrefillPhaseProfile& prefill_phase_profile();
 
-}  // namespace celeg
+}  /// namespace celeg

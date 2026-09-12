@@ -1,16 +1,16 @@
-// Generates tests/data/gguf_iq_reference.inc: real IQ-quantized blocks lifted
-// from a cached GGUF file, paired with the float values upstream ggml decodes
-// them to.
-//
-// The IQ formats are codebook-indexed, so a hand-derived expectation would
-// only restate whatever the decoder under test already does. Taking the
-// reference from ggml itself makes the fixture authoritative.
-//
-// This tool is deliberately outside the CMake build: it links against the
-// vendored llama.cpp in .externals/, which is a developer checkout rather
-// than a dependency of the engine. Regenerate with:
-//
-//   c++ -std=c++20 -O2 tests/tools/gen_gguf_iq_reference.cpp \
+/// Generates tests/data/gguf_iq_reference.inc: real IQ-quantized blocks lifted
+/// from a cached GGUF file, paired with the float values upstream ggml decodes
+/// them to.
+///
+/// The IQ formats are codebook-indexed, so a hand-derived expectation would
+/// only restate whatever the decoder under test already does. Taking the
+/// reference from ggml itself makes the fixture authoritative.
+///
+/// This tool is deliberately outside the CMake build: it links against the
+/// vendored llama.cpp in .externals/, which is a developer checkout rather
+/// than a dependency of the engine. Regenerate with:
+///
+///   c++ -std=c++20 -O2 tests/tools/gen_gguf_iq_reference.cpp \
 //       -I .externals/llama.cpp/ggml/include \
 //       -L .externals/llama.cpp/build-cpu/bin -lggml-base \
 //       -Wl,-rpath,$PWD/.externals/llama.cpp/build-cpu/bin \
@@ -30,7 +30,7 @@
 
 namespace {
 
-// The five IQ types celeg decodes, with the ggml enum they correspond to.
+/// The five IQ types celeg decodes, with the ggml enum they correspond to.
 struct IqType {
     const char* name;
     ggml_type type;
@@ -122,16 +122,16 @@ void emit(const IqType& iq, const std::vector<uint8_t>& blocks) {
     std::printf("\n};\n\n");
 }
 
-// Captures whichever of the wanted types `path` happens to contain. No
-// single quant recipe carries all five, so the caller passes several files
-// and each contributes what it has.
+/// Captures whichever of the wanted types `path` happens to contain. No
+/// single quant recipe carries all five, so the caller passes several files
+/// and each contributes what it has.
 void harvest(const std::string& path, std::vector<bool>& done) {
     Reader reader(path);
 
     if (reader.scalar<uint32_t>() != 0x46554747u) {
         throw std::runtime_error("not a GGUF file: " + path);
     }
-    reader.scalar<uint32_t>();  // version
+    reader.scalar<uint32_t>();  /// version
     const auto tensor_count = reader.scalar<uint64_t>();
     const auto kv_count = reader.scalar<uint64_t>();
     uint64_t alignment = 32;

@@ -150,8 +150,8 @@ CpuLinearWeight CpuWeightCodec::concat(
         return result;
     }
     const int64_t cols = parts.front().second[1];
-    // Gather the tensors. Native GGUF shortcuts only apply in Q4 mode; BF16
-    // mode and packed-int4 parts decode to float and join through dense_result.
+    /// Gather the tensors. Native GGUF shortcuts only apply in Q4 mode; BF16
+    /// mode and packed-int4 parts decode to float and join through dense_result.
     size_t total_rows = 0;
     bool all_quantized = true;
     std::vector<HostTensorView> tensors;

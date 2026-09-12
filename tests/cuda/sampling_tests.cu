@@ -57,7 +57,7 @@ void run_sampling_tests(celeg::CudaStream& stream) {
 }
 
 {
-    // Exercise the multi-block partial+merge path (count >= kSamplingPartialBlocks*256*4).
+    /// Exercise the multi-block partial+merge path (count >= kSamplingPartialBlocks*256*4).
     const int count = celeg::kSamplingPartialBlocks * 256 * 4 + 137;
     std::mt19937 rng(7);
     std::uniform_real_distribution<float> dist(-3.0f, 3.0f);

@@ -88,12 +88,12 @@ public:
                     result.metadata.values["tokenizer.chat_template"] =
                         tok_json["chat_template"].as_string();
                 }
-                // Whether the checkpoint's own tokenizer prepends BOS. Read
-                // unconditionally: unlike chat_template it has no other source,
-                // and a raw prompt that assumes BOS corrupts checkpoints that
-                // set this false -- Granite 4.1 uses <|end_of_text|> as both BOS
-                // and EOS, so an assumed BOS is an end-of-text marker in
-                // position 0.
+                /// Whether the checkpoint's own tokenizer prepends BOS. Read
+                /// unconditionally: unlike chat_template it has no other source,
+                /// and a raw prompt that assumes BOS corrupts checkpoints that
+                /// set this false -- Granite 4.1 uses <|end_of_text|> as both BOS
+                /// and EOS, so an assumed BOS is an end-of-text marker in
+                /// position 0.
                 if (tok_json.contains("add_bos_token") &&
                     tok_json["add_bos_token"].is_bool()) {
                     result.metadata.values["tokenizer.add_bos_token"] =
@@ -102,13 +102,13 @@ public:
             } catch (...) {
             }
         }
-        // generation_config.json is HF's authoritative source for the token
-        // ids actually used at generation time: bos/eos there can differ
-        // from (and be more complete than -- e.g. a multi-id eos_token_id
-        // list) config.json's, so when present it takes priority over
-        // config.json's bos_token_id/eos_token_id at the unscoped metadata
-        // key (which alias resolution checks before any text_config.*
-        // fallback).
+        /// generation_config.json is HF's authoritative source for the token
+        /// ids actually used at generation time: bos/eos there can differ
+        /// from (and be more complete than -- e.g. a multi-id eos_token_id
+        /// list) config.json's, so when present it takes priority over
+        /// config.json's bos_token_id/eos_token_id at the unscoped metadata
+        /// key (which alias resolution checks before any text_config.*
+        /// fallback).
         const auto generation_config = root / "generation_config.json";
         if (std::filesystem::is_regular_file(generation_config)) {
             try {

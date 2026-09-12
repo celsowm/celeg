@@ -148,10 +148,10 @@ void gated_delta_step(const float* projected_qkv, const float* projected_z,
         for (int k_dim = 0; k_dim < key_head_dim; ++k_dim) {
                 const int decay_index = vector_decay ? key_head * key_head_dim + k_dim
                                                       : value_head;
-                // When a_log is already the final log-domain coefficient (GGUF
-                // convention: -exp(A_log) baked in at conversion time), it must be
-                // used as-is; when it is the raw A_log parameter (safetensors
-                // convention), the consumer must apply -exp() itself.
+                /// When a_log is already the final log-domain coefficient (GGUF
+                /// convention: -exp(A_log) baked in at conversion time), it must be
+                /// used as-is; when it is the raw A_log parameter (safetensors
+                /// convention), the consumer must apply -exp() itself.
                 const float decay = safe_decay
                     ? std::exp(sigmoid(decay_base *
                         (projected_a[decay_index] + dt_bias[decay_index])) *

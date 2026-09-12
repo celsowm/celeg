@@ -371,27 +371,27 @@ int main() {
         CELEG_TEST_CHECK(std::abs(optimized - scalar) < 1e-4f);
     }
 
-    // Per-sub-block-scale types with *non-unit, non-integer* scales.
-    //
-    // Every other Q8_0/Q4_0/Q5_0 case above uses d = 0x3c00 (fp16 1.0), which
-    // makes d*dot an exact integer and so cannot detect a kernel that
-    // accumulates the scaled dot in an int instead of a float -- the AVX2 Q8_0
-    // path did exactly that, truncating every sub-block, and still passed.
-    // Real GGUF scales are small and fractional, so use those here, and vary
-    // the scale per sub-block so a kernel that hoists one scale out of the
-    // sub-block loop is caught too.
+    /// Per-sub-block-scale types with *non-unit, non-integer* scales.
+    /// 
+    /// Every other Q8_0/Q4_0/Q5_0 case above uses d = 0x3c00 (fp16 1.0), which
+    /// makes d*dot an exact integer and so cannot detect a kernel that
+    /// accumulates the scaled dot in an int instead of a float -- the AVX2 Q8_0
+    /// path did exactly that, truncating every sub-block, and still passed.
+    /// Real GGUF scales are small and fractional, so use those here, and vary
+    /// the scale per sub-block so a kernel that hoists one scale out of the
+    /// sub-block loop is caught too.
     {
-        // Realistic magnitudes matter as much as realistic shapes: a GGUF
-        // block scale is max|w|/127, so it is ~1e-3, and the scaled sub-block
-        // dot lands around 1. That is the regime where truncating to int
-        // destroys most of the value. With d near 1.0 (as the cases above use)
-        // or with large weights, the same broken kernel is accurate to 1e-5
-        // and slips through.
+        /// Realistic magnitudes matter as much as realistic shapes: a GGUF
+        /// block scale is max|w|/127, so it is ~1e-3, and the scaled sub-block
+        /// dot lands around 1. That is the regime where truncating to int
+        /// destroys most of the value. With d near 1.0 (as the cases above use)
+        /// or with large weights, the same broken kernel is accurate to 1e-5
+        /// and slips through.
         constexpr uint16_t kScales[8] = {0x1400, 0x1555, 0x1800, 0x1999,
                                          0x1c00, 0x1d55, 0x2000, 0x2155};
-        // Shape the weights like the activation (sin(i*0.07)) so the dot
-        // accumulates instead of cancelling to ~0; a dot near zero would sit
-        // under the tolerance floor and hide a broken kernel.
+        /// Shape the weights like the activation (sin(i*0.07)) so the dot
+        /// accumulates instead of cancelling to ~0; a dot near zero would sit
+        /// under the tolerance floor and hide a broken kernel.
         const auto wave = [&](size_t element) {
             return std::sin(static_cast<float>(element) * 0.07f);
         };
@@ -406,9 +406,9 @@ int main() {
             for (size_t j = 0; j < 32; ++j) {
                 scaled_q8_0[block].qs[j] =
                     static_cast<int8_t>(std::lround(5.0f * wave(base + j)));
-                // Q4_0 stores element j in the low nibble and j+16 in the high
-                // nibble of qs[j], each biased by 8; Q5_0 biases by 16 and puts
-                // the fifth bit in qh.
+                /// Q4_0 stores element j in the low nibble and j+16 in the high
+                /// nibble of qs[j], each biased by 8; Q5_0 biases by 16 and puts
+                /// the fifth bit in qh.
                 const int q5 = std::clamp(
                     static_cast<int>(std::lround(16.0f + 15.0f * wave(base + j))), 0, 31);
                 const size_t byte = j % 16;
@@ -453,9 +453,9 @@ int main() {
                 reference += dequantized[i] * activation[0].d *
                              static_cast<float>(activation[0].qs[i]);
             }
-            // Far enough from zero that a kernel returning 0 cannot slip
-            // through, but small enough that the tolerance stays at its
-            // absolute floor and so remains sensitive.
+            /// Far enough from zero that a kernel returning 0 cannot slip
+            /// through, but small enough that the tolerance stays at its
+            /// absolute floor and so remains sensitive.
             CELEG_TEST_CHECK(std::abs(reference) > 1e-2f);
             const float scalar = celeg::cpu_gguf_dot_scalar(
                 matrix.data, matrix.type, activation.data(), matrix.cols);
@@ -520,11 +520,11 @@ int main() {
         CELEG_TEST_CHECK(std::abs(grouped_actual[value] - grouped_expected[value]) < 1e-4f);
     }
 
-    // IQ quantizations against upstream ggml. Unlike the K-quants above,
-    // these are codebook-indexed, so a hand-built "unit block" would only
-    // restate the decoder under test. The fixture holds real blocks from
-    // cached GGUF files plus the floats ggml's own to_float produces for
-    // them, which makes this an external check rather than a self-check.
+    /// IQ quantizations against upstream ggml. Unlike the K-quants above,
+    /// these are codebook-indexed, so a hand-built "unit block" would only
+    /// restate the decoder under test. The fixture holds real blocks from
+    /// cached GGUF files plus the floats ggml's own to_float produces for
+    /// them, which makes this an external check rather than a self-check.
     {
         struct IqCase {
             const char* name;
@@ -545,14 +545,14 @@ int main() {
             {"IQ4_XS", celeg::GgmlType::IQ4_XS, kIQ4_XSBlocks, sizeof(kIQ4_XSBlocks),
              kIQ4_XSReference},
         };
-        // Every fixture holds four 256-wide rows, whatever the block width.
+        /// Every fixture holds four 256-wide rows, whatever the block width.
         constexpr uint32_t iq_rows = 4;
         constexpr uint32_t iq_cols = 256;
         for (const IqCase& iq_case : iq_cases) {
             CELEG_TEST_CHECK(celeg::ggml_row_decoder(iq_case.type).has_value());
-            // cpu_native_dot is off for IQ by policy (the repack path is
-            // faster), but the scalar kernel must stay correct so the flag
-            // can be flipped the moment a vectorized version lands.
+            /// cpu_native_dot is off for IQ by policy (the repack path is
+            /// faster), but the scalar kernel must stay correct so the flag
+            /// can be flipped the moment a vectorized version lands.
 
             const celeg::GgmlMatrixView matrix{
                 iq_case.type, iq_rows, iq_cols,
@@ -564,8 +564,8 @@ int main() {
                 celeg::ggml_decode_row(matrix, row, dequantized.data());
                 const float* expected = iq_case.reference + row * iq_cols;
                 for (uint32_t i = 0; i < iq_cols; ++i) {
-                    // fp16 scales round-trip exactly, so the only slack needed
-                    // is float accumulation order.
+                    /// fp16 scales round-trip exactly, so the only slack needed
+                    /// is float accumulation order.
                     const float tolerance =
                         1e-5f * std::max(1.0f, std::abs(expected[i]));
                     if (std::abs(dequantized[i] - expected[i]) >= tolerance) {
@@ -576,8 +576,8 @@ int main() {
                     CELEG_TEST_CHECK(std::abs(dequantized[i] - expected[i]) < tolerance);
                 }
 
-                // The native dot must agree with a plain float dot over the
-                // ggml reference, not merely with celeg's own dequantizer.
+                /// The native dot must agree with a plain float dot over the
+                /// ggml reference, not merely with celeg's own dequantizer.
                 float reference = 0.0f;
                 for (uint32_t i = 0; i < iq_cols; ++i) {
                     reference += expected[i] * activation[0].d *

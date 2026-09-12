@@ -44,7 +44,7 @@ int main() {
     CELEG_TEST_CHECK(matrix.values == raw_e4m3);
     CELEG_TEST_CHECK(matrix.scales == scales);
 
-    // Absent scale sidecar -> not detected as packed FP8.
+    /// Absent scale sidecar -> not detected as packed FP8.
     MemoryRepository incomplete;
     incomplete.tensors.emplace("w", view(celeg::TensorDType::F8_E4M3, {2, 4}, raw_e4m3));
     CELEG_TEST_CHECK(!celeg::has_packed_fp8_matrix(incomplete, "w"));

@@ -84,11 +84,11 @@ inline int grid_byte(const Entry& entry, int j) {
     return reinterpret_cast<const std::uint8_t*>(&entry)[j];
 }
 
-// --- IQ2_S -----------------------------------------------------------------
-// A 256-block holds 8 sub-blocks of 32; each sub-block splits into 4 groups
-// of 8, and the two halves of a sub-block use the two nibbles of scales[].
-// qs is addressed as two halves: 32 grid-index bytes followed by 32 sign
-// bytes (ggml reaches the latter as `qs + QK_K/8`).
+/// --- IQ2_S -----------------------------------------------------------------
+/// A 256-block holds 8 sub-blocks of 32; each sub-block splits into 4 groups
+/// of 8, and the two halves of a sub-block use the two nibbles of scales[].
+/// qs is addressed as two halves: 32 grid-index bytes followed by 32 sign
+/// bytes (ggml reaches the latter as `qs + QK_K/8`).
 
 /// Signed grid magnitude of element `within` (0..255).
 inline int iq2s_value(const BlockIq2S& block, int within) {
@@ -108,7 +108,7 @@ inline float iq2s_sub_scale(const BlockIq2S& block, int ib32, int half) {
     return (0.5f + static_cast<float>(raw)) * 0.25f;
 }
 
-// --- IQ3_XXS ---------------------------------------------------------------
+/// --- IQ3_XXS ---------------------------------------------------------------
 
 /// The scale/sign word for sub-block `ib32`, read from the 32 bytes that
 /// follow the 64 grid indices.
@@ -127,14 +127,14 @@ inline int iq3xxs_value(const BlockIq3XXS& block, int within) {
     const int ib32 = within / 32;
     const int group = (within % 32) / 8;
     const int j = within % 8;
-    // Each group of 8 is two grid entries of 4 bytes: j<4 from the first,
-    // j>=4 from the second.
+    /// Each group of 8 is two grid entries of 4 bytes: j<4 from the first,
+    /// j>=4 from the second.
     const std::uint8_t index = block.qs[ib32 * 8 + 2 * group + (j >= 4 ? 1 : 0)];
     const std::uint8_t signs = k_ksigns_iq2xs[(iq3xxs_aux(block, ib32) >> (7 * group)) & 127];
     return grid_byte(k_iq3xxs_grid[index], j % 4) * sign_of(signs, j);
 }
 
-// --- IQ3_S -----------------------------------------------------------------
+/// --- IQ3_S -----------------------------------------------------------------
 
 inline float iq3s_sub_scale(const BlockIq3S& block, int ib32) {
     const int raw = (ib32 % 2 == 0) ? (block.scales[ib32 / 2] & 0x0f)
@@ -148,8 +148,8 @@ inline int iq3s_value(const BlockIq3S& block, int within) {
     const int group = (within % 32) / 8;
     const int j = within % 8;
     const int high = j >= 4 ? 1 : 0;
-    // qh contributes a 9th index bit; ggml shifts it by (8 - 2*group) for the
-    // first grid entry of a group and (7 - 2*group) for the second.
+    /// qh contributes a 9th index bit; ggml shifts it by (8 - 2*group) for the
+    /// first grid entry of a group and (7 - 2*group) for the second.
     const int shift = (high ? 7 : 8) - 2 * group;
     const int index = block.qs[ib32 * 8 + 2 * group + high] |
                       ((block.qh[ib32] << shift) & 256);
@@ -157,11 +157,11 @@ inline int iq3s_value(const BlockIq3S& block, int within) {
            sign_of(block.signs[ib32 * 4 + group], j);
 }
 
-// --- IQ4_NL / IQ4_XS -------------------------------------------------------
+/// --- IQ4_NL / IQ4_XS -------------------------------------------------------
 
 /// Codebook level of element `within` (0..31) of a 32-wide IQ4_NL block.
 inline int iq4nl_value(const BlockIq4NL& block, int within) {
-    // Split-half nibble layout: qs[j] holds element j low, element j+16 high.
+    /// Split-half nibble layout: qs[j] holds element j low, element j+16 high.
     const std::uint8_t packed = block.qs[within & 15];
     return k_kvalues_iq4nl[within < 16 ? (packed & 0x0f) : (packed >> 4)];
 }

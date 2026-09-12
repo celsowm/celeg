@@ -22,9 +22,9 @@ void apply_cpu_attention_qk(const AttentionSpec& layout,
     const bool has_key = key != nullptr && !weights.k.segments.empty();
     const RopePositionSpec* rope = layout.rope_position();
 
-    // The attention kernels already fold 1/sqrt(head_dim) into the scores, so
-    // Q preparation only applies the ratio between the model scale and that
-    // kernel scale. Position attention scaling is folded into the same ratio.
+    /// The attention kernels already fold 1/sqrt(head_dim) into the scores, so
+    /// Q preparation only applies the ratio between the model scale and that
+    /// kernel scale. Position attention scaling is folded into the same ratio.
     const float kernel_scale = 1.0f / std::sqrt(static_cast<float>(layout.head_dim));
     const float query_scale_ratio = layout.query_scale / kernel_scale;
 

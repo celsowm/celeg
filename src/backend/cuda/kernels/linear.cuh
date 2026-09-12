@@ -84,10 +84,10 @@ __global__ void w4a16_linear_kernel(const __nv_bfloat16* x,
     }
 }
 
-// Warps the GPU can keep resident at once. w8a16_gemv_kernel emits exactly
-// one warp per output row, so any matrix with fewer rows than this leaves
-// the machine partly idle no matter how the blocks are shaped -- that is
-// what the k-split path exists to fix.
+/// Warps the GPU can keep resident at once. w8a16_gemv_kernel emits exactly
+/// one warp per output row, so any matrix with fewer rows than this leaves
+/// the machine partly idle no matter how the blocks are shaped -- that is
+/// what the k-split path exists to fix.
 inline int cuda_resident_warp_capacity() {
     static const int capacity = [] {
         int sm_count = 0;
@@ -107,14 +107,14 @@ void launch_w8a16_linear(const __nv_bfloat16* x, const int8_t* weight,
                          cudaStream_t stream) {
     const unsigned grid_y = static_cast<unsigned>(m < 65535 ? m : 65535);
 
-    // Decode (m == 1) over a matrix too narrow to fill the GPU: split each
-    // row's K across several cooperating warps so there is enough resident
-    // work to hide memory latency. `ncu` on a 1024-row matrix measures
-    // 16.6% -> 46.1% achieved occupancy and ~4.0 -> ~3.4 us for this swap.
-    // Wider matrices already fill the machine on the plain path, where the
-    // k-split's cross-warp reduction is pure added cost (measured: it
-    // regresses lm_head-sized shapes), hence the guard rather than always
-    // taking it.
+    /// Decode (m == 1) over a matrix too narrow to fill the GPU: split each
+    /// row's K across several cooperating warps so there is enough resident
+    /// work to hide memory latency. `ncu` on a 1024-row matrix measures
+    /// 16.6% -> 46.1% achieved occupancy and ~4.0 -> ~3.4 us for this swap.
+    /// Wider matrices already fill the machine on the plain path, where the
+    /// k-split's cross-warp reduction is pure added cost (measured: it
+    /// regresses lm_head-sized shapes), hence the guard rather than always
+    /// taking it.
     constexpr int ksplit_warps = 4;
     const bool narrow_decode =
         m == 1 && static_cast<long long>(n) * ksplit_warps <=
@@ -187,7 +187,7 @@ __global__ void quantize_e4m3_per_row_kernel(const __nv_bfloat16* __restrict__ x
     __syncthreads();
     const float row_max = warp_max[0];
 
-    // e4m3's largest finite magnitude (448) as the quantization ceiling.
+    /// e4m3's largest finite magnitude (448) as the quantization ceiling.
     constexpr float kFp8E4m3Max = 448.0f;
     const float scale = row_max > 0.0f ? row_max / kFp8E4m3Max : 1.0f;
     if (threadIdx.x == 0) scales[row] = scale;
@@ -238,11 +238,11 @@ void launch_fp8_scale_apply(const float* raw, const float* act_scale,
     CELEG_KERNEL_DEBUG_SYNC(stream);
 }
 
-// Naive fallback matmul for shapes the fp8 cuBLASLt heuristic can't produce
-// an algorithm for (e.g. n not a multiple of the tensor-core tile size --
-// see docs/QWEN3_5_NVFP4_FP8_SUPPORT_PLAN.md Phase 3). One thread per output
-// element, straight-line dot product. Not fast, but every shape is valid, so
-// GemmDispatcher can fall back to it instead of throwing.
+/// Naive fallback matmul for shapes the fp8 cuBLASLt heuristic can't produce
+/// an algorithm for (e.g. n not a multiple of the tensor-core tile size --
+/// see docs/QWEN3_5_NVFP4_FP8_SUPPORT_PLAN.md Phase 3). One thread per output
+/// element, straight-line dot product. Not fast, but every shape is valid, so
+/// GemmDispatcher can fall back to it instead of throwing.
 __global__ void fp8_w8a8_naive_kernel(const __nv_fp8_e4m3* __restrict__ x_q,
                                       const float* __restrict__ act_scale,
                                       const __nv_fp8_e4m3* __restrict__ w_q,
@@ -276,16 +276,16 @@ void launch_fp8_w8a8_naive(const __nv_fp8_e4m3* x_q, const float* act_scale,
     CELEG_KERNEL_DEBUG_SYNC(stream);
 }
 
-// Dequantizes a packed NVFP4 (e2m1, 2 values/byte) weight with per-16-block
-// UE4M3 scales + a per-tensor fp32 global scale into bf16, so it can run
-// through the existing bf16 GEMM path. FALLBACK ONLY -- see
-// docs/QWEN3_5_NVFP4_FP8_SUPPORT_PLAN.md Phase 4: the primary path is now
-// the native cuBLASLt VEC16_UE4M3 block-scaled fp4 matmul (see
-// quantize_e2m1_per_block_kernel / swizzle_nvfp4_scale_128x4_kernel below),
-// once the correct scale-factor swizzle (NVIDIA's documented 128x4 tiled
-// layout) was found. This dequant path is kept only for shapes where
-// get_or_create_nvfp4_lt_plan can't find an algorithm, mirroring
-// launch_fp8_w8a8_naive's role for the fp8 path.
+/// Dequantizes a packed NVFP4 (e2m1, 2 values/byte) weight with per-16-block
+/// UE4M3 scales + a per-tensor fp32 global scale into bf16, so it can run
+/// through the existing bf16 GEMM path. FALLBACK ONLY -- see
+/// docs/QWEN3_5_NVFP4_FP8_SUPPORT_PLAN.md Phase 4: the primary path is now
+/// the native cuBLASLt VEC16_UE4M3 block-scaled fp4 matmul (see
+/// quantize_e2m1_per_block_kernel / swizzle_nvfp4_scale_128x4_kernel below),
+/// once the correct scale-factor swizzle (NVIDIA's documented 128x4 tiled
+/// layout) was found. This dequant path is kept only for shapes where
+/// get_or_create_nvfp4_lt_plan can't find an algorithm, mirroring
+/// launch_fp8_w8a8_naive's role for the fp8 path.
 __global__ void dequant_nvfp4_kernel(const uint8_t* __restrict__ packed,
                                      const __nv_fp8_e4m3* __restrict__ block_scales,
                                      float global_scale,
@@ -380,14 +380,14 @@ void launch_nvfp4_w4a4_fallback(
     CELEG_KERNEL_DEBUG_SYNC(stream);
 }
 
-// Quantizes bf16 to packed NVFP4 (e2m1, 2/byte) with a per-16-block UE4M3
-// scale (row-major [rows, cols/block_size]), given a per-tensor fp32
-// global_scale calibration factor (dequant = e2m1 * block_scale /
-// global_scale, matching NVIDIA's global_scale = FP8_MAX * FP4_MAX /
-// tensor_amax convention -- a *larger* global_scale means a *smaller*
-// tensor, so it divides on dequant, not multiplies).
-// One thread per 16-element block -- blocks never overlap, so each thread
-// owns its 8 packed output bytes exclusively.
+/// Quantizes bf16 to packed NVFP4 (e2m1, 2/byte) with a per-16-block UE4M3
+/// scale (row-major [rows, cols/block_size]), given a per-tensor fp32
+/// global_scale calibration factor (dequant = e2m1 * block_scale /
+/// global_scale, matching NVIDIA's global_scale = FP8_MAX * FP4_MAX /
+/// tensor_amax convention -- a *larger* global_scale means a *smaller*
+/// tensor, so it divides on dequant, not multiplies).
+/// One thread per 16-element block -- blocks never overlap, so each thread
+/// owns its 8 packed output bytes exclusively.
 __global__ void quantize_e2m1_per_block_kernel(const __nv_bfloat16* __restrict__ x,
                                                uint8_t* __restrict__ packed,
                                                __nv_fp8_e4m3* __restrict__ scales,
@@ -433,14 +433,14 @@ void launch_quantize_e2m1_per_block(const __nv_bfloat16* x, uint8_t* packed,
     CELEG_KERNEL_DEBUG_SYNC(stream);
 }
 
-// Rearranges a row-major [rows, k_scale] UE4M3 scale tensor into the 128x4
-// tiled layout cuBLASLt's CUBLASLT_MATMUL_MATRIX_SCALE_VEC16_UE4M3 mode
-// expects: NVIDIA's documented layout (128 rows x 4 scale-columns per
-// 512-byte tile, offset = (row%32)*16 + (row/32)*4 + col within a tile,
-// tiles row-major, rows padded to 128 / scale-columns padded to 4 with
-// zero-fill) -- see docs/QWEN3_5_NVFP4_FP8_SUPPORT_PLAN.md Phase 4. `dst`
-// must already be zeroed (padding relies on it) and sized
-// tiles_m*tiles_n*512 where tiles_m=ceil(rows/128), tiles_n=ceil(k_scale/4).
+/// Rearranges a row-major [rows, k_scale] UE4M3 scale tensor into the 128x4
+/// tiled layout cuBLASLt's CUBLASLT_MATMUL_MATRIX_SCALE_VEC16_UE4M3 mode
+/// expects: NVIDIA's documented layout (128 rows x 4 scale-columns per
+/// 512-byte tile, offset = (row%32)*16 + (row/32)*4 + col within a tile,
+/// tiles row-major, rows padded to 128 / scale-columns padded to 4 with
+/// zero-fill) -- see docs/QWEN3_5_NVFP4_FP8_SUPPORT_PLAN.md Phase 4. `dst`
+/// must already be zeroed (padding relies on it) and sized
+/// tiles_m*tiles_n*512 where tiles_m=ceil(rows/128), tiles_n=ceil(k_scale/4).
 __global__ void swizzle_nvfp4_scale_kernel(const __nv_fp8_e4m3* __restrict__ src,
                                            __nv_fp8_e4m3* __restrict__ dst,
                                            int rows, int k_scale, int tiles_n) {
@@ -464,13 +464,13 @@ void launch_swizzle_nvfp4_scale(const __nv_fp8_e4m3* src, __nv_fp8_e4m3* dst,
     CELEG_KERNEL_DEBUG_SYNC(stream);
 }
 
-// Applies the two per-tensor NVFP4 global scales (weight's and
-// activation's) that CUBLASLT_MATMUL_MATRIX_SCALE_VEC16_UE4M3 doesn't apply
-// itself -- it only bakes in the per-16-block UE4M3 scale, so the raw
-// matmul output is off by a factor of 1 / (weight_global_scale *
-// act_global_scale) (each global_scale divides on dequant, see
-// dequant_nvfp4_kernel above); the caller passes total_scale already
-// inverted.
+/// Applies the two per-tensor NVFP4 global scales (weight's and
+/// activation's) that CUBLASLT_MATMUL_MATRIX_SCALE_VEC16_UE4M3 doesn't apply
+/// itself -- it only bakes in the per-16-block UE4M3 scale, so the raw
+/// matmul output is off by a factor of 1 / (weight_global_scale *
+/// act_global_scale) (each global_scale divides on dequant, see
+/// dequant_nvfp4_kernel above); the caller passes total_scale already
+/// inverted.
 __global__ void nvfp4_global_scale_apply_kernel(const float* __restrict__ raw,
                                                 float total_scale,
                                                 __nv_bfloat16* __restrict__ y,

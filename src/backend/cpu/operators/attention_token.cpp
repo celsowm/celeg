@@ -234,10 +234,10 @@ void execute_cpu_attention_token(
                 layout.output_gate->packed_with_query;
             float* gate = nullptr;
             if (packed_gate) {
-                // The packed Q+Gate projection interleaves [query, gate] per
-                // head (not as two contiguous halves), so de-interleave into
-                // per-head-contiguous buffers before any per-head code (RoPE,
-                // QK norm) that assumes a fixed head_dim stride runs on it.
+                /// The packed Q+Gate projection interleaves [query, gate] per
+                /// head (not as two contiguous halves), so de-interleave into
+                /// per-head-contiguous buffers before any per-head code (RoPE,
+                /// QK norm) that assumes a fixed head_dim stride runs on it.
                 gate = execution.workspace.attention_gate.data();
                 const int head_dim = layout.head_dim;
                 for (int head = 0; head < layout.query_heads; ++head) {

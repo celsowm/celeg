@@ -132,9 +132,9 @@ void ggml_decode_row(const GgmlMatrixView& matrix, size_t row,
         for (size_t b = 0; b < matrix.cols / 32; ++b) {
             const BlockQ4_0& weight = weights[b];
             const float d = fp16_bits_to_float(weight.d);
-            // GGML packs each block as two halves, not interleaved pairs:
-            // qs[j] holds element j in its low nibble and element j+16 in
-            // its high nibble (j in [0,16)).
+            /// GGML packs each block as two halves, not interleaved pairs:
+            /// qs[j] holds element j in its low nibble and element j+16 in
+            /// its high nibble (j in [0,16)).
             for (int j = 0; j < 16; ++j) {
                 const uint8_t packed_value = weight.qs[j];
                 output[b * 32 + static_cast<size_t>(j)] =
@@ -152,9 +152,9 @@ void ggml_decode_row(const GgmlMatrixView& matrix, size_t row,
             const float d = fp16_bits_to_float(weight.d);
             uint32_t qh;
             std::memcpy(&qh, weight.qh, sizeof(qh));
-            // Same split-half nibble layout as Q4_0; the high (5th) bit of
-            // element j lives at bit j of qh, and of element j+16 at bit
-            // j+16 of qh.
+            /// Same split-half nibble layout as Q4_0; the high (5th) bit of
+            /// element j lives at bit j of qh, and of element j+16 at bit
+            /// j+16 of qh.
             for (int j = 0; j < 16; ++j) {
                 const uint8_t packed_value = weight.qs[j];
                 const int high0 = (qh >> j) & 1;

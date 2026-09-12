@@ -170,12 +170,12 @@ public:
         const auto& inventory = context.input.inventory;
         const int physical_layer = context.physical_layer(layer);
 
-        // Factorized Gated Delta Net checkpoints such as Ling intentionally
-        // store q/k/v/o projections below an `.attention.` prefix.  Those
-        // projection names alone therefore do not establish standard
-        // attention.  Recurrent-only f_proj + q_conv1d are discriminators for
-        // the more specific factorized_gated_delta grammar; let that rule own
-        // the layer instead of manufacturing a cross-family ambiguity.
+        /// Factorized Gated Delta Net checkpoints such as Ling intentionally
+        /// store q/k/v/o projections below an `.attention.` prefix.  Those
+        /// projection names alone therefore do not establish standard
+        /// attention.  Recurrent-only f_proj + q_conv1d are discriminators for
+        /// the more specific factorized_gated_delta grammar; let that rule own
+        /// the layer instead of manufacturing a cross-family ambiguity.
         const std::string recurrent_prefix =
             "model.layers." + std::to_string(physical_layer) + ".attention.";
         if (inventory.find(recurrent_prefix + "f_proj.weight") != nullptr &&

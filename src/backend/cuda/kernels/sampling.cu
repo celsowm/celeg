@@ -42,10 +42,10 @@ __global__ void argmax_bf16_kernel(const __nv_bfloat16* values,
     if (threadIdx.x == 0) *result = best_indices[0];
 }
 
-// Greedy argmax over the full vocab, split into kSamplingPartialBlocks
-// independent blocks -- mirrors sample_topk_partial_kernel/
-// sample_topk_merge_kernel's split below, so a full-vocab reduction no
-// longer serializes through a single block's grid-stride loop.
+/// Greedy argmax over the full vocab, split into kSamplingPartialBlocks
+/// independent blocks -- mirrors sample_topk_partial_kernel/
+/// sample_topk_merge_kernel's split below, so a full-vocab reduction no
+/// longer serializes through a single block's grid-stride loop.
 __global__ void argmax_bf16_partial_kernel(const __nv_bfloat16* values,
                                            const std::uint8_t* seen,
                                            int count, float repetition_penalty,

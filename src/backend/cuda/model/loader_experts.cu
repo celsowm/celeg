@@ -37,8 +37,8 @@ void validate_expert_dimensions(int experts, int intermediate, int hidden,
 }
 
 size_t gguf_row_bytes(int columns, GgmlType type, const std::string& name) {
-    // Only MMQ-capable types can stay packed as expert blocks on the device;
-    // everything else must have been routed to the host-decoded path already.
+    /// Only MMQ-capable types can stay packed as expert blocks on the device;
+    /// everything else must have been routed to the host-decoded path already.
     if (!cuda_gguf_native_mmq(type)) {
         throw std::runtime_error("unsupported GGUF MoE quantization: " + name +
                                  " (" + ggml_type_name(type) + ")");

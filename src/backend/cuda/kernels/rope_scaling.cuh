@@ -78,4 +78,4 @@ __device__ __forceinline__ float scaled_frequency(
     return frequency;
 }
 
-}  // namespace celeg::cuda_rope
+}  /// namespace celeg::cuda_rope

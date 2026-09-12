@@ -257,9 +257,9 @@ void GemmDispatcher::linear(const __nv_bfloat16* x,
                                segment.row_bytes, n, beta,
                                plan.mmq_tensor_cores_enabled(), stream_);
             } else {
-                // The loader must never bind a segment whose type has no MMQ
-                // kernel; treating an unmatched type as Q6_K would decode
-                // foreign blocks and silently corrupt the output.
+                /// The loader must never bind a segment whose type has no MMQ
+                /// kernel; treating an unmatched type as Q6_K would decode
+                /// foreign blocks and silently corrupt the output.
                 throw std::runtime_error(std::string("no MMQ kernel for GGUF segment type ") +
                                          ggml_type_name(segment.type));
             }
@@ -413,14 +413,14 @@ void GemmDispatcher::ensure_fp8_capacity(int m, int n, int k) {
         static_cast<size_t>(fp8_workspace_.capacity_m) * fp8_workspace_.capacity_n);
 }
 
-// Raw (unscaled) FP8xFP8->FP32 matmul plan. Mirrors get_or_create_lt_plan's
-// TRANSA=T/TRANSB=N layout convention (A=weight [k,n,k], B=activation
-// [k,m,k], D=[n,m,n]) so the raw accumulation buffer has the same physical
-// row-major-[m,n] layout the rest of the codebase's y buffers use. No scale
-// pointers are set here -- see linear_fp8_w8a8 and
-// docs/QWEN3_5_NVFP4_FP8_SUPPORT_PLAN.md Phase 3 for why the dequant scale
-// is applied as a separate kernel instead of via cuBLASLt's scale-vector
-// attribute (empirically unsupported on this hardware/toolkit combination).
+/// Raw (unscaled) FP8xFP8->FP32 matmul plan. Mirrors get_or_create_lt_plan's
+/// TRANSA=T/TRANSB=N layout convention (A=weight [k,n,k], B=activation
+/// [k,m,k], D=[n,m,n]) so the raw accumulation buffer has the same physical
+/// row-major-[m,n] layout the rest of the codebase's y buffers use. No scale
+/// pointers are set here -- see linear_fp8_w8a8 and
+/// docs/QWEN3_5_NVFP4_FP8_SUPPORT_PLAN.md Phase 3 for why the dequant scale
+/// is applied as a separate kernel instead of via cuBLASLt's scale-vector
+/// attribute (empirically unsupported on this hardware/toolkit combination).
 LtPlan& GemmDispatcher::get_or_create_fp8_lt_plan(int m, int n, int k) {
     const MatmulKey key{m, n, k};
     if (auto it = fp8_lt_cache_.plans.find(key); it != fp8_lt_cache_.plans.end()) {
@@ -487,10 +487,10 @@ void GemmDispatcher::linear_fp8_w8a8(const __nv_bfloat16* x,
 
     LtPlan& plan = get_or_create_fp8_lt_plan(m, n, k);
     if (!plan.available) {
-        // No cuBLASLt fp8 algorithm exists for this shape (observed for
-        // small/unaligned n on RTX 5090/CUDA 13.2 -- see
-        // docs/QWEN3_5_NVFP4_FP8_SUPPORT_PLAN.md Phase 3). Fall back to a
-        // naive kernel that is correct for every shape instead of failing.
+        /// No cuBLASLt fp8 algorithm exists for this shape (observed for
+        /// small/unaligned n on RTX 5090/CUDA 13.2 -- see
+        /// docs/QWEN3_5_NVFP4_FP8_SUPPORT_PLAN.md Phase 3). Fall back to a
+        /// naive kernel that is correct for every shape instead of failing.
         launch_fp8_w8a8_naive(fp8_workspace_.act_q.data(), fp8_workspace_.act_scales.data(),
                               weight.data, weight.scales, y, m, n, k, beta, stream_);
         return;
@@ -509,9 +509,9 @@ void GemmDispatcher::linear_fp8_w8a8(const __nv_bfloat16* x,
 }
 
 namespace {
-// Byte size of the 128x4-tiled VEC16_UE4M3 scale buffer for a `rows` x
-// `k_scale` (row-major) logical scale tensor -- see linear.cuh's
-// swizzle_nvfp4_scale_kernel comment for the layout this mirrors.
+/// Byte size of the 128x4-tiled VEC16_UE4M3 scale buffer for a `rows` x
+/// `k_scale` (row-major) logical scale tensor -- see linear.cuh's
+/// swizzle_nvfp4_scale_kernel comment for the layout this mirrors.
 size_t nvfp4_scale_buffer_bytes(int rows, int k_scale) {
     const int tiles_m = (rows + 127) / 128;
     const int tiles_n = (k_scale + 3) / 4;
@@ -545,12 +545,12 @@ void GemmDispatcher::ensure_nvfp4_capacity(int m, int n, int k) {
     nvfp4_workspace_.raw.reset(static_cast<size_t>(cm) * cn);
 }
 
-// Native NVFP4 block-scaled fp4 matmul plan. Mirrors get_or_create_fp8_lt_plan's
-// TRANSA=T/TRANSB=N layout convention. A_SCALE_MODE/B_SCALE_MODE are fixed
-// per plan (VEC16_UE4M3); the actual scale POINTERs are set per-call in
-// linear_nvfp4_w4a4 since they point at per-call-refreshed workspace
-// buffers. See docs/QWEN3_5_NVFP4_FP8_SUPPORT_PLAN.md Phase 4 for how the
-// 128x4 tiled scale layout this depends on was found and verified.
+/// Native NVFP4 block-scaled fp4 matmul plan. Mirrors get_or_create_fp8_lt_plan's
+/// TRANSA=T/TRANSB=N layout convention. A_SCALE_MODE/B_SCALE_MODE are fixed
+/// per plan (VEC16_UE4M3); the actual scale POINTERs are set per-call in
+/// linear_nvfp4_w4a4 since they point at per-call-refreshed workspace
+/// buffers. See docs/QWEN3_5_NVFP4_FP8_SUPPORT_PLAN.md Phase 4 for how the
+/// 128x4 tiled scale layout this depends on was found and verified.
 LtPlan& GemmDispatcher::get_or_create_nvfp4_lt_plan(int m, int n, int k) {
     const MatmulKey key{m, n, k};
     if (auto it = nvfp4_lt_cache_.plans.find(key); it != nvfp4_lt_cache_.plans.end()) {
@@ -571,13 +571,13 @@ LtPlan& GemmDispatcher::get_or_create_nvfp4_lt_plan(int m, int n, int k) {
         plan->operation, CUBLASLT_MATMUL_DESC_A_SCALE_MODE, &scale_mode, sizeof(scale_mode)));
     CELEG_CUBLAS(cublasLtMatmulDescSetAttribute(
         plan->operation, CUBLASLT_MATMUL_DESC_B_SCALE_MODE, &scale_mode, sizeof(scale_mode)));
-    // cublasLtMatmulAlgoGetHeuristic requires the scale POINTERS to already
-    // be set (not just the scale mode) or it returns INVALID_VALUE with
-    // zero results -- found empirically, undocumented. ensure_nvfp4_capacity
-    // was already called for this exact (m,n,k) by the caller, so these
-    // addresses are valid now; linear_nvfp4_w4a4 re-sets them on every call
-    // anyway (workspace buffers can grow/realloc for a larger shape later,
-    // which would otherwise leave this cached plan's pointers dangling).
+    /// cublasLtMatmulAlgoGetHeuristic requires the scale POINTERS to already
+    /// be set (not just the scale mode) or it returns INVALID_VALUE with
+    /// zero results -- found empirically, undocumented. ensure_nvfp4_capacity
+    /// was already called for this exact (m,n,k) by the caller, so these
+    /// addresses are valid now; linear_nvfp4_w4a4 re-sets them on every call
+    /// anyway (workspace buffers can grow/realloc for a larger shape later,
+    /// which would otherwise leave this cached plan's pointers dangling).
     __nv_fp8_e4m3* a_scale_ptr = nvfp4_workspace_.weight_scale_swizzled.data();
     __nv_fp8_e4m3* b_scale_ptr = nvfp4_workspace_.act_scale_swizzled.data();
     CELEG_CUBLAS(cublasLtMatmulDescSetAttribute(

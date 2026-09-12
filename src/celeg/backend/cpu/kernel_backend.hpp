@@ -42,4 +42,4 @@ const CpuKernelBackend& cpu_kernel_backend(CpuIsa isa);
 const CpuKernelBackend& cpu_resolve_kernel_backend(CpuIsa requested,
                                                    const CpuCapabilities& caps);
 
-}  // namespace celeg
+}  /// namespace celeg

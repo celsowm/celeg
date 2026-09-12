@@ -207,12 +207,12 @@ std::string CheckpointMetadata::string_for_or(std::string_view safetensors_key,
 
 CheckpointMetadata CheckpointMetadata::from_json(const Json& root) {
     CheckpointMetadata metadata;
-    // quantization_config (compressed-tensors style) nests config_groups, an
-    // array of objects -- flatten_json's scalar/vector scheme can't
-    // represent that and would throw. Quantized tensor formats are detected
-    // per-tensor from what's actually on disk (see
-    // celeg/checkpoint/packed/{fp8,nvfp4}.hpp), so this subtree is skipped
-    // rather than parsed.
+    /// quantization_config (compressed-tensors style) nests config_groups, an
+    /// array of objects -- flatten_json's scalar/vector scheme can't
+    /// represent that and would throw. Quantized tensor formats are detected
+    /// per-tensor from what's actually on disk (see
+    /// celeg/checkpoint/packed/{fp8,nvfp4}.hpp), so this subtree is skipped
+    /// rather than parsed.
     if (root.is_object()) {
         for (const auto& [key, child] : root.as_object()) {
             if (key == "quantization_config") continue;

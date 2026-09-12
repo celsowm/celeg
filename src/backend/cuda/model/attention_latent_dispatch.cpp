@@ -36,7 +36,7 @@ LatentQueryView latent_prefill_query_view(
             ? model.workspace_.prefill_latent_query_rope_.data() : nullptr};
 }
 
-} // namespace
+} /// namespace
 
 void dispatch_cuda_latent_attention_contiguous(
     CudaCompiledModel& model, AttentionLayer& attention, AttentionLayer& owner) {

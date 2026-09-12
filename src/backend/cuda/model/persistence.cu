@@ -20,7 +20,7 @@ uint64_t fnv1a_hash(std::string_view text) {
     return hash;
 }
 
-}  // namespace
+}  /// namespace
 
 SessionStore::SessionState CudaCompiledModel::make_session_state() {
     SessionStore::SessionState state{

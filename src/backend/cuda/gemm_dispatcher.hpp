@@ -80,11 +80,11 @@ public:
                                   const __nv_bfloat16* weight,
                                   int m, int n, int k);
 
-    // W8A8: dynamic per-token E4M3 activation quantization, a raw (unscaled)
-    // FP8xFP8->FP32 cuBLASLt matmul, then a manual outer-product dequant
-    // scale applied as a separate kernel epilogue -- see linear.cuh and
-    // docs/QWEN3_5_NVFP4_FP8_SUPPORT_PLAN.md Phase 3 for why the scale isn't
-    // applied via cuBLASLt's native scale-vector attribute.
+    /// W8A8: dynamic per-token E4M3 activation quantization, a raw (unscaled)
+    /// FP8xFP8->FP32 cuBLASLt matmul, then a manual outer-product dequant
+    /// scale applied as a separate kernel epilogue -- see linear.cuh and
+    /// docs/QWEN3_5_NVFP4_FP8_SUPPORT_PLAN.md Phase 3 for why the scale isn't
+    /// applied via cuBLASLt's native scale-vector attribute.
     void linear_fp8_w8a8(const __nv_bfloat16* x,
                          const Fp8LinearStorage& weight,
                          __nv_bfloat16* y,
@@ -93,13 +93,13 @@ public:
 
     LtPlan& get_or_create_fp8_lt_plan(int m, int n, int k);
 
-    // W4A4 (NVFP4): dynamic per-16-block e2m1 activation quantization, both
-    // operands' UE4M3 block-scale tensors rearranged into cuBLASLt's
-    // documented 128x4 tiled layout, a native block-scaled fp4 matmul, then
-    // a post-multiply by the two per-tensor global scales. Falls back to
-    // dequantizing the weight to bf16 (linear.cuh's launch_dequant_nvfp4)
-    // if no cuBLASLt algorithm is found for the shape. See linear.cuh and
-    // docs/QWEN3_5_NVFP4_FP8_SUPPORT_PLAN.md Phase 4.
+    /// W4A4 (NVFP4): dynamic per-16-block e2m1 activation quantization, both
+    /// operands' UE4M3 block-scale tensors rearranged into cuBLASLt's
+    /// documented 128x4 tiled layout, a native block-scaled fp4 matmul, then
+    /// a post-multiply by the two per-tensor global scales. Falls back to
+    /// dequantizing the weight to bf16 (linear.cuh's launch_dequant_nvfp4)
+    /// if no cuBLASLt algorithm is found for the shape. See linear.cuh and
+    /// docs/QWEN3_5_NVFP4_FP8_SUPPORT_PLAN.md Phase 4.
     void linear_nvfp4_w4a4(const __nv_bfloat16* x,
                            const Nvfp4LinearStorage& weight,
                            __nv_bfloat16* y,

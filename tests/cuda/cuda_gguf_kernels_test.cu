@@ -569,11 +569,11 @@ int main() {
         }
     }
 
-    // The CUDA loader decodes IQ blocks on the host before uploading BF16.
-    // The shared decoders are checked element-exactly against ggml in
-    // cpu_gguf_kernels_test; what is specific here is the loader's own
-    // block/row striding and the BF16 narrowing, so the same ggml fixture is
-    // pushed through dequantize_gguf_to_bf16 end to end.
+    /// The CUDA loader decodes IQ blocks on the host before uploading BF16.
+    /// The shared decoders are checked element-exactly against ggml in
+    /// cpu_gguf_kernels_test; what is specific here is the loader's own
+    /// block/row striding and the BF16 narrowing, so the same ggml fixture is
+    /// pushed through dequantize_gguf_to_bf16 end to end.
     {
         struct IqCase {
             const char* name;
@@ -611,8 +611,8 @@ int main() {
             for (size_t i = 0; i < decoded.size(); ++i) {
                 const float got = __bfloat162float(decoded[i]);
                 const float want = iq_case.reference[i];
-                // BF16 keeps 8 mantissa bits, so ~0.4% relative is the
-                // representation floor, not decoder slack.
+                /// BF16 keeps 8 mantissa bits, so ~0.4% relative is the
+                /// representation floor, not decoder slack.
                 const float tolerance = 6e-3f * std::max(1.0f, std::abs(want));
                 if (std::abs(got - want) >= tolerance) {
                     std::cerr << iq_case.name << " element " << i << ": got " << got

@@ -132,8 +132,8 @@ void test_type_registry() {
         int block_size;
         int type_size;
     };
-    // Ordinals and block geometry as ggml defines them; a divergence here
-    // means celeg would read a real file at the wrong stride.
+    /// Ordinals and block geometry as ggml defines them; a divergence here
+    /// means celeg would read a real file at the wrong stride.
     const Expected expected[] = {
         {celeg::GgmlType::F32, 0, "F32", 1, 4},
         {celeg::GgmlType::F16, 1, "F16", 1, 2},
@@ -159,22 +159,22 @@ void test_type_registry() {
         const auto trait = celeg::ggml_type_trait(row.type);
         CELEG_TEST_CHECK(trait.block_size == row.block_size);
         CELEG_TEST_CHECK(trait.type_size == row.type_size);
-        // Round-tripping through the block encoding is how the loaders carry
-        // the type across the format/backend boundary.
+        /// Round-tripping through the block encoding is how the loaders carry
+        /// the type across the format/backend boundary.
         CELEG_TEST_CHECK(celeg::ggml_type_from_block_encoding(
             celeg::block_encoding_from_ggml_type(row.type)) == row.type);
     }
 
-    // Unrecognised ordinals must degrade to Unknown with zero geometry, so
-    // GgufFile::tensor() rejects the file instead of reading garbage.
+    /// Unrecognised ordinals must degrade to Unknown with zero geometry, so
+    /// GgufFile::tensor() rejects the file instead of reading garbage.
     for (const std::int32_t ordinal : {7, 9, 15, 16, 17, 19, 29, 39, 1000, -5}) {
         const auto type = celeg::ggml_type_from_ordinal(ordinal);
         CELEG_TEST_CHECK(type == celeg::GgmlType::Unknown);
         CELEG_TEST_CHECK(celeg::ggml_type_trait(type).block_size == 0);
     }
 
-    // Every quantized type must expose the neutral decoder, while dense GGML
-    // types remain owned by their dtype loaders.
+    /// Every quantized type must expose the neutral decoder, while dense GGML
+    /// types remain owned by their dtype loaders.
     for (const Expected& row : expected) {
         const bool quantized = celeg::ggml_type_trait(row.type).block_size > 1;
         CELEG_TEST_CHECK(celeg::ggml_row_decoder(row.type).has_value() == quantized);

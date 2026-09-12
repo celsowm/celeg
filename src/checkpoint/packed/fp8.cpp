@@ -19,8 +19,8 @@ float f32_from(const std::byte* source) {
     return value;
 }
 
-// Per-channel scale sidecars show up as F32 or BF16 depending on export
-// tooling; both are accepted.
+/// Per-channel scale sidecars show up as F32 or BF16 depending on export
+/// tooling; both are accepted.
 float read_scale(const HostTensorView& scale, size_t row) {
     if (scale.dtype == TensorDType::F32) {
         return f32_from(scale.data + row * sizeof(float));
