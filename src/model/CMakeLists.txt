@@ -27,6 +27,7 @@ set(CELEG_MODEL_SOURCES
     src/model/inference/support.cpp
     src/model/inference/metadata.cpp
     src/model/inference/inventory.cpp
+    src/model/inference/tensor_inventory.cpp
     src/model/inference/binding.cpp
     src/model/inference/synthesis.cpp
     src/model/inference/report.cpp
