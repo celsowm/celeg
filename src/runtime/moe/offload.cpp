@@ -1,5 +1,6 @@
 #include "backend/cuda/moe/offload.hpp"
 #include "checkpoint/detail/binary_codec.hpp"
+#include "celeg/text/format.hpp"
 
 #include <algorithm>
 #include <array>
@@ -28,19 +29,7 @@ namespace {
 
 constexpr std::size_t kBf16Bytes = 2;
 
-std::string format_bytes(std::size_t bytes) {
-    static constexpr const char* units[] = {"B", "KiB", "MiB", "GiB"};
-    double value = static_cast<double>(bytes);
-    int unit = 0;
-    while (value >= 1024.0 && unit < 3) {
-        value /= 1024.0;
-        ++unit;
-    }
-    std::ostringstream out;
-    out << std::fixed << std::setprecision(unit == 0 ? 0 : 2)
-        << value << ' ' << units[unit];
-    return out.str();
-}
+using text::format_bytes;
 
 const char* host_mode_name(ExpertHostMode mode) {
     switch (mode) {
