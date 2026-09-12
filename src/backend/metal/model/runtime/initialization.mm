@@ -247,6 +247,9 @@ MetalModel::MetalModel(const std::string& path, int context,
                 &layer.feed_forward)) {
             max_batch_intermediate = std::max(max_batch_intermediate,
                                         static_cast<size_t>(dense->intermediate_size));
+            max_batch_intermediate = std::max(max_batch_intermediate,
+                                        static_cast<size_t>(
+                                            std::max(dense->parallel_intermediate_size, 0)));
         }
         if (const auto* attention = std::get_if<CompiledAttentionProgram>(&layer.mixer)) {
             max_projection = std::max(
@@ -316,6 +319,8 @@ MetalModel::MetalModel(const std::string& path, int context,
         static_cast<size_t>(context) * max_batch_intermediate * 2 * sizeof(float));
     (*impl_).batch_activated = (*impl_).zero_buffer(
         static_cast<size_t>(context) * max_batch_intermediate * sizeof(float));
+    (*impl_).batch_parallel_output = (*impl_).zero_buffer(
+        static_cast<size_t>(context) * hidden * sizeof(float));
 
     (*impl_).layers.reserve((*impl_).model.graph.layers.size());
     for (size_t index = 0; index < (*impl_).program.layers.size(); ++index) {
@@ -513,6 +518,18 @@ MetalModel::MetalModel(const std::string& path, int context,
                                                 static_cast<int>(index), layer.intermediate, hidden);
             layer.ffn_down = (*impl_).load_linear(TensorRole::FfnDown,
                                                   static_cast<int>(index), hidden, layer.intermediate);
+            layer.parallel_intermediate = dense->parallel_intermediate_size;
+            if (layer.parallel_intermediate > 0) {
+                layer.ffn_parallel_gate = (*impl_).load_linear(
+                    TensorRole::FfnParallelGate, static_cast<int>(index),
+                    layer.parallel_intermediate, hidden);
+                layer.ffn_parallel_up = (*impl_).load_linear(
+                    TensorRole::FfnParallelUp, static_cast<int>(index),
+                    layer.parallel_intermediate, hidden);
+                layer.ffn_parallel_down = (*impl_).load_linear(
+                    TensorRole::FfnParallelDown, static_cast<int>(index),
+                    hidden, layer.parallel_intermediate);
+            }
         } else if (const auto* moe_program = std::get_if<MoeLayerProgram>(
                        &program_layer.feed_forward)) {
             layer.intermediate = moe_program->routed.mlp.intermediate_size;

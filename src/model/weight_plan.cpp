@@ -324,6 +324,17 @@ void build_weight_plan_from_graph(ResolvedModel& model,
                             {feed_forward.intermediate_size, graph.hidden}, physical_layer);
                 add_request(model, TensorRole::FfnDown, layer_index, -1,
                             {graph.hidden, feed_forward.intermediate_size}, physical_layer);
+                if (feed_forward.parallel_intermediate_size > 0) {
+                    add_request(model, TensorRole::FfnParallelGate, layer_index, -1,
+                                {feed_forward.parallel_intermediate_size, graph.hidden},
+                                physical_layer);
+                    add_request(model, TensorRole::FfnParallelUp, layer_index, -1,
+                                {feed_forward.parallel_intermediate_size, graph.hidden},
+                                physical_layer);
+                    add_request(model, TensorRole::FfnParallelDown, layer_index, -1,
+                                {graph.hidden, feed_forward.parallel_intermediate_size},
+                                physical_layer);
+                }
             } else if constexpr (std::is_same_v<FeedForward, MixtureOfExpertsSpec>) {
                 append_moe(model, feed_forward, layer_index, physical_layer,
                           naming_policy, repository);

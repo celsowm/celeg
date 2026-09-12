@@ -100,6 +100,19 @@ CpuCompiledModel::DenseFeedForwardWeights CpuCompiledModel::Shared::load_dense_f
     dense.w2 = load_matrix(source, reader, writer,
         tensor_name(weight_requests, TensorRole::FfnDown, layer),
         {program.hidden, intermediate});
+    if (compiled_dense->parallel_intermediate_size > 0) {
+        const int parallel = compiled_dense->parallel_intermediate_size;
+        dense.parallel_w13 = load_concat(source, reader, writer,
+            layer_name(layer, "feed_forward.parallel_w13.weight"), {
+                {tensor_name(weight_requests, TensorRole::FfnParallelGate, layer),
+                 {parallel, program.hidden}},
+                {tensor_name(weight_requests, TensorRole::FfnParallelUp, layer),
+                 {parallel, program.hidden}},
+            });
+        dense.parallel_w2 = load_matrix(source, reader, writer,
+            tensor_name(weight_requests, TensorRole::FfnParallelDown, layer),
+            {program.hidden, parallel});
+    }
     if (program.per_layer_input.enabled) {
         dense.per_layer_input_gate = load_matrix(source, reader, writer,
             tensor_name(weight_requests, TensorRole::PerLayerInputGate, layer),

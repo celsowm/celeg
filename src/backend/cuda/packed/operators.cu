@@ -604,23 +604,35 @@ void PackedDenseFfnExecutor::run(
         throw std::logic_error("packed dense executor received non-dense semantics");
     }
     const int intermediate = dense_semantics->intermediate_size;
+    const int parallel = dense_semantics->parallel_intermediate_size;
     if (intermediate <= 0 ||
         intermediate > static_cast<int>(context.workspace.requirements_.maximum_ffn_intermediate)) {
         throw std::runtime_error("invalid packed dense FFN width at layer " +
                                  std::to_string(layer_index));
     }
+    if (parallel < 0 || parallel > static_cast<int>(
+            context.workspace.requirements_.maximum_ffn_intermediate)) {
+        throw std::runtime_error("invalid packed dense parallel FFN width at layer " +
+                                 std::to_string(layer_index));
+    }
     const auto* dense = as_dense_ffn(common_layer.feed_forward);
     if (!dense) throw std::logic_error("packed dense layer has no dense FFN binding");
-    if (dense_semantics->activation != ActivationKind::SwiGLU) {
+    const bool gelu_tanh = dense_semantics->activation == ActivationKind::GeluTanh;
+    if (!gelu_tanh && dense_semantics->activation != ActivationKind::SwiGLU) {
         throw std::runtime_error(
-            "packed CUDA dense executor only implements SwiGLU; layer " +
+            "packed CUDA dense executor only implements SwiGLU and GeluTanh; layer " +
             std::to_string(layer_index) + " needs a different gated activation");
     }
     if (reference.options().fused_projections) {
         context.linear(w.normed.data(), *dense->w13, w.gate_up.data(), rows,
                        2 * intermediate, context.program.hidden);
-        launch_swiglu_interleaved(w.gate_up.data(), w.activated.data(), rows,
-                                  intermediate, w.stream.get());
+        if (gelu_tanh) {
+            launch_gated_gelu_tanh_interleaved(w.gate_up.data(), w.activated.data(), rows,
+                                               intermediate, w.stream.get());
+        } else {
+            launch_swiglu_interleaved(w.gate_up.data(), w.activated.data(), rows,
+                                      intermediate, w.stream.get());
+        }
     } else {
         const auto w1 = slice_rows(*dense->w13, 0, intermediate);
         const auto w3 = slice_rows(*dense->w13, intermediate, intermediate);
@@ -629,8 +641,13 @@ void PackedDenseFfnExecutor::run(
                        intermediate, context.program.hidden);
         context.linear(w.normed.data(), w3, w.gate_up.data() + plane, rows,
                        intermediate, context.program.hidden);
-        launch_swiglu_fused(w.gate_up.data(), w.activated.data(),
-                            static_cast<int>(plane), w.stream.get());
+        if (gelu_tanh) {
+            launch_gated_gelu_tanh(w.gate_up.data(), w.activated.data(),
+                                   static_cast<int>(plane), w.stream.get());
+        } else {
+            launch_swiglu_fused(w.gate_up.data(), w.activated.data(),
+                                static_cast<int>(plane), w.stream.get());
+        }
     }
     const bool split_output = semantics.feed_forward_norm.after.has_value();
     if (reference.options().fused_residuals && !split_output) {
@@ -639,6 +656,46 @@ void PackedDenseFfnExecutor::run(
     } else {
         context.linear(w.activated.data(), *dense->w2, w.mlp_output.data(), rows,
                        context.program.hidden, intermediate);
+    }
+    if (parallel > 0) {
+        if (dense->parallel_w13 == nullptr || dense->parallel_w2 == nullptr) {
+            throw std::logic_error("packed dense layer has parallel width but no parallel weights");
+        }
+        if (reference.options().fused_projections) {
+            context.linear(w.normed.data(), *dense->parallel_w13, w.gate_up.data(), rows,
+                           2 * parallel, context.program.hidden);
+            if (gelu_tanh) {
+                launch_gated_gelu_tanh_interleaved(w.gate_up.data(), w.activated.data(), rows,
+                                                   parallel, w.stream.get());
+            } else {
+                launch_swiglu_interleaved(w.gate_up.data(), w.activated.data(), rows,
+                                          parallel, w.stream.get());
+            }
+        } else {
+            const auto pw1 = slice_rows(*dense->parallel_w13, 0, parallel);
+            const auto pw3 = slice_rows(*dense->parallel_w13, parallel, parallel);
+            const size_t parallel_plane = static_cast<size_t>(rows) * parallel;
+            context.linear(w.normed.data(), pw1, w.gate_up.data(), rows,
+                           parallel, context.program.hidden);
+            context.linear(w.normed.data(), pw3, w.gate_up.data() + parallel_plane, rows,
+                           parallel, context.program.hidden);
+            if (gelu_tanh) {
+                launch_gated_gelu_tanh(w.gate_up.data(), w.activated.data(),
+                                       static_cast<int>(parallel_plane), w.stream.get());
+            } else {
+                launch_swiglu_fused(w.gate_up.data(), w.activated.data(),
+                                    static_cast<int>(parallel_plane), w.stream.get());
+            }
+        }
+        if (reference.options().fused_residuals && !split_output) {
+            context.linear(w.activated.data(), *dense->parallel_w2, w.hidden.data(), rows,
+                           context.program.hidden, parallel, 1.0f);
+        } else {
+            context.linear(w.activated.data(), *dense->parallel_w2, w.mlp_output.data(), rows,
+                           context.program.hidden, parallel, 1.0f);
+        }
+    }
+    if (!reference.options().fused_residuals || split_output) {
         if (split_output) {
             launch_rmsnorm(w.mlp_output.data(), common_layer.feed_forward_norm_after,
                            w.mlp_output.data(), rows, context.program.hidden,

@@ -2,6 +2,8 @@
 #include "kernels/kernels.cuh"
 #include "backend/cuda/moe.hpp"
 
+#include <stdexcept>
+
 namespace celeg {
 
 void CudaCompiledModel::run_mlp_decode(const LayerCommon& common_layer, int layer) {
@@ -23,21 +25,28 @@ void CudaCompiledModel::run_mlp_decode(const LayerCommon& common_layer, int laye
         const auto& dense_semantics =
             std::get<CompiledDenseFeedForwardProgram>(semantics.feed_forward);
         const int intermediate = dense_semantics.intermediate_size;
+        const int parallel = dense_semantics.parallel_intermediate_size;
+        const DenseFfnWeights* dense_weights = as_dense_ffn(common_layer.feed_forward);
+        if (parallel > 0 &&
+            (dense_weights == nullptr || dense_weights->parallel_w13 == nullptr ||
+             dense_weights->parallel_w2 == nullptr)) {
+            throw std::logic_error("CUDA dense FFN has parallel width but no parallel weights");
+        }
+        const bool gelu_tanh = dense_semantics.activation == ActivationKind::GeluTanh;
         if (resources_.options().fused_projections) {
-            linear(workspace_.normed_.data(), *as_dense_ffn(common_layer.feed_forward)->w13,
+            linear(workspace_.normed_.data(), *dense_weights->w13,
                    workspace_.gate_up_.data(), 1, 2 * intermediate,
                    resources_.program_.hidden);
         } else {
             const LinearWeight w1 =
-                slice_rows(*as_dense_ffn(common_layer.feed_forward)->w13, 0, intermediate);
+                slice_rows(*dense_weights->w13, 0, intermediate);
             const LinearWeight w3 = slice_rows(
-                *as_dense_ffn(common_layer.feed_forward)->w13, intermediate, intermediate);
+                *dense_weights->w13, intermediate, intermediate);
             linear(workspace_.normed_.data(), w1, workspace_.gate_up_.data(),
                    1, intermediate, resources_.program_.hidden);
             linear(workspace_.normed_.data(), w3, workspace_.gate_up_.data() + intermediate,
                    1, intermediate, resources_.program_.hidden);
         }
-        const bool gelu_tanh = dense_semantics.activation == ActivationKind::GeluTanh;
         if (gelu_tanh) {
             launch_gated_gelu_tanh(workspace_.gate_up_.data(), workspace_.activated_.data(),
                                    intermediate, stream_.get());
@@ -47,13 +56,49 @@ void CudaCompiledModel::run_mlp_decode(const LayerCommon& common_layer, int laye
         }
         const bool split_output = semantics.feed_forward_norm.after.has_value();
         if (resources_.options().fused_residuals && !split_output) {
-            linear(workspace_.activated_.data(), *as_dense_ffn(common_layer.feed_forward)->w2,
+            linear(workspace_.activated_.data(), *dense_weights->w2,
                    workspace_.hidden_.data(), 1, resources_.program_.hidden,
                    intermediate, 1.0f);
         } else {
-            linear(workspace_.activated_.data(), *as_dense_ffn(common_layer.feed_forward)->w2,
+            linear(workspace_.activated_.data(), *dense_weights->w2,
                    workspace_.mlp_output_.data(), 1, resources_.program_.hidden,
                    intermediate);
+        }
+        if (parallel > 0) {
+            if (resources_.options().fused_projections) {
+                linear(workspace_.normed_.data(), *dense_weights->parallel_w13,
+                       workspace_.gate_up_.data(), 1, 2 * parallel,
+                       resources_.program_.hidden);
+            } else {
+                const LinearWeight pw1 =
+                    slice_rows(*dense_weights->parallel_w13, 0, parallel);
+                const LinearWeight pw3 = slice_rows(
+                    *dense_weights->parallel_w13, parallel, parallel);
+                linear(workspace_.normed_.data(), pw1, workspace_.gate_up_.data(),
+                       1, parallel, resources_.program_.hidden);
+                linear(workspace_.normed_.data(), pw3, workspace_.gate_up_.data() + parallel,
+                       1, parallel, resources_.program_.hidden);
+            }
+            if (gelu_tanh) {
+                launch_gated_gelu_tanh(workspace_.gate_up_.data(),
+                                       workspace_.activated_.data(),
+                                       parallel, stream_.get());
+            } else {
+                launch_swiglu_fused(workspace_.gate_up_.data(),
+                                    workspace_.activated_.data(),
+                                    parallel, stream_.get());
+            }
+            if (resources_.options().fused_residuals && !split_output) {
+                linear(workspace_.activated_.data(), *dense_weights->parallel_w2,
+                       workspace_.hidden_.data(), 1, resources_.program_.hidden,
+                       parallel, 1.0f);
+            } else {
+                linear(workspace_.activated_.data(), *dense_weights->parallel_w2,
+                       workspace_.mlp_output_.data(), 1, resources_.program_.hidden,
+                       parallel, 1.0f);
+            }
+        }
+        if (!resources_.options().fused_residuals || split_output) {
             if (split_output) {
                 launch_rmsnorm(workspace_.mlp_output_.data(),
                                common_layer.feed_forward_norm_after,
@@ -80,6 +125,13 @@ void CudaCompiledModel::run_mlp_prefill(const LayerCommon& common_layer, int row
         const auto& dense_semantics =
             std::get<CompiledDenseFeedForwardProgram>(semantics.feed_forward);
         const int intermediate = dense_semantics.intermediate_size;
+        const int parallel = dense_semantics.parallel_intermediate_size;
+        const DenseFfnWeights* dense_weights = as_dense_ffn(common_layer.feed_forward);
+        if (parallel > 0 &&
+            (dense_weights == nullptr || dense_weights->parallel_w13 == nullptr ||
+             dense_weights->parallel_w2 == nullptr)) {
+            throw std::logic_error("CUDA dense FFN has parallel width but no parallel weights");
+        }
         const size_t matrix_elements = static_cast<size_t>(rows) * intermediate;
         if (semantics.feed_forward_norm.before) {
             launch_rmsnorm(workspace_.prefill_hidden_.data(),
@@ -140,6 +192,57 @@ void CudaCompiledModel::run_mlp_prefill(const LayerCommon& common_layer, int row
             linear(workspace_.prefill_activated_.data(), *as_dense_ffn(common_layer.feed_forward)->w2,
                    workspace_.prefill_mlp_output_.data(), rows,
                    resources_.program_.hidden, intermediate);
+        }
+        if (parallel > 0) {
+            const size_t parallel_elements = static_cast<size_t>(rows) * parallel;
+            if (resources_.options().fused_projections) {
+                linear(workspace_.prefill_normed_.data(), *dense_weights->parallel_w13,
+                       workspace_.prefill_gate_up_.data(), rows, 2 * parallel,
+                       resources_.program_.hidden);
+                if (dense_semantics.activation == ActivationKind::GeluTanh) {
+                    launch_gated_gelu_tanh_interleaved(
+                        workspace_.prefill_gate_up_.data(),
+                        workspace_.prefill_activated_.data(),
+                        rows, parallel, stream_.get());
+                } else {
+                    launch_swiglu_interleaved(workspace_.prefill_gate_up_.data(),
+                                              workspace_.prefill_activated_.data(), rows,
+                                              parallel, stream_.get());
+                }
+            } else {
+                const LinearWeight pw1 =
+                    slice_rows(*dense_weights->parallel_w13, 0, parallel);
+                const LinearWeight pw3 = slice_rows(
+                    *dense_weights->parallel_w13, parallel, parallel);
+                linear(workspace_.prefill_normed_.data(), pw1,
+                       workspace_.prefill_gate_up_.data(),
+                       rows, parallel, resources_.program_.hidden);
+                linear(workspace_.prefill_normed_.data(), pw3,
+                       workspace_.prefill_gate_up_.data() + parallel_elements,
+                       rows, parallel, resources_.program_.hidden);
+                if (dense_semantics.activation == ActivationKind::GeluTanh) {
+                    launch_gated_gelu_tanh(workspace_.prefill_gate_up_.data(),
+                                           workspace_.prefill_activated_.data(),
+                                           static_cast<int>(parallel_elements),
+                                           stream_.get());
+                } else {
+                    launch_swiglu_fused(workspace_.prefill_gate_up_.data(),
+                                        workspace_.prefill_activated_.data(),
+                                        static_cast<int>(parallel_elements),
+                                        stream_.get());
+                }
+            }
+            if (resources_.options().fused_residuals && !split_output) {
+                linear(workspace_.prefill_activated_.data(), *dense_weights->parallel_w2,
+                       workspace_.prefill_hidden_.data(), rows, resources_.program_.hidden,
+                       parallel, 1.0f);
+            } else {
+                linear(workspace_.prefill_activated_.data(), *dense_weights->parallel_w2,
+                       workspace_.prefill_mlp_output_.data(), rows,
+                       resources_.program_.hidden, parallel, 1.0f);
+            }
+        }
+        if (!resources_.options().fused_residuals || split_output) {
             if (split_output) {
                 launch_rmsnorm(workspace_.prefill_mlp_output_.data(),
                                common_layer.feed_forward_norm_after,

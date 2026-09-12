@@ -372,6 +372,9 @@ struct MlpBlockSpec {
 struct DenseFeedForwardSpec {
     int intermediate_size = 0;
     ActivationKind activation = ActivationKind::SwiGLU;
+    /// Parallel-branch width: a second SwiGLU of this width runs alongside
+    /// the main MLP and sums into the same residual. Zero means absent.
+    int parallel_intermediate_size = 0;
 };
 
 struct PerLayerInputPolicy {

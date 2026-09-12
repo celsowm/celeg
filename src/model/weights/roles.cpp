@@ -20,6 +20,7 @@ std::string_view tensor_role_name(TensorRole role) {
         "attention_latent_key_norm", "attention_latent_expansion",
         "attention_output", "attention_value_norm", "attention_post_norm",
         "ffn_input_norm", "ffn_output_norm", "ffn_gate", "ffn_up", "ffn_down",
+        "ffn_parallel_gate", "ffn_parallel_up", "ffn_parallel_down",
         "short_conv_input", "short_conv_kernel", "short_conv_output",
         "gated_delta_net_qkv", "gated_delta_net_z", "gated_delta_net_alpha",
         "gated_delta_net_beta", "gated_delta_net_dt_bias", "gated_delta_net_a_log",

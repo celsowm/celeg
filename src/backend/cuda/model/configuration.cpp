@@ -1,5 +1,6 @@
 #include "detail/compiled_model.hpp"
 #include "backend/cuda/compiler.hpp"
+#include "backend/cuda/effective_options.hpp"
 #include "checkpoint/detail/bootstrap.hpp"
 #include "backend/cuda/weight_policy.hpp"
 #include "celeg/checkpoint/packed/int8.hpp"
@@ -20,19 +21,8 @@ void CudaCompiledModel::configure_model(
                                "model.layers.0.self_attn.q_proj.weight")) {
         effective_options.weight_mode = WeightMode::Int8;
     }
-
-    const bool non_default_residual = std::any_of(
-        resources_.program_.layers.begin(), resources_.program_.layers.end(),
-        [](const CompiledLayerProgram& layer) {
-            return layer.residual.multiplier != 1.0f;
-        });
-    if (non_default_residual ||
-        (resources_.shape().conv_layer_count == 0 &&
-         (resources_.program_.embedding_transform.multiplier != 1.0f ||
-          resources_.program_.logits_multiplier != 1.0f ||
-          resources_.program_.logits_divisor != 1.0f))) {
-        effective_options.fused_residuals = false;
-    }
+    effective_options = effective_cuda_options_for_program(
+        std::move(effective_options), resources_.program_, resources_.shape());
 
     resources_.plan_ = CudaExecutionPlan::compile(
         std::move(effective_options), max_context_, resources_.plan_.device());

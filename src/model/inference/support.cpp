@@ -62,6 +62,7 @@ void reject_unknown_semantic_metadata(const CheckpointMetadata& metadata,
         "is_encoder_decoder", "problem_type", "id2label", "label2id",
         "initializer_range", "tie_word_embeddings",
         "audio_token_id", "image_token_id", "video_token_id",
+        "vision_start_token_id", "vision_end_token_id",
         "boa_token_id", "boi_token_id", "eoa_token_id", "eoa_token_index",
         "eoi_token_id", "vision_soft_tokens_per_image",
         "chat_template", "tokenizer.chat_template", "tool_protocol",
@@ -135,6 +136,24 @@ void reject_unknown_semantic_metadata(const CheckpointMetadata& metadata,
         /// change resolution. Same standing as the flat vision keys above;
         /// binding a vision tower later must revisit this entry.
         "projector_bias",
+        /// `output_gate_type` is dead configuration: neither the shipped
+        /// Agnes reference (`modeling_agnes.py`) nor the sglang port reads
+        /// it -- the global-attention gate is a sigmoid and the delta-rule
+        /// output norm gates with silu (`hidden_act`). Ignored
+        /// unconditionally so hybrid checkpoints are not gated on a key
+        /// that governs nothing.
+        "output_gate_type",
+        /// `mamba_ssm_dtype` is a compute-dtype tag for the reference
+        /// recurrent kernels, not graph structure: celeg's gated-delta
+        /// kernels keep their own precision policy, so the tag cannot
+        /// change resolution.
+        "mamba_ssm_dtype",
+        /// Multi-token-prediction draft heads (`mtp_num_hidden_layers`,
+        /// `mtp_use_dedicated_embeddings`) describe speculative draft
+        /// layers celeg never binds in a text-only run: with no MTP block
+        /// in the graph these keys cannot change resolution. Same standing
+        /// as the already-ignored `mtp_` prefix subtree.
+        "mtp_num_hidden_layers", "mtp_use_dedicated_embeddings",
     };
     /// Prefixes for whole subtrees that are not text mathematics: tokenizer
     /// tables, chat templates, and audio/vision towers (no such tower is bound
@@ -168,6 +187,17 @@ void reject_unknown_semantic_metadata(const CheckpointMetadata& metadata,
         if (ignored_exact.contains(key)) continue;
         if (ignored_prefix(key)) continue;
         if (ignored_gguf_provenance(key)) continue;
+        /// An empty list states nothing (`mlp_only_layers: []` declares no
+        /// MLP-only layers), so there is no mathematics to drop. A
+        /// non-empty list still falls through to the checks below.
+        const bool empty_list =
+            (std::holds_alternative<std::vector<std::string>>(value) &&
+             std::get<std::vector<std::string>>(value).empty()) ||
+            (std::holds_alternative<std::vector<int64_t>>(value) &&
+             std::get<std::vector<int64_t>>(value).empty()) ||
+            (std::holds_alternative<std::vector<double>>(value) &&
+             std::get<std::vector<double>>(value).empty());
+        if (empty_list) continue;
         /// `text_config.` nesting is just multimodal packaging around the same
         /// text mathematics: strip it for the ignore check, but require the
         /// stripped key to have been consumed (recorded under its full spelling).
@@ -210,8 +240,8 @@ void reject_unknown_semantic_metadata(const CheckpointMetadata& metadata,
         }
         /// Linear/hybrid-attention configuration is inert when the tensor
         /// inventory carries no linear-family grammar. celeg binds linear
-        /// layers only through these tensor markers: `linear_attn.*` (the
-        /// gated-delta hybrid rule), `ssm_*` (fused gated-delta and Mamba-2
+        /// layers only through these tensor markers: `linear_attn.*` and
+        /// `delta_attn.*` (the gated-delta hybrid rule, both spellings), `ssm_*` (fused gated-delta and Mamba-2
         /// rules, both spellings), `*.mixer.*` (Mamba-2 HF naming), and the
         /// KDA factorized grammar (`f_proj`, `*conv1d`, `dt_bias`, `A_log` --
         /// without these, Ling's KDA layer 0 would wrongly qualify). A
@@ -228,6 +258,7 @@ void reject_unknown_semantic_metadata(const CheckpointMetadata& metadata,
             bool linear_grammar = false;
             for (const TensorInventoryEntry& entry : inventory.entries()) {
                 if (entry.name.find("linear_attn") != std::string::npos ||
+                    entry.name.find("delta_attn") != std::string::npos ||
                     entry.name.find("ssm_") != std::string::npos ||
                     entry.name.find(".mixer.") != std::string::npos ||
                     entry.name.find("f_proj") != std::string::npos ||
@@ -332,14 +363,18 @@ std::vector<std::string> attention_tensor_candidates(int layer,
     std::vector<std::string> result = {
         "transformer.h." + index + ".attn." + std::string(suffix),
         "model.language_model.layers." + index + ".self_attn." + std::string(suffix),
+        "model.language_model.layers." + index + ".global_attn." + std::string(suffix),
         "model.layers." + index + ".self_attn." + std::string(suffix),
+        "model.layers." + index + ".global_attn." + std::string(suffix),
         "model.layers." + index + ".attention." + std::string(suffix),
         "layers." + index + ".attention." + std::string(suffix),
         "blk." + index + "." + gguf_suffix,
     };
     if (suffix == "o_proj.weight") {
         result.push_back("model.language_model.layers." + index + ".self_attn.out_proj.weight");
+        result.push_back("model.language_model.layers." + index + ".global_attn.out_proj.weight");
         result.push_back("model.layers." + index + ".self_attn.out_proj.weight");
+        result.push_back("model.layers." + index + ".global_attn.out_proj.weight");
     }
     return result;
 }

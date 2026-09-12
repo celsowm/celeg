@@ -105,6 +105,7 @@ struct MetalModel::Impl {
     id<MTLBuffer> batch_value = nil;
     id<MTLBuffer> batch_gate_up = nil;
     id<MTLBuffer> batch_activated = nil;
+    id<MTLBuffer> batch_parallel_output = nil;
     int batch_capacity = 0;
     std::vector<Layer> layers;
     std::vector<uint8_t> seen;

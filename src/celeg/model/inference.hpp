@@ -218,6 +218,11 @@ struct CoreModelFacts {
     /// hidden_activation. Absent when the checkpoint names none, in which case
     /// the dense feed-forward falls back to SwiGLU.
     std::optional<ActivationKind> feed_forward_activation;
+    /// Parallel dense feed-forward width (`parallel_ffn_intermediate_size`):
+    /// a second, narrower SwiGLU branch evaluated alongside the main MLP and
+    /// summed into the same residual. Absent or non-positive means the dense
+    /// feed-forward has no parallel branch.
+    std::optional<int> parallel_intermediate;
 };
 
 /// Facts governing attention layer geometry, normalization, and positional encoding.
@@ -239,6 +244,12 @@ struct AttentionFacts {
     /// Absent means every layer owns its KV (`PrivateKv`).
     std::optional<int> kv_shared_layers;
     std::optional<bool> query_key_norm;
+    /// Stated attention output gate (`attn_output_gate`): when true the query
+    /// projection carries a fused sigmoid gate (double width). The attention
+    /// rule infers the gate from the query-projection shape and fails loudly
+    /// when a stated value disagrees; absent means shape inference stands
+    /// alone.
+    std::optional<bool> output_gate;
     std::optional<bool> xsa_projection;
     std::optional<float> xsa_minimum_norm_squared;
 };

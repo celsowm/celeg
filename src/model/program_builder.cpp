@@ -128,7 +128,8 @@ CompiledFeedForwardProgram lower_feed_forward(const LayerSpec& layer, int hidden
             return std::monostate{};
         } else if constexpr (std::is_same_v<FeedForward, DenseFeedForwardSpec>) {
             return CompiledDenseFeedForwardProgram{
-                feed_forward.intermediate_size, feed_forward.activation};
+                feed_forward.intermediate_size, feed_forward.activation,
+                feed_forward.parallel_intermediate_size};
         } else if constexpr (std::is_same_v<FeedForward, MixtureOfExpertsSpec>) {
             return lower_moe(feed_forward, hidden);
         } else {

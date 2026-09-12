@@ -1,4 +1,5 @@
 #include "backend/cuda/concurrency.hpp"
+#include "backend/cuda/effective_options.hpp"
 
 #include "checkpoint/detail/bootstrap.hpp"
 #include "backend/cuda/model.hpp"
@@ -103,6 +104,12 @@ CudaSchedulerDriver::CudaSchedulerDriver(std::string model_path,
         packed_decode_output_.resize(active);
         CudaModelOptions packed_options = model_options_;
         packed_options.allocate_local_kv_cache = false;
+        /// Lanes run through `configure_model`, which forces
+        /// `fused_residuals` off for multiplier programs; the executor
+        /// plan must apply the same adjustment or no packed session ever
+        /// matches its fingerprint.
+        packed_options = effective_cuda_options_for_program(
+            packed_options, program_, topology_.exec);
         packed_executor_ = std::make_unique<PackedDecodeExecutor>(
             static_cast<size_t>(engine_options_.max_active_requests),
             static_cast<size_t>(engine_options_.max_batched_tokens),

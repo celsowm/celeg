@@ -238,7 +238,8 @@ void append_feed_forward(std::ostringstream& out, const LayerSpec& layer) {
             out << "none";
         } else if constexpr (std::is_same_v<FeedForward, DenseFeedForwardSpec>) {
             out << "dense:" << feed_forward.intermediate_size << ':'
-                << static_cast<int>(feed_forward.activation);
+                << static_cast<int>(feed_forward.activation) << ':'
+                << feed_forward.parallel_intermediate_size;
         } else if constexpr (std::is_same_v<FeedForward, MixtureOfExpertsSpec>) {
             out << "moe:" << feed_forward.intermediate_size << ':' << feed_forward.num_experts
                 << ':' << feed_forward.experts_per_token << ':' << feed_forward.normalize_topk
@@ -393,6 +394,9 @@ void ModelGraph::validate() const {
             } else if constexpr (std::is_same_v<FeedForward, DenseFeedForwardSpec>) {
                 if (feed_forward.intermediate_size <= 0) {
                     throw std::runtime_error("dense layer has no positive FFN width");
+                }
+                if (feed_forward.parallel_intermediate_size < 0) {
+                    throw std::runtime_error("dense layer has invalid parallel FFN width");
                 }
             } else if constexpr (std::is_same_v<FeedForward, MixtureOfExpertsSpec>) {
                 if (feed_forward.intermediate_size <= 0 || feed_forward.num_experts <= 0 ||

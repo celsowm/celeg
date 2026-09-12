@@ -2,7 +2,8 @@
 
 Status: complete for the 15 cached artifacts exercised by
 `scripts/run_model_sweep.py` (14 original + `google/gemma-4-E4B-it`,
-whose weights were fetched into the local HF cache on 2026-09-10).
+whose weights were fetched into the local HF cache on 2026-09-10),
+plus `Agnes-AI/Agnes-3.0-Flash` (added 2026-09-12, see below).
 
 ## Environment
 
@@ -33,6 +34,7 @@ whose weights were fetched into the local HF cache on 2026-09-10).
 | `flwrlabs/Lizzy-7B` GGUF | correct | correct |
 | `bartowski/Nanbeige_Nanbeige4.2-3B` GGUF | correct | correct |
 | `openbmb/MiniCPM5-1B` GGUF | correct | correct |
+| `Agnes-AI/Agnes-3.0-Flash` Safetensors | correct | garbled (see below) |
 
 14 of 15 artifacts answer correctly on both backends (`google/gemma-4-E4B`
 is a base checkpoint scored by reference parity, not by answer; its
@@ -81,6 +83,43 @@ gemma rows automatically, and `scripts/run_model_sweep.py` now emits
 answers `The capital of France is Paris.` on both backends under the default
 sweep settings.
 
+## Agnes-3.0-Flash (dense hybrid, text-only)
+
+`Agnes-AI/Agnes-3.0-Flash` (`model_type: agnes`, 72 layers, hidden 5120,
+~62 GB BF16) resolves through the automatic architecture with no
+`sglang`-style spoofing: `agnes_delta_attention` /
+`agnes_global_attention` layer types (3:1 via `global_attention_interval`),
+`delta_attn` / `global_attn` tensor spellings, nested
+`rope_parameters.partial_rotary_factor` (0.25), `attn_output_gate` (shape
+cross-checked), and the per-layer `mlp.parallel_ffn` branch, which this
+checkpoint ships with a zero-initialized down projection (max abs ~5e-30
+on all 72 layers, so the branch is mathematically inert here; celeg still
+evaluates it exactly rather than folding it). MTP draft layers and the
+vision tower are out of scope and stay unbound. The checkpoint's sglang
+patch (`sglang_patch/`, served-query notes, fold-vs-residual KL 5.9e-4)
+is what suggested the Qwen3.5-hybrid mapping; celeg instead binds the
+native `agnes_*` spellings.
+
+- **CPU: correct** (`OK-CORRECT`, ~67 s for 20 tokens, Q4-group32).
+  Resolution is warning-free under `CELEG_STRICT_SEMANTICS=1`, and the
+  checkpoint template renders after tuple-literal support
+  (`resolved_reasoning_effort not in ('xhigh', 'medium', 'low')`).
+- **CUDA: garbled** (`OK-GARBLED` under `--weight-mode int4`, ~194 s).
+  BF16 needs >64 GB VRAM and OOMs the 32 GB reference card, so CUDA can
+  only run coarse per-row int8/int4 here; the error compounds over 72
+  hybrid layers (prefill-logit cosine vs CPU: 0.55–0.77 int8, 0.09–0.50
+  int4, degrading with prompt length). This is quantization granularity,
+  not a compute bug:
+  - the fused gated-delta kernels match the CPU reference at Agnes
+    geometry (16 key / 48 value heads, dim 128) for prefill and decode
+    (`cuda_kernels_test`),
+  - a synthetic Agnes-shaped bf16 checkpoint with live parallel weights
+    agrees CPU↔CUDA at cosine 0.992 with identical top-5 (and int8/int4
+    on the same 4-layer model score 0.991/0.908 with matching top-1),
+  - the 231 fixed `-inf` tail logits are the tokenizer-vocab mask
+    (tokenizer 248089 < config 248320), benign for greedy decoding.
+  Full-model bf16 CUDA validation needs a larger GPU.
+
 ## Fixes captured during this sweep
 
 - **Ling-3.0-tiny CUDA runs.** Previously `cuda_init_failed`; now runs and
@@ -96,5 +135,12 @@ sweep settings.
 
 ## Build and tests
 
-- `python scripts/dev.py verify --backend cpu` — PASS (92/92)
-- `python scripts/dev.py verify --backend cuda` — PASS
+- `python scripts/dev.py verify --backend cpu` — 102/104 (2 pre-existing
+  failures, both unrelated to this change: `attention_backend_capabilities_test`
+  asserts Metal rejects mRoPE theta 500000, but commit `77c0d61f` lifted that
+  restriction without updating the test; `architecture_boundary_test` flags
+  raw `assert` in `rope_scaling_semantics_test.cpp` and two Metal test files)
+- `python scripts/dev.py verify --backend cuda` — 129/131 (same 2
+  pre-existing failures), including the new `cuda_parallel_ffn_test`,
+  `cuda_kernels_test` Agnes-geometry gated-delta cases, and
+  `workspace_test` parallel-width coverage

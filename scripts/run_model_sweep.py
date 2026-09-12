@@ -31,6 +31,7 @@ REPO_LIST = [
     ("flwrlabs/Lizzy-7B-GGUF", "gguf"),
     ("bartowski/Nanbeige_Nanbeige4.2-3B-GGUF", "gguf"),
     ("openbmb/MiniCPM5-1B-GGUF", "gguf"),
+    ("Agnes-AI/Agnes-3.0-Flash", "safetensors"),
 ]
 
 PROMPT = "What is the capital of France?"
@@ -65,6 +66,16 @@ CPU_EXTRA_ARGS_BY_MODEL = {
 # sweep compares greedy against greedy.
 EXTRA_ARGS_BY_MODEL = {
     "google/gemma-4-E4B": ["--repetition-penalty", "1.0"],
+}
+
+# Extra args applied on CUDA only (never passed to celeg-cpu-run).
+# Agnes-3.0-Flash is ~62 GB in BF16 and OOMs a 32 GB card under the default
+# auto (bf16) mode; int4 runs end to end. Coarse per-row int4/int8
+# quantization compounds over its 72 hybrid layers, so CUDA output diverges
+# from the CPU answer (see docs/MODEL_SWEEP_REPORT.md); the sweep records the
+# honest end-to-end behavior rather than an OOM.
+CUDA_EXTRA_ARGS_BY_MODEL = {
+    "Agnes-AI/Agnes-3.0-Flash": ["--weight-mode", "int4"],
 }
 
 # Base checkpoints have no "correct answer": the verdict is token parity
@@ -207,8 +218,10 @@ def main():
 
         # CUDA run
         print(f"  CUDA:  ", end="", flush=True)
+        cuda_extra = list(EXTRA_ARGS_BY_MODEL.get(repo, [])) + list(
+            CUDA_EXTRA_ARGS_BY_MODEL.get(repo, []))
         cuda_ok, cuda_out, cuda_time, cuda_err, cuda_coherent, cuda_correct = run_model(
-            CUDA_RUN, repo, "cuda", EXTRA_ARGS_BY_MODEL.get(repo))
+            CUDA_RUN, repo, "cuda", cuda_extra or None)
         cuda_parity = parity_match(repo, cuda_out, parity_text) if cuda_ok else None
         cuda_status = quality_label(cuda_ok, cuda_coherent, cuda_correct, cuda_err, cuda_parity)
         print(cuda_status)

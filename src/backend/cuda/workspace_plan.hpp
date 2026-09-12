@@ -96,6 +96,9 @@ struct CudaWorkspacePlan {
                 } else if constexpr (std::is_same_v<FF, CompiledDenseFeedForwardProgram>) {
                     plan.ffn_intermediate = std::max(
                         plan.ffn_intermediate, static_cast<size_t>(ff.intermediate_size));
+                    plan.ffn_intermediate = std::max(
+                        plan.ffn_intermediate,
+                        static_cast<size_t>(std::max(ff.parallel_intermediate_size, 0)));
                 } else if constexpr (std::is_same_v<FF, MoeLayerProgram>) {
                     plan.ffn_intermediate = std::max(
                         plan.ffn_intermediate, static_cast<size_t>(ff.routed.mlp.intermediate_size));

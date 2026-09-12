@@ -40,6 +40,24 @@ void MetalModel::Impl::encode_dense_feed_forward(
         encode_matvec(encoder, layer.ffn_down, activated, operation);
         tag_last_gpu_dispatch("ffn_down", layer.ffn_down);
     }
+    if (layer.parallel_intermediate > 0) {
+        const uint32_t parallel = static_cast<uint32_t>(layer.parallel_intermediate);
+        begin_parallel_group(encoder);
+        encode_matvec(encoder, layer.ffn_parallel_gate, normed, gate_up, 0);
+        tag_last_gpu_dispatch("ffn_parallel_gate", layer.ffn_parallel_gate);
+        encode_matvec(encoder, layer.ffn_parallel_up, normed, gate_up,
+                      static_cast<NSUInteger>(layer.parallel_intermediate) * sizeof(float));
+        tag_last_gpu_dispatch("ffn_parallel_up", layer.ffn_parallel_up);
+        end_parallel_group();
+        set_buffer(encoder, gate_up, 0);
+        set_buffer(encoder, activated, 1);
+        set_bytes(encoder, &parallel, sizeof(parallel), 2);
+        dispatch(encoder, gated_gelu ? "celeg_gated_gelu_tanh" : "celeg_swiglu",
+                 parallel);
+        encode_matvec(encoder, layer.ffn_parallel_down, activated, moe_output);
+        tag_last_gpu_dispatch("ffn_parallel_down", layer.ffn_parallel_down);
+        encode_weighted_add(encoder, moe_output, operation, layer.ffn_down.rows, 1.0f);
+    }
 }
 
 void MetalModel::Impl::encode_dense_feed_forward_batch(
@@ -91,6 +109,43 @@ void MetalModel::Impl::encode_dense_feed_forward_batch(
 
     encode_matmul(encoder, layer.ffn_down, batch_activated, batch_operation, rows);
     tag_last_gpu_dispatch("ffn_down", layer.ffn_down);
+
+    if (layer.parallel_intermediate > 0) {
+        const uint32_t parallel = static_cast<uint32_t>(layer.parallel_intermediate);
+        encode_matmul(encoder, layer.ffn_parallel_gate, batch_normed, batch_gate_up, rows,
+                      0, 0, parallel * 2);
+        tag_last_gpu_dispatch("ffn_parallel_gate", layer.ffn_parallel_gate);
+        encode_matmul(encoder, layer.ffn_parallel_up, batch_normed, batch_gate_up, rows,
+                      0, static_cast<NSUInteger>(parallel) * sizeof(float),
+                      parallel * 2);
+        tag_last_gpu_dispatch("ffn_parallel_up", layer.ffn_parallel_up);
+
+        set_buffer(encoder, batch_gate_up, 0);
+        set_buffer(encoder, batch_activated, 1);
+        set_bytes(encoder, &rows, sizeof(rows), 2);
+        set_bytes(encoder, &parallel, sizeof(parallel), 3);
+        const std::string_view parallel_activation_kernel =
+            gated_gelu
+            ? (relaxed ? "celeg_gated_gelu_tanh_batch_2d_relaxed"
+                       : "celeg_gated_gelu_tanh_batch_2d")
+            : (relaxed ? "celeg_swiglu_batch_2d_relaxed" : "celeg_swiglu_batch_2d");
+        id<MTLComputePipelineState> parallel_activation =
+            pipeline(parallel_activation_kernel);
+        encoder = compute_encoder(encoder);
+        order_before_dispatch(encoder);
+        [encoder setComputePipelineState:parallel_activation];
+        const NSUInteger parallel_threads_x = std::min<NSUInteger>(
+            parallel, parallel_activation.maxTotalThreadsPerThreadgroup);
+        [encoder dispatchThreads:MTLSizeMake(parallel, rows, 1)
+           threadsPerThreadgroup:MTLSizeMake(parallel_threads_x, 1, 1)];
+        record_dispatch(parallel_activation_kernel);
+
+        encode_matmul(encoder, layer.ffn_parallel_down, batch_activated,
+                      batch_parallel_output, rows);
+        tag_last_gpu_dispatch("ffn_parallel_down", layer.ffn_parallel_down);
+        encode_weighted_add(encoder, batch_parallel_output, batch_operation,
+                            layer.ffn_down.rows * rows, 1.0f);
+    }
 }
 
 }

@@ -159,6 +159,9 @@ PackedWorkspaceRequirements PackedWorkspaceRequirements::derive(
             } else if constexpr (std::is_same_v<FF, CompiledDenseFeedForwardProgram>) {
                 result.maximum_ffn_intermediate = std::max(
                     result.maximum_ffn_intermediate, static_cast<size_t>(ff.intermediate_size));
+                result.maximum_ffn_intermediate = std::max(
+                    result.maximum_ffn_intermediate,
+                    static_cast<size_t>(std::max(ff.parallel_intermediate_size, 0)));
             } else if constexpr (std::is_same_v<FF, MoeLayerProgram>) {
                 result.moe_intermediate = std::max(
                     result.moe_intermediate, static_cast<size_t>(ff.routed.mlp.intermediate_size));

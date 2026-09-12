@@ -167,5 +167,21 @@ int main() {
     std::strftime(year, sizeof(year), "%Y", &now_tm);
     CELEG_TEST_CHECK(strftime_output.find(year) != std::string::npos);
 
+    /// Tuple literals evaluate as lists, so `in` / `not in` over a
+    /// parenthesized group works (Agnes guards its reasoning effort with
+    /// `resolved_reasoning_effort not in ('xhigh', 'medium', 'low')`).
+    /// A single parenthesized value stays a group, and `()` is empty.
+    {
+        celeg::CheckpointMetadata tuple_metadata;
+        tuple_metadata.values["chat_template"] = std::string(
+            "{% set effort = 'medium' %}"
+            "{{ 'xhigh' not in ('xhigh', 'medium', 'low') }}|"
+            "{{ effort not in ('xhigh', 'medium', 'low') }}|"
+            "{{ ('a') }}|{{ () == [] }}");
+        const celeg::ResolvedInteraction tuple_resolved =
+            celeg::resolve_interaction(tuple_metadata, tokenizer);
+        CELEG_TEST_CHECK(tuple_resolved.format({}) == "false|false|a|true");
+    }
+
     std::cout << "chat_template_test: ok\n";
 }

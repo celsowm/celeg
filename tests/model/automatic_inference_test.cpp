@@ -1,6 +1,7 @@
 #include "celeg/checkpoint/view.hpp"
 #include "celeg/model/architecture.hpp"
 #include "celeg/model/inference.hpp"
+#include "celeg/model/weight_plan.hpp"
 #include "support/assertions.hpp"
 
 #include <cmath>
@@ -352,6 +353,114 @@ std::shared_ptr<MemoryRepository> qwen35_repository() {
     return result;
 }
 
+/// Agnes-shaped hybrid metadata: one `delta_attn` gated-delta layer plus
+/// one `global_attn` full-attention layer carrying a fused output gate,
+/// with a parallel FFN branch on every dense layer. Mirrors the shipped
+/// reference config keys (`parallel_ffn_intermediate_size`,
+/// `global_attention_interval`, `attn_output_gate`, nested
+/// `rope_parameters.rotary_fraction`).
+celeg::CheckpointMetadata agnes_metadata() {
+    celeg::CheckpointMetadata result;
+    result.values["model_type"] = std::string("agnes");
+    result.values["hidden_size"] = int64_t(32);
+    result.values["intermediate_size"] = int64_t(24);
+    result.values["parallel_ffn_intermediate_size"] = int64_t(8);
+    result.values["num_hidden_layers"] = int64_t(2);
+    result.values["num_attention_heads"] = int64_t(2);
+    result.values["num_key_value_heads"] = int64_t(2);
+    result.values["head_dim"] = int64_t(16);
+    result.values["vocab_size"] = int64_t(40);
+    result.values["max_position_embeddings"] = int64_t(64);
+    result.values["rms_norm_eps"] = 1.0e-6;
+    result.values["rope_theta"] = 10000.0;
+    result.values["rope_parameters.rotary_fraction"] = 0.5;
+    result.values["tie_word_embeddings"] = true;
+    result.values["linear_num_key_heads"] = int64_t(2);
+    result.values["linear_key_head_dim"] = int64_t(4);
+    result.values["linear_num_value_heads"] = int64_t(3);
+    result.values["linear_value_head_dim"] = int64_t(4);
+    result.values["linear_conv_kernel_dim"] = int64_t(4);
+    result.values["layer_types"] =
+        std::vector<std::string>{"agnes_delta_attention", "agnes_global_attention"};
+    result.values["global_attention_interval"] = int64_t(2);
+    result.values["attn_output_gate"] = true;
+    return result;
+}
+
+std::shared_ptr<MemoryRepository> agnes_repository(const std::string& layer_root,
+                                                   const std::string& model_root) {
+    auto result = std::make_shared<MemoryRepository>();
+    result->add(model_root + "embed_tokens.weight", {40, 32});
+    result->add(model_root + "norm.weight", {32});
+    for (int layer = 0; layer < 2; ++layer) {
+        const std::string prefix = layer_root + std::to_string(layer);
+        result->add(prefix + ".input_layernorm.weight", {32});
+        result->add(prefix + ".post_attention_layernorm.weight", {32});
+        result->add(prefix + ".mlp.gate_proj.weight", {24, 32});
+        result->add(prefix + ".mlp.up_proj.weight", {24, 32});
+        result->add(prefix + ".mlp.down_proj.weight", {32, 24});
+        result->add(prefix + ".mlp.parallel_ffn.gate_proj.weight", {8, 32});
+        result->add(prefix + ".mlp.parallel_ffn.up_proj.weight", {8, 32});
+        result->add(prefix + ".mlp.parallel_ffn.down_proj.weight", {32, 8});
+        if (layer == 0) {
+            const std::string da = prefix + ".delta_attn.";
+            result->add(da + "in_proj_qkv.weight", {28, 32});
+            result->add(da + "in_proj_z.weight", {12, 32});
+            result->add(da + "in_proj_a.weight", {3, 32});
+            result->add(da + "in_proj_b.weight", {3, 32});
+            result->add(da + "conv1d.weight", {28, 1, 4});
+            result->add(da + "dt_bias", {3});
+            result->add(da + "A_log", {3});
+            result->add(da + "norm.weight", {4});
+            result->add(da + "out_proj.weight", {32, 12});
+        } else {
+            const std::string ga = prefix + ".global_attn.";
+            result->add(ga + "q_proj.weight", {64, 32});
+            result->add(ga + "k_proj.weight", {32, 32});
+            result->add(ga + "v_proj.weight", {32, 32});
+            result->add(ga + "o_proj.weight", {32, 32});
+        }
+    }
+    return result;
+}
+
+void check_agnes_model(const celeg::ResolvedModel& model) {
+    CELEG_TEST_CHECK(std::holds_alternative<celeg::GatedDeltaNetSpec>(
+        model.graph.layers[0].mixer));
+    const celeg::GatedDeltaNetSpec& delta =
+        std::get<celeg::GatedDeltaNetSpec>(model.graph.layers[0].mixer);
+    CELEG_TEST_CHECK(delta.key_heads == 2);
+    CELEG_TEST_CHECK(delta.key_head_dim == 4);
+    CELEG_TEST_CHECK(delta.value_heads == 3);
+    CELEG_TEST_CHECK(delta.value_head_dim == 4);
+    CELEG_TEST_CHECK(delta.conv_kernel == 4);
+    CELEG_TEST_CHECK(std::holds_alternative<celeg::AttentionSpec>(
+        model.graph.layers[1].mixer));
+    CELEG_TEST_CHECK(std::get<celeg::AttentionSpec>(model.graph.layers[1].mixer)
+                         .output_gate.has_value());
+    for (int layer = 0; layer < 2; ++layer) {
+        CELEG_TEST_CHECK(std::holds_alternative<celeg::DenseFeedForwardSpec>(
+            model.graph.layers[static_cast<size_t>(layer)].feed_forward));
+        const celeg::DenseFeedForwardSpec& dense = std::get<celeg::DenseFeedForwardSpec>(
+            model.graph.layers[static_cast<size_t>(layer)].feed_forward);
+        CELEG_TEST_CHECK(dense.intermediate_size == 24);
+        CELEG_TEST_CHECK(dense.parallel_intermediate_size == 8);
+    }
+    const auto find_request = [&](celeg::TensorRole role, int layer)
+        -> const celeg::TensorRequest& {
+        for (const auto& request : model.weight_plan.requests) {
+            if (request.role == role && request.layer == layer) return request;
+        }
+        throw std::runtime_error("agnes weight request missing");
+    };
+    CELEG_TEST_CHECK((find_request(celeg::TensorRole::FfnParallelGate, 0).expected_shape ==
+                      std::vector<int64_t>{8, 32}));
+    CELEG_TEST_CHECK((find_request(celeg::TensorRole::FfnParallelUp, 1).expected_shape ==
+                      std::vector<int64_t>{8, 32}));
+    CELEG_TEST_CHECK((find_request(celeg::TensorRole::FfnParallelDown, 1).expected_shape ==
+                      std::vector<int64_t>{32, 8}));
+}
+
 }
 
 int main() {
@@ -570,5 +679,37 @@ int main() {
     CELEG_TEST_CHECK(qwen35_model.graph.layers[0].mixer_norm.before.has_value());
     CELEG_TEST_CHECK(qwen35_model.graph.layers[0].mixer_norm.before->weight_kind ==
                      celeg::NormWeightKind::OnePlusScale);
+
+    // Agnes: `delta_attn` spelling, `agnes_*` layer-type tokens,
+    // `global_attn` full attention with a stated output gate, and a parallel
+    // FFN branch -- resolved under both layer roots the bindings accept.
+    const auto agnes_facts = celeg::normalize_model_metadata(agnes_metadata());
+    CELEG_TEST_CHECK(agnes_facts.core.parallel_intermediate == std::optional<int>{8});
+    CELEG_TEST_CHECK(agnes_facts.attention.output_gate == std::optional<bool>{true});
+    CELEG_TEST_CHECK(agnes_facts.gated_delta.hybrid_group_size == std::optional<int>{2});
+    CELEG_TEST_CHECK(agnes_facts.attention.position_encoding.global.has_value());
+    CELEG_TEST_CHECK(std::abs(std::get<celeg::InferredRopePosition>(
+                                  *agnes_facts.attention.position_encoding.global)
+                                  .rotary_fraction -
+                              0.5f) < 1.0e-6f);
+    for (const auto& [layer_root, model_root] : {
+             std::pair<std::string, std::string>{"model.layers.", "model."},
+             std::pair<std::string, std::string>{"model.language_model.layers.",
+                                                 "model.language_model."}}) {
+        celeg::CheckpointView agnes_checkpoint;
+        agnes_checkpoint.metadata = agnes_metadata();
+        agnes_checkpoint.repository = agnes_repository(layer_root, model_root);
+        celeg::ResolvedModel agnes_model;
+        try {
+            agnes_model =
+                catalog.select(agnes_checkpoint.metadata).resolve(agnes_checkpoint);
+        } catch (const std::exception& error) {
+            std::fprintf(stderr, "agnes failure (%s): %s\n", layer_root.c_str(),
+                         error.what());
+            return 1;
+        }
+        check_agnes_model(agnes_model);
+        CELEG_TEST_CHECK(celeg::explain_resolution(agnes_checkpoint).failures.empty());
+    }
     return 0;
 }

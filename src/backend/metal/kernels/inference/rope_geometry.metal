@@ -118,12 +118,15 @@ inline float celeg_rope_scaled_frequency(
         const float wavelength = 2.0f * pi / result;
         if (wavelength < original / high_frequency_factor) return result;
         if (wavelength > original / low_frequency_factor) return result / factor;
+        /// Matches the `Llama3FrequencyScaling` reference in
+        /// `celeg/model/position.hpp`: smooth interpolation in
+        /// inverse-wavelength space, continuous with both branches.
         const float span = high_frequency_factor - low_frequency_factor;
-        const float blend = span > 0.0f
-            ? (wavelength * high_frequency_factor / original - 1.0f) / span
+        const float smooth = span > 0.0f
+            ? (original / wavelength - low_frequency_factor) / span
             : 0.0f;
-        return result /
-            (1.0f + clamp(blend, 0.0f, 1.0f) * (factor - 1.0f));
+        const float clamped = clamp(smooth, 0.0f, 1.0f);
+        return (1.0f - clamped) * result / factor + clamped * result;
     }
     if (scaling_mode == CelegRopeScalingProportional) {
         const float fraction = rotary_fraction > 0.0f ? rotary_fraction : 1.0f;

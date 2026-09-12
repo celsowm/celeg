@@ -28,13 +28,14 @@ int main() {
                 std::get<celeg::AttentionSpec>(graph.layers[index].mixer), {}};
             program.layers[index].feed_forward =
                 celeg::CompiledDenseFeedForwardProgram{
-                    index == 0 ? 128 : 192, celeg::ActivationKind::SwiGLU};
+                    index == 0 ? 128 : 192, celeg::ActivationKind::SwiGLU,
+                    index == 0 ? 256 : 0};
         }
 
         const auto requirements = celeg::PackedWorkspaceRequirements::derive(
             4, 16, 8, shape.exec, program);
         if (requirements.maximum_projection_width != 320 ||
-            requirements.maximum_ffn_intermediate != 192 ||
+            requirements.maximum_ffn_intermediate != 256 ||
             requirements.layer_slots != 8 ||
             requirements.page_table_entries != 128) {
             throw std::runtime_error(

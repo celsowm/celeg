@@ -553,6 +553,29 @@ struct CpuCompiledModel::BatchScratch {
                     }
                 });
                 layer_gemm(dense_weights->w2, workspace_.activated.data(), workspace_.mlp_output.data());
+                const int parallel = dense->parallel_intermediate_size;
+                if (parallel > 0) {
+                    layer_gemm(dense_weights->parallel_w13, workspace_.normed.data(),
+                               workspace_.gate_up.data());
+                    rows_for([&](size_t row) {
+                        const float* gate_up =
+                            workspace_.gate_up.data() + row * 2ULL * parallel;
+                        float* activated =
+                            workspace_.activated.data() + row * parallel;
+                        if (dense->activation == ActivationKind::GeluTanh) {
+                            cpu_gated_gelu_tanh(gate_up, activated, parallel);
+                        } else {
+                            math.swiglu(gate_up, activated, parallel);
+                        }
+                    });
+                    layer_gemm(dense_weights->parallel_w2, workspace_.activated.data(),
+                               workspace_.shared_output.data());
+                    rows_for([&](size_t row) {
+                        cpu_residual_add(workspace_.mlp_output.data() + row * hidden,
+                                         workspace_.shared_output.data() + row * hidden,
+                                         hidden);
+                    });
+                }
             }
             if (layer_semantics.residual.multiplier != 1.0f) {
                 rows_for([&](size_t row) {

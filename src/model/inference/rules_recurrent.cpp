@@ -2,6 +2,8 @@
 
 #include "support.hpp"
 
+#include <string>
+
 namespace celeg::inference_detail {
 namespace {
 
@@ -165,7 +167,10 @@ public:
 /// single recurrent state). Structurally identical to the GGUF fused
 /// dialect above — same qkv/conv width formula, same per-role shapes —
 /// just a different tensor-name spelling and metadata source, so it
-/// reuses the same GatedDeltaNetSpec construction.
+/// reuses the same GatedDeltaNetSpec construction. The `delta_attn`
+/// spelling names the same fused projections and resolves identically.
+/// Both the `model.language_model.layers.` and the plain `model.layers.`
+/// roots resolve, matching the parallel-FFN and global-attention bindings.
 class LinearAttnGatedDeltaRule final : public ILayerInferenceRule {
 public:
     std::string_view id() const override { return "linear_attn_gated_delta"; }
@@ -174,18 +179,7 @@ public:
 
     bool probe(const CanonicalInferenceContext& context, int layer)
         const override {
-        const auto& inventory = context.input.inventory;
-        const std::string prefix = "model.language_model.layers." +
-            std::to_string(layer) + ".linear_attn.";
-        return inventory.find(prefix + "in_proj_qkv.weight") != nullptr &&
-            inventory.find(prefix + "in_proj_z.weight") != nullptr &&
-            inventory.find(prefix + "in_proj_a.weight") != nullptr &&
-            inventory.find(prefix + "in_proj_b.weight") != nullptr &&
-            inventory.find(prefix + "conv1d.weight") != nullptr &&
-            inventory.find(prefix + "dt_bias") != nullptr &&
-            inventory.find(prefix + "A_log") != nullptr &&
-            inventory.find(prefix + "norm.weight") != nullptr &&
-            inventory.find(prefix + "out_proj.weight") != nullptr;
+        return !resolve_prefix(context, layer).empty();
     }
 
     void resolve(CanonicalInferenceContext& context, int layer)
@@ -194,8 +188,7 @@ public:
         const auto& m = input.metadata;
         LayerSpec& semantic_layer =
             context.facts.graph.layers[static_cast<size_t>(layer)];
-        const std::string layer_prefix = "model.language_model.layers." +
-            std::to_string(layer) + ".linear_attn.";
+        const std::string layer_prefix = resolve_prefix(context, layer);
 
         const auto* qkv =
             input.inventory.find(layer_prefix + "in_proj_qkv.weight");
@@ -320,6 +313,34 @@ public:
             TensorRole::GatedDeltaNetOutput,
             "out_proj.weight",
             {*m.core.hidden_size, spec.value_width()});
+    }
+
+private:
+    static std::string resolve_prefix(const CanonicalInferenceContext& context,
+                                      int layer) {
+        static constexpr std::string_view infixes[] = {"linear_attn",
+                                                       "delta_attn"};
+        static constexpr std::string_view roots[] = {"model.language_model.layers.",
+                                                     "model.layers."};
+        const auto& inventory = context.input.inventory;
+        for (const std::string_view root : roots) {
+            for (const std::string_view infix : infixes) {
+                const std::string prefix = std::string(root) +
+                    std::to_string(layer) + "." + std::string(infix) + ".";
+                if (inventory.find(prefix + "in_proj_qkv.weight") != nullptr &&
+                    inventory.find(prefix + "in_proj_z.weight") != nullptr &&
+                    inventory.find(prefix + "in_proj_a.weight") != nullptr &&
+                    inventory.find(prefix + "in_proj_b.weight") != nullptr &&
+                    inventory.find(prefix + "conv1d.weight") != nullptr &&
+                    inventory.find(prefix + "dt_bias") != nullptr &&
+                    inventory.find(prefix + "A_log") != nullptr &&
+                    inventory.find(prefix + "norm.weight") != nullptr &&
+                    inventory.find(prefix + "out_proj.weight") != nullptr) {
+                    return prefix;
+                }
+            }
+        }
+        return {};
     }
 };
 

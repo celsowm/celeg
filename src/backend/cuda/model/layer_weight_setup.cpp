@@ -38,9 +38,13 @@ DenseFfnWeights bind_cuda_dense_ffn(
     CudaCompiledModel& model,
     const IWeightRepository& repo,
     const CudaDenseFfnNames& names,
-    int intermediate) {
+    int intermediate,
+    int parallel_intermediate) {
     if (intermediate <= 0) {
         throw std::invalid_argument("CUDA dense FFN width must be positive");
+    }
+    if (parallel_intermediate < 0) {
+        throw std::invalid_argument("CUDA dense parallel FFN width must be non-negative");
     }
     CudaModelResources& resources = model.resources_;
     const LinearWeight* w13 = resources.weight_loader_->load_concat_linear_weight(
@@ -51,7 +55,20 @@ DenseFfnWeights bind_cuda_dense_ffn(
         });
     const LinearWeight* w2 = resources.weight_loader_->load_linear_weight(
         repo, names.down, {resources.program_.hidden, intermediate});
-    return DenseFfnWeights{w13, w2};
+    const LinearWeight* parallel_w13 = nullptr;
+    const LinearWeight* parallel_w2 = nullptr;
+    if (parallel_intermediate > 0) {
+        parallel_w13 = resources.weight_loader_->load_concat_linear_weight(
+            repo, names.synthetic_parallel_w13,
+            {
+                {names.parallel_gate, {parallel_intermediate, resources.program_.hidden}},
+                {names.parallel_up, {parallel_intermediate, resources.program_.hidden}},
+            });
+        parallel_w2 = resources.weight_loader_->load_linear_weight(
+            repo, names.parallel_down,
+            {resources.program_.hidden, parallel_intermediate});
+    }
+    return DenseFfnWeights{w13, w2, parallel_w13, parallel_w2};
 }
 
 LayerCommon bind_cuda_layer_common(CudaCompiledModel& model,
@@ -129,17 +146,34 @@ LayerCommon bind_cuda_layer_common(CudaCompiledModel& model,
     if (!dense || dense->intermediate_size <= 0) {
         throw std::runtime_error("compiled dense layer has no FFN width");
     }
+    CudaDenseFfnNames names{
+        cuda_layer_name(layer_index, "feed_forward.w13.weight"),
+        cuda_tensor_name(resources.model_.weight_plan.requests,
+                         TensorRole::FfnGate, layer_index),
+        cuda_tensor_name(resources.model_.weight_plan.requests,
+                         TensorRole::FfnUp, layer_index),
+        cuda_tensor_name(resources.model_.weight_plan.requests,
+                         TensorRole::FfnDown, layer_index),
+        {},
+        {},
+        {},
+        {}};
+    if (dense->parallel_intermediate_size > 0) {
+        names.synthetic_parallel_w13 =
+            cuda_layer_name(layer_index, "feed_forward.parallel_w13.weight");
+        names.parallel_gate = cuda_tensor_name(
+            resources.model_.weight_plan.requests, TensorRole::FfnParallelGate,
+            layer_index);
+        names.parallel_up = cuda_tensor_name(
+            resources.model_.weight_plan.requests, TensorRole::FfnParallelUp,
+            layer_index);
+        names.parallel_down = cuda_tensor_name(
+            resources.model_.weight_plan.requests, TensorRole::FfnParallelDown,
+            layer_index);
+    }
     common.feed_forward = bind_cuda_dense_ffn(
-        model, repo,
-        CudaDenseFfnNames{
-            cuda_layer_name(layer_index, "feed_forward.w13.weight"),
-            cuda_tensor_name(resources.model_.weight_plan.requests,
-                             TensorRole::FfnGate, layer_index),
-            cuda_tensor_name(resources.model_.weight_plan.requests,
-                             TensorRole::FfnUp, layer_index),
-            cuda_tensor_name(resources.model_.weight_plan.requests,
-                             TensorRole::FfnDown, layer_index)},
-        dense->intermediate_size);
+        model, repo, names, dense->intermediate_size,
+        dense->parallel_intermediate_size);
     return common;
 }
 

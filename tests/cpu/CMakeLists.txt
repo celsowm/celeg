@@ -19,6 +19,7 @@ foreach(test_name IN ITEMS
     cpu_model_options_test
     cpu_sampler_test
     cpu_granite_test
+    cpu_parallel_ffn_test
     cpu_mrope_test
     cpu_shared_kv_test
     cpu_projected_latent_test

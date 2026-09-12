@@ -15,9 +15,9 @@ namespace celeg {
 namespace {
 
 AttentionPatternKind parse_attention_pattern(std::string_view value,
-                                             std::string_view source) {
+                                              std::string_view source) {
     if (value == "full_attention" || value == "full" || value == "causal" ||
-        value == "full_causal") {
+        value == "full_causal" || value == "agnes_global_attention") {
         return AttentionPatternKind::FullCausal;
     }
     if (value == "sliding_attention" || value == "sliding_window" ||
@@ -31,7 +31,8 @@ AttentionPatternKind parse_attention_pattern(std::string_view value,
     if (value == "conv" || value == "short_convolution" ||
         value == "recurrent" || value == "mamba" || value == "mamba2" ||
         value == "gdn" || value == "gated_delta" ||
-        value == "gated_delta_net" || value == "linear_attention") {
+        value == "gated_delta_net" || value == "linear_attention" ||
+        value == "agnes_delta_attention") {
         return AttentionPatternKind::None;
     }
     inference_detail::fail(

@@ -125,9 +125,11 @@ void check_llama3() {
         if (wavelength > 8192.0) {
             expected /= 8.0;
         } else if (wavelength >= 2048.0) {
-            const double blend = std::clamp(
-                (wavelength * 4.0 / 8192.0 - 1.0) / 3.0, 0.0, 1.0);
-            expected /= 1.0 + blend * 7.0;
+            /// Reference interpolation (`transformers`
+            /// `_compute_llama3_parameters`): smooth in
+            /// inverse-wavelength space, continuous with both branches.
+            const double smooth = std::clamp((8192.0 / wavelength - 1.0) / 3.0, 0.0, 1.0);
+            expected = (1.0 - smooth) * expected / 8.0 + smooth * expected;
         }
         CELEG_TEST_CHECK(near(celeg::rope_frequency(spec, pair, 8, 4096), expected));
     }

@@ -189,9 +189,16 @@ void GemmDispatcher::linear_cublaslt(const __nv_bfloat16* x,
 
 const CompiledLinearBinding& GemmDispatcher::compile_linear_binding(
     const LinearWeight& weight, const CudaExecutionPlan& plan) {
+    /// Bindings are keyed by weight address, but row slices are stack
+    /// temporaries: an address can be reused by a different-shaped slice on
+    /// a later call (e.g. the parallel-FFN slices sharing slots with the
+    /// main-MLP slices). A hit is only valid when the stored dims still
+    /// describe this weight; otherwise recompile and overwrite the stale
+    /// entry instead of failing the GEMM below.
     auto it = linear_bindings_.find(&weight);
     if (it != linear_bindings_.end() &&
-        it->second.plan_fingerprint == plan.fingerprint()) {
+        it->second.plan_fingerprint == plan.fingerprint() &&
+        it->second.rows == weight.rows && it->second.cols == weight.cols) {
         return it->second;
     }
     if (weight.rows <= 0 || weight.cols <= 0) {

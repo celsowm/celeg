@@ -323,6 +323,13 @@ void CanonicalModelFacts::validate() const {
                 require(TensorRole::FfnGate, layer);
                 require(TensorRole::FfnUp, layer);
                 require(TensorRole::FfnDown, layer);
+                if (const auto* dense = std::get_if<DenseFeedForwardSpec>(
+                        &semantic_layer.feed_forward);
+                    dense != nullptr && dense->parallel_intermediate_size > 0) {
+                    require(TensorRole::FfnParallelGate, layer);
+                    require(TensorRole::FfnParallelUp, layer);
+                    require(TensorRole::FfnParallelDown, layer);
+                }
             }
         }
     }

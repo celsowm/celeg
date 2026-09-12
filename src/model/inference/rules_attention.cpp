@@ -89,6 +89,10 @@ std::vector<std::string> query_norm_candidates(int layer) {
         "model.layers." + index + ".self_attn.q_norm.weight",
         "model.language_model.layers." + index + ".self_attn.q_layernorm.weight",
         "model.language_model.layers." + index + ".self_attn.q_norm.weight",
+        "model.layers." + index + ".global_attn.q_layernorm.weight",
+        "model.layers." + index + ".global_attn.q_norm.weight",
+        "model.language_model.layers." + index + ".global_attn.q_layernorm.weight",
+        "model.language_model.layers." + index + ".global_attn.q_norm.weight",
         "layers." + index + ".self_attn.q_layernorm.weight",
         "layers." + index + ".self_attn.q_norm.weight",
     };
@@ -102,6 +106,10 @@ std::vector<std::string> key_norm_candidates(int layer) {
         "model.layers." + index + ".self_attn.k_norm.weight",
         "model.language_model.layers." + index + ".self_attn.k_layernorm.weight",
         "model.language_model.layers." + index + ".self_attn.k_norm.weight",
+        "model.layers." + index + ".global_attn.k_layernorm.weight",
+        "model.layers." + index + ".global_attn.k_norm.weight",
+        "model.language_model.layers." + index + ".global_attn.k_layernorm.weight",
+        "model.language_model.layers." + index + ".global_attn.k_norm.weight",
         "layers." + index + ".self_attn.k_layernorm.weight",
         "layers." + index + ".self_attn.k_norm.weight",
     };
@@ -292,6 +300,16 @@ public:
             attention.output_gate = SigmoidAttentionGateSpec{
                 true,
                 AttentionGateGranularity::ElementWise};
+        }
+        if (m.attention.output_gate.has_value()) {
+            const bool stated = *m.attention.output_gate;
+            const bool inferred = attention.output_gate.has_value();
+            if (stated != inferred) {
+                fail(
+                    ResolutionFailureKind::ConflictingMetadata,
+                    "stated attn_output_gate disagrees with the query-projection shape for layer " +
+                        std::to_string(layer));
+            }
         }
 
         semantic_layer.mixer = std::move(attention);

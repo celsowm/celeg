@@ -30,9 +30,11 @@ void require_positive(const std::optional<int>& value, std::string_view name) {
 /// gated-delta kernel itself, never through a `NormSpec`, so it is
 /// unaffected here). Detected from tensor structure, not a checkpoint name,
 /// so it generalizes to any future checkpoint sharing this same grammar.
+/// The `delta_attn` spelling names the same fused projections.
 bool checkpoint_uses_one_plus_scale_norm(const InferenceInput& input) {
     for (const auto& entry : input.inventory.entries()) {
-        if (entry.name.find("linear_attn.in_proj_qkv.weight") != std::string::npos) {
+        if (entry.name.find("linear_attn.in_proj_qkv.weight") != std::string::npos ||
+            entry.name.find("delta_attn.in_proj_qkv.weight") != std::string::npos) {
             return true;
         }
     }
@@ -224,7 +226,8 @@ void initialize_graph(CanonicalInferenceContext& context) {
                 context.intermediate_sizes.at(
                     static_cast<size_t>(layer)),
                 context.input.metadata.core.feed_forward_activation.value_or(
-                    ActivationKind::SwiGLU)};
+                    ActivationKind::SwiGLU),
+                context.input.metadata.core.parallel_intermediate.value_or(0)};
         }
     }
 }

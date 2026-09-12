@@ -43,6 +43,49 @@ void bind_dense_ffn(CanonicalInferenceContext& context,
         {*m.core.hidden_size, layer_intermediate},
         {});
     add_binding(bindings, TensorRole::FfnDown, layer, *down, {});
+
+    const int parallel_intermediate =
+        input.metadata.core.parallel_intermediate.value_or(0);
+    if (parallel_intermediate > 0) {
+        const std::string index = std::to_string(physical_layer);
+        const std::vector<std::string> parallel_prefixes = {
+            "model.language_model.layers." + index + ".mlp.parallel_ffn.",
+            "model.layers." + index + ".mlp.parallel_ffn.",
+        };
+        const auto parallel_candidates = [&](std::string_view projection) {
+            std::vector<std::string> names;
+            for (const std::string& prefix : parallel_prefixes) {
+                names.push_back(prefix + std::string(projection));
+            }
+            return names;
+        };
+        const auto* parallel_gate = find_unique(
+            input.inventory,
+            parallel_candidates("gate_proj.weight"),
+            TensorRole::FfnParallelGate,
+            layer,
+            {parallel_intermediate, *m.core.hidden_size},
+            {});
+        add_binding(bindings, TensorRole::FfnParallelGate, layer, *parallel_gate, {});
+
+        const auto* parallel_up = find_unique(
+            input.inventory,
+            parallel_candidates("up_proj.weight"),
+            TensorRole::FfnParallelUp,
+            layer,
+            {parallel_intermediate, *m.core.hidden_size},
+            {});
+        add_binding(bindings, TensorRole::FfnParallelUp, layer, *parallel_up, {});
+
+        const auto* parallel_down = find_unique(
+            input.inventory,
+            parallel_candidates("down_proj.weight"),
+            TensorRole::FfnParallelDown,
+            layer,
+            {*m.core.hidden_size, parallel_intermediate},
+            {});
+        add_binding(bindings, TensorRole::FfnParallelDown, layer, *parallel_down, {});
+    }
 }
 
 void bind_moe(CanonicalInferenceContext& context,

@@ -30,6 +30,10 @@ int intermediate_size(const CpuCompiledModel::Shared& shared, size_t layer) {
     return dense_program(shared, layer).intermediate_size;
 }
 
+int parallel_intermediate_size(const CpuCompiledModel::Shared& shared, size_t layer) {
+    return dense_program(shared, layer).parallel_intermediate_size;
+}
+
 bool uses_gelu_tanh(const CpuCompiledModel::Shared& shared, size_t layer) {
     return dense_program(shared, layer).activation == ActivationKind::GeluTanh;
 }
@@ -68,6 +72,20 @@ void execute_cpu_dense_feed_forward_token(
         math.swiglu(workspace.gate_up.data(), workspace.activated.data(), intermediate);
     }
     shared.linear.gemv(weights.w2, workspace.activated.data(), workspace.mlp_output.data());
+    const int parallel = parallel_intermediate_size(shared, layer);
+    if (parallel > 0) {
+        shared.linear.gemv(weights.parallel_w13, workspace.normed.data(),
+                           workspace.gate_up.data());
+        if (uses_gelu_tanh(shared, layer)) {
+            cpu_gated_gelu_tanh(workspace.gate_up.data(), workspace.activated.data(), parallel);
+        } else {
+            math.swiglu(workspace.gate_up.data(), workspace.activated.data(), parallel);
+        }
+        shared.linear.gemv(weights.parallel_w2, workspace.activated.data(),
+                           workspace.shared_output.data());
+        cpu_residual_add(workspace.mlp_output.data(), workspace.shared_output.data(),
+                         static_cast<size_t>(shared.program.hidden));
+    }
     if (context.session.phase == SessionPhase::Prefilling) {
         context.session.prefill_profile.linear_ms += elapsed_ms(started);
     }
@@ -103,6 +121,34 @@ void execute_cpu_dense_feed_forward_chunk(
     cpu_chunk_layer_gemm(context, weights.w2,
                          workspace.chunk_activated.data(), workspace.chunk_mlp.data(),
                          rows, static_cast<size_t>(shared.program.hidden), normed_q8_ready);
+    const int parallel = parallel_intermediate_size(shared, layer);
+    if (parallel > 0) {
+        cpu_chunk_layer_gemm(context, weights.parallel_w13,
+                             workspace.chunk_normed.data(), workspace.chunk_gate_up.data(),
+                             rows, static_cast<size_t>(shared.program.hidden), normed_q8_ready);
+        cpu_parallel_rows(shared.pool, rows, [&](size_t row) {
+            const float* gate_up = workspace.chunk_gate_up.data() +
+                row * 2ULL * static_cast<size_t>(parallel);
+            float* activated = workspace.chunk_activated.data() +
+                row * static_cast<size_t>(parallel);
+            if (uses_gelu_tanh(shared, layer)) {
+                cpu_gated_gelu_tanh(gate_up, activated, parallel);
+            } else {
+                math.swiglu(gate_up, activated, parallel);
+            }
+        });
+        cpu_chunk_layer_gemm(context, weights.parallel_w2,
+                             workspace.chunk_activated.data(), workspace.shared_output.data(),
+                             rows, static_cast<size_t>(shared.program.hidden), normed_q8_ready);
+        cpu_parallel_rows(shared.pool, rows, [&](size_t row) {
+            float* destination = workspace.chunk_mlp.data() +
+                row * static_cast<size_t>(shared.program.hidden);
+            const float* source = workspace.shared_output.data() +
+                row * static_cast<size_t>(shared.program.hidden);
+            cpu_residual_add(destination, source,
+                             static_cast<size_t>(shared.program.hidden));
+        });
+    }
     if (context.session.phase == SessionPhase::Prefilling) {
         context.session.prefill_profile.linear_ms += elapsed_ms(output_started);
     }

@@ -101,6 +101,10 @@ struct MetalLayer {
     MetalLinear ffn_down;
     int intermediate = 0;
     ActivationKind ffn_activation = ActivationKind::SwiGLU;
+    MetalLinear ffn_parallel_gate;
+    MetalLinear ffn_parallel_up;
+    MetalLinear ffn_parallel_down;
+    int parallel_intermediate = 0;
     std::optional<Moe> moe;
 };
 

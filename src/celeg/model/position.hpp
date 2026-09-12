@@ -69,12 +69,20 @@ inline double rope_frequency(const RopePositionSpec& spec, int pair,
                     result /= scaling.factor;
                     return result;
                 }
-                const double span = scaling.high_frequency_factor - scaling.low_frequency_factor;
-                const double blend = span > 0.0
-                    ? (wavelength * scaling.high_frequency_factor /
-                       static_cast<double>(scaling.original_context) - 1.0) / span
+                /// Medium-wavelength interpolation follows the reference
+                /// (`transformers` `_compute_llama3_parameters`): the smooth
+                /// factor blends in inverse-wavelength space, so the
+                /// correction is continuous with both neighboring branches
+                /// (identity at `original/high`, full `factor` division at
+                /// `original/low`).
+                const double span = scaling.high_frequency_factor -
+                    scaling.low_frequency_factor;
+                const double smooth = span > 0.0
+                    ? (static_cast<double>(scaling.original_context) / wavelength -
+                       scaling.low_frequency_factor) / span
                     : 0.0;
-                result /= 1.0 + std::clamp(blend, 0.0, 1.0) * (scaling.factor - 1.0);
+                const double clamped = std::clamp(smooth, 0.0, 1.0);
+                result = (1.0 - clamped) * result / scaling.factor + clamped * result;
                 return result;
             } else if constexpr (std::is_same_v<Scaling, ProportionalRopeScaling>) {
                 /// Proportional frequencies derive from the full head width, not

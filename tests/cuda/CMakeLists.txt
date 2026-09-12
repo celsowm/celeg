@@ -52,7 +52,8 @@ if(TARGET celeg_cuda_backend)
         moe_ffn_test
         moe_integration_test
         expert_residency_test
-        cuda_granite_test)
+        cuda_granite_test
+        cuda_parallel_ffn_test)
         add_executable(${test_name} tests/cuda/${test_name}.cu)
         target_include_directories(${test_name} PRIVATE
             ${CELEG_CUDA_TEST_PRIVATE_INCLUDE_DIRS})

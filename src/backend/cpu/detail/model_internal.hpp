@@ -123,6 +123,9 @@ struct CpuWorkspacePlan {
                 } else if constexpr (std::is_same_v<FF, CompiledDenseFeedForwardProgram>) {
                     plan.feed_forward = std::max(
                         plan.feed_forward, static_cast<size_t>(ff.intermediate_size));
+                    plan.feed_forward = std::max(
+                        plan.feed_forward,
+                        static_cast<size_t>(std::max(ff.parallel_intermediate_size, 0)));
                 } else if constexpr (std::is_same_v<FF, MoeLayerProgram>) {
                     plan.feed_forward = std::max(
                         plan.feed_forward, static_cast<size_t>(ff.routed.mlp.intermediate_size));
@@ -407,6 +410,8 @@ struct CpuCompiledModel {
     struct DenseFeedForwardWeights {
         CpuLinearWeight w13;
         CpuLinearWeight w2;
+        CpuLinearWeight parallel_w13;
+        CpuLinearWeight parallel_w2;
         CpuLinearWeight per_layer_input_gate;
         CpuLinearWeight per_layer_projection;
     };

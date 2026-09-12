@@ -79,6 +79,9 @@ struct MoeLayerProgram {
 struct CompiledDenseFeedForwardProgram {
     int intermediate_size = 0;
     ActivationKind activation = ActivationKind::SwiGLU;
+    /// Parallel-branch width (second SwiGLU summed into the same residual).
+    /// Zero means the layer has no parallel branch.
+    int parallel_intermediate_size = 0;
 
     void validate() const;
 };

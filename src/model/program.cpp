@@ -190,6 +190,9 @@ void CompiledDenseFeedForwardProgram::validate() const {
     if (intermediate_size <= 0) {
         throw std::invalid_argument("compiled dense feed-forward has no width");
     }
+    if (parallel_intermediate_size < 0) {
+        throw std::invalid_argument("compiled dense feed-forward has invalid parallel width");
+    }
 }
 
 PerLayerInputPlan PerLayerInputPlan::derive(const ResolvedModel& model) {

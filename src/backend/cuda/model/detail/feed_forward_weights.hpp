@@ -15,6 +15,8 @@ namespace celeg {
 struct DenseFfnWeights {
     const LinearWeight* w13 = nullptr;
     const LinearWeight* w2 = nullptr;
+    const LinearWeight* parallel_w13 = nullptr;
+    const LinearWeight* parallel_w2 = nullptr;
 };
 
 struct ResidentExpertWeights {

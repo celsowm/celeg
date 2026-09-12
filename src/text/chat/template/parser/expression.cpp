@@ -345,7 +345,33 @@ private:
         }
 
         if (consume("(")) {
+            if (consume(")")) {
+                Expression list;
+                list.kind = Expression::Kind::Call;
+                list.text = "__list";
+                return list;
+            }
             Expression value = parse_conditional();
+            if (consume(",")) {
+                Expression list;
+                list.kind = Expression::Kind::Call;
+                list.text = "__list";
+                list.children.push_back(std::move(value));
+                if (consume(")")) {
+                    return list;
+                }
+                list.children.push_back(parse_conditional());
+                while (consume(",")) {
+                    if (consume(")")) {
+                        return list;
+                    }
+                    list.children.push_back(parse_conditional());
+                }
+                if (!consume(")")) {
+                    throw std::invalid_argument("unterminated Jinja tuple");
+                }
+                return list;
+            }
             if (!consume(")")) {
                 throw std::invalid_argument("unterminated Jinja group");
             }
@@ -357,9 +383,13 @@ private:
             list.kind = Expression::Kind::Call;
             list.text = "__list";
             if (!consume("]")) {
-                do {
+                list.children.push_back(parse_or());
+                while (consume(",")) {
+                    if (consume("]")) {
+                        return list;
+                    }
                     list.children.push_back(parse_or());
-                } while (consume(","));
+                }
                 if (!consume("]")) {
                     throw std::invalid_argument("unterminated Jinja list");
                 }

@@ -57,14 +57,18 @@ __device__ __forceinline__ float scaled_frequency(
             frequency /= scaling.factor;
         } else if (wavelength > static_cast<float>(scaling.original_context) /
                                       scaling.high_frequency_factor) {
-            const float span = scaling.low_frequency_factor -
-                scaling.high_frequency_factor;
-            const float blend = span > 0.0f
-                ? (wavelength * scaling.high_frequency_factor /
-                   static_cast<float>(scaling.original_context) - 1.0f) / span
+            /// Matches the `Llama3FrequencyScaling` reference in
+            /// `celeg/model/position.hpp`: smooth interpolation in
+            /// inverse-wavelength space, continuous with both branches.
+            const float span = scaling.high_frequency_factor -
+                scaling.low_frequency_factor;
+            const float smooth = span > 0.0f
+                ? (static_cast<float>(scaling.original_context) / wavelength -
+                   scaling.low_frequency_factor) / span
                 : 0.0f;
-            frequency /= 1.0f + fminf(1.0f, fmaxf(0.0f, blend)) *
-                (scaling.factor - 1.0f);
+            const float clamped = fminf(1.0f, fmaxf(0.0f, smooth));
+            frequency = (1.0f - clamped) * frequency / scaling.factor +
+                clamped * frequency;
         }
     } else if (scaling.kind == 6) {
         const float fraction = scaling.rotary_fraction > 0.0f

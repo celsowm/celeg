@@ -435,6 +435,9 @@ NormalizedModelMetadata normalize_model_metadata(const CheckpointMetadata& metad
     result.core.intermediate_size = scoped_aliases<int>(
         metadata, {"intermediate_size", "n_inner", "ffn_dim"}, result.evidence,
         "intermediate_size", "feed_forward_length");
+    result.core.parallel_intermediate = aliases<int>(
+        metadata, {"parallel_ffn_intermediate_size"}, result.evidence,
+        "parallel_intermediate", "parallel_ffn_intermediate_size");
     result.core.layer_count = aliases<int>(
         metadata, {"num_hidden_layers", "n_layer", "num_layers"}, result.evidence,
         "layer_count", "block_count");
@@ -553,6 +556,7 @@ NormalizedModelMetadata normalize_model_metadata(const CheckpointMetadata& metad
     }
     std::optional<float> rotary_fraction = aliases<float>(
         metadata, {"rotary_fraction", "partial_rotary_factor",
+                   "rope_parameters.rotary_fraction",
                    "rope_parameters.partial_rotary_factor"}, result.evidence,
         "rotary_fraction");
     std::vector<int> mrope_sections = token_list(metadata, "rope_parameters.mrope_section");
@@ -600,6 +604,9 @@ NormalizedModelMetadata normalize_model_metadata(const CheckpointMetadata& metad
     result.attention.query_key_norm = aliases<bool>(
         metadata, {"qk_norm", "query_key_norm", "use_qk_norm"}, result.evidence,
         "query_key_norm");
+    result.attention.output_gate = aliases<bool>(
+        metadata, {"attn_output_gate"}, result.evidence,
+        "attention_output_gate");
     if (result.attention.query_key_norm.value_or(false)) {
         std::optional<std::string> qk_norm_type;
         std::string qk_norm_type_source;
@@ -682,7 +689,8 @@ NormalizedModelMetadata normalize_model_metadata(const CheckpointMetadata& metad
         metadata, {"no_kda_lora"}, result.evidence,
         "recurrent_direct_projections");
     result.gated_delta.hybrid_group_size = aliases<int>(
-        metadata, {"layer_group_size"}, result.evidence,
+        metadata, {"layer_group_size", "global_attention_interval",
+                   "full_attention_interval"}, result.evidence,
         "recurrent_hybrid_group_size");
 
     result.latent_attention.query_rank = aliases<int>(
