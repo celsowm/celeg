@@ -161,44 +161,44 @@ void execute_cpu_gated_delta_chunk(
         const size_t key_width = static_cast<size_t>(spec.key_heads * spec.key_head_dim);
         const size_t value_width = static_cast<size_t>(spec.value_width());
         std::vector<float> q(rows * key_width), k(rows * key_width), v(rows * value_width);
-        cpu_chunk_layer_gemm(execution, weights.q, workspace.chunk_normed.data(),
+        cpu_chunk_layer_gemm(execution, weights.q, workspace.normed.data(),
                              q.data(), rows, hidden,
                              normed_q8_ready);
-        cpu_chunk_layer_gemm(execution, weights.k, workspace.chunk_normed.data(),
+        cpu_chunk_layer_gemm(execution, weights.k, workspace.normed.data(),
                              k.data(), rows, hidden, normed_q8_ready);
-        cpu_chunk_layer_gemm(execution, weights.v, workspace.chunk_normed.data(),
+        cpu_chunk_layer_gemm(execution, weights.v, workspace.normed.data(),
                              v.data(), rows, hidden, normed_q8_ready);
         for (size_t row = 0; row < rows; ++row) {
-            float* dst = workspace.chunk_gated_delta_qkv.data() +
+            float* dst = workspace.gated_delta_qkv.data() +
                 row * (2 * key_width + value_width);
             std::copy_n(q.data() + row * key_width, key_width, dst);
             std::copy_n(k.data() + row * key_width, key_width, dst + key_width);
             std::copy_n(v.data() + row * value_width, value_width, dst + 2 * key_width);
         }
     } else {
-        cpu_chunk_layer_gemm(execution, weights.qkv, workspace.chunk_normed.data(),
-                             workspace.chunk_gated_delta_qkv.data(), rows, hidden,
+        cpu_chunk_layer_gemm(execution, weights.qkv, workspace.normed.data(),
+                             workspace.gated_delta_qkv.data(), rows, hidden,
                              normed_q8_ready);
     }
-    cpu_chunk_layer_gemm(execution, weights.z, workspace.chunk_normed.data(),
-                         workspace.chunk_gated_delta_z.data(), rows, hidden,
+    cpu_chunk_layer_gemm(execution, weights.z, workspace.normed.data(),
+                         workspace.gated_delta_z.data(), rows, hidden,
                          normed_q8_ready);
-    cpu_chunk_layer_gemm(execution, weights.b, workspace.chunk_normed.data(),
-                         workspace.chunk_gated_delta_b.data(), rows, hidden,
+    cpu_chunk_layer_gemm(execution, weights.b, workspace.normed.data(),
+                         workspace.gated_delta_b.data(), rows, hidden,
                          normed_q8_ready);
-    cpu_chunk_layer_gemm(execution, weights.a, workspace.chunk_normed.data(),
-                         workspace.chunk_gated_delta_a.data(), rows, hidden,
+    cpu_chunk_layer_gemm(execution, weights.a, workspace.normed.data(),
+                         workspace.gated_delta_a.data(), rows, hidden,
                          normed_q8_ready);
     context.session.prefill_profile.linear_ms += elapsed_ms(started);
 
     started = Clock::now();
     auto& state = state_view.gated_delta_net(layer);
     cpu_gated_delta_net_prefill(
-        workspace.chunk_gated_delta_qkv.data(), workspace.chunk_gated_delta_z.data(),
-        workspace.chunk_gated_delta_b.data(), workspace.chunk_gated_delta_a.data(),
+        workspace.gated_delta_qkv.data(), workspace.gated_delta_z.data(),
+        workspace.gated_delta_b.data(), workspace.gated_delta_a.data(),
         weights.conv_weight.data(), weights.dt_bias.data(), weights.a_log.data(),
         weights.norm.data(), state.conv.data(), state.recurrent.data(),
-        workspace.chunk_gated_delta_output.data(), rows, spec.conv_kernel,
+        workspace.gated_delta_output.data(), rows, spec.conv_kernel,
         spec.key_head_dim, spec.value_head_dim, spec.key_heads, spec.value_heads,
         shared.program.final_norm.epsilon,
         spec.vector_decay, spec.safe_decay,
@@ -207,8 +207,8 @@ void execute_cpu_gated_delta_chunk(
     context.session.prefill_profile.shortconv_ms += elapsed_ms(started);
 
     started = Clock::now();
-    cpu_chunk_layer_gemm(execution, weights.out, workspace.chunk_gated_delta_output.data(),
-                         workspace.chunk_hidden.data(), rows, hidden,
+    cpu_chunk_layer_gemm(execution, weights.out, workspace.gated_delta_output.data(),
+                         workspace.hidden.data(), rows, hidden,
                          normed_q8_ready);
     context.session.prefill_profile.linear_ms += elapsed_ms(started);
 }
@@ -223,22 +223,22 @@ void execute_cpu_short_convolution_chunk(
     const size_t hidden = static_cast<size_t>(shared.program.hidden);
 
     auto started = Clock::now();
-    cpu_chunk_layer_gemm(execution, weights.in, workspace.chunk_normed.data(),
-                         workspace.chunk_conv.data(), rows, hidden,
+    cpu_chunk_layer_gemm(execution, weights.in, workspace.normed.data(),
+                         workspace.conv_projected.data(), rows, hidden,
                          normed_q8_ready);
     context.session.prefill_profile.linear_ms += elapsed_ms(started);
 
     started = Clock::now();
     auto& state = state_view.convolution(layer);
-    cpu_conv_prefill(workspace.chunk_conv.data(), weights.weight_tap_major.data(),
-                      state.state.data(), workspace.chunk_op.data(), rows,
+    cpu_conv_prefill(workspace.conv_projected.data(), weights.weight_tap_major.data(),
+                      state.state.data(), workspace.op_output.data(), rows,
                       shared.program.hidden, weights.spec.cache_length,
                       context.session.position_value, shared.pool);
     context.session.prefill_profile.shortconv_ms += elapsed_ms(started);
 
     started = Clock::now();
-    cpu_chunk_layer_gemm(execution, weights.out, workspace.chunk_op.data(),
-                         workspace.chunk_hidden.data(), rows, hidden,
+    cpu_chunk_layer_gemm(execution, weights.out, workspace.op_output.data(),
+                         workspace.hidden.data(), rows, hidden,
                          normed_q8_ready);
     context.session.prefill_profile.linear_ms += elapsed_ms(started);
 }

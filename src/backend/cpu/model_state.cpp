@@ -440,16 +440,16 @@ CpuModelMemoryStats CpuCompiledModel::memory_stats() const {
     stats.activations =
         (workspace_.hidden.size() + workspace_.residual.size() + workspace_.normed.size() + workspace_.op_output.size() +
          workspace_.qkv.size() + workspace_.conv_projected.size() + workspace_.gate_up.size() + workspace_.activated.size() +
-         workspace_.mlp_output.size() + workspace_.logits.size() + workspace_.chunk_hidden.size() +
-         workspace_.chunk_residual.size() + workspace_.chunk_normed.size() + workspace_.chunk_op.size() +
-         workspace_.chunk_qkv.size() + workspace_.chunk_attention_gate.size() +
-         workspace_.chunk_conv.size() + workspace_.chunk_gate_up.size() +
-         workspace_.chunk_activated.size() + workspace_.chunk_mlp.size() +
+         workspace_.mlp_output.size() + workspace_.logits.size() + workspace_.hidden.size() +
+         workspace_.residual.size() + workspace_.normed.size() + workspace_.op_output.size() +
+         workspace_.qkv.size() + workspace_.attention_gate.size() +
+         workspace_.conv_projected.size() + workspace_.gate_up.size() +
+         workspace_.activated.size() + workspace_.mlp_output.size() +
          workspace_.gated_delta_qkv.size() + workspace_.gated_delta_z.size() +
          workspace_.gated_delta_b.size() + workspace_.gated_delta_a.size() +
-         workspace_.gated_delta_output.size() + workspace_.chunk_gated_delta_qkv.size() +
-         workspace_.chunk_gated_delta_z.size() + workspace_.chunk_gated_delta_b.size() +
-         workspace_.chunk_gated_delta_a.size() + workspace_.chunk_gated_delta_output.size()) *
+         workspace_.gated_delta_output.size() + workspace_.gated_delta_qkv.size() +
+         workspace_.gated_delta_z.size() + workspace_.gated_delta_b.size() +
+         workspace_.gated_delta_a.size() + workspace_.gated_delta_output.size()) *
          sizeof(float) + session_.seen.size();
     return stats;
 }

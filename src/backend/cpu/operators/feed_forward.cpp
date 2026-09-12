@@ -101,15 +101,15 @@ void execute_cpu_dense_feed_forward_chunk(
     const int intermediate = intermediate_size(shared, layer);
     const auto started = Clock::now();
     cpu_chunk_layer_gemm(context, weights.w13,
-                         workspace.chunk_normed.data(), workspace.chunk_gate_up.data(),
+                         workspace.normed.data(), workspace.gate_up.data(),
                          rows, static_cast<size_t>(shared.program.hidden), normed_q8_ready);
     if (context.session.phase == SessionPhase::Prefilling) {
         context.session.prefill_profile.linear_ms += elapsed_ms(started);
     }
     cpu_parallel_rows(shared.pool, rows, [&](size_t row) {
-        const float* gate_up = workspace.chunk_gate_up.data() +
+        const float* gate_up = workspace.gate_up.data() +
             row * 2ULL * static_cast<size_t>(intermediate);
-        float* activated = workspace.chunk_activated.data() +
+        float* activated = workspace.activated.data() +
             row * static_cast<size_t>(intermediate);
         if (uses_gelu_tanh(shared, layer)) {
             cpu_gated_gelu_tanh(gate_up, activated, intermediate);
@@ -119,17 +119,17 @@ void execute_cpu_dense_feed_forward_chunk(
     });
     const auto output_started = Clock::now();
     cpu_chunk_layer_gemm(context, weights.w2,
-                         workspace.chunk_activated.data(), workspace.chunk_mlp.data(),
+                         workspace.activated.data(), workspace.mlp_output.data(),
                          rows, static_cast<size_t>(shared.program.hidden), normed_q8_ready);
     const int parallel = parallel_intermediate_size(shared, layer);
     if (parallel > 0) {
         cpu_chunk_layer_gemm(context, weights.parallel_w13,
-                             workspace.chunk_normed.data(), workspace.chunk_gate_up.data(),
+                             workspace.normed.data(), workspace.gate_up.data(),
                              rows, static_cast<size_t>(shared.program.hidden), normed_q8_ready);
         cpu_parallel_rows(shared.pool, rows, [&](size_t row) {
-            const float* gate_up = workspace.chunk_gate_up.data() +
+            const float* gate_up = workspace.gate_up.data() +
                 row * 2ULL * static_cast<size_t>(parallel);
-            float* activated = workspace.chunk_activated.data() +
+            float* activated = workspace.activated.data() +
                 row * static_cast<size_t>(parallel);
             if (uses_gelu_tanh(shared, layer)) {
                 cpu_gated_gelu_tanh(gate_up, activated, parallel);
@@ -138,10 +138,10 @@ void execute_cpu_dense_feed_forward_chunk(
             }
         });
         cpu_chunk_layer_gemm(context, weights.parallel_w2,
-                             workspace.chunk_activated.data(), workspace.shared_output.data(),
+                             workspace.activated.data(), workspace.shared_output.data(),
                              rows, static_cast<size_t>(shared.program.hidden), normed_q8_ready);
         cpu_parallel_rows(shared.pool, rows, [&](size_t row) {
-            float* destination = workspace.chunk_mlp.data() +
+            float* destination = workspace.mlp_output.data() +
                 row * static_cast<size_t>(shared.program.hidden);
             const float* source = workspace.shared_output.data() +
                 row * static_cast<size_t>(shared.program.hidden);

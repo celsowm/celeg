@@ -52,7 +52,7 @@ inline void cpu_chunk_layer_gemm(CpuExecutionContext& context,
     auto& workspace = context.workspace;
     auto& shared = context.shared;
     const bool cacheable = weight.gguf_native() && weight.cols == hidden &&
-        input == workspace.chunk_normed.data();
+        input == workspace.normed.data();
     if (cacheable) {
         if (!normed_q8_ready) {
             shared.linear.prepare_gguf_activation(input, rows, hidden,

@@ -222,8 +222,8 @@ void execute_cpu_moe_chunk(CpuExecutionContext& context, size_t layer,
     const size_t routes = rows * static_cast<size_t>(selected);
     prepare_expert_backing(shared, weights);
 
-    std::fill(workspace.chunk_mlp.begin(),
-              workspace.chunk_mlp.begin() + rows * hidden, 0.0f);
+    std::fill(workspace.mlp_output.begin(),
+              workspace.mlp_output.begin() + rows * hidden, 0.0f);
     workspace.moe_router_logits.resize(rows * static_cast<size_t>(experts));
     workspace.moe_selected.resize(routes);
     workspace.moe_weights.resize(routes);
@@ -235,7 +235,7 @@ void execute_cpu_moe_chunk(CpuExecutionContext& context, size_t layer,
     workspace.moe_route_order.resize(routes);
 
     const auto router_started = Clock::now();
-    shared.linear.gemm_raw(weights.router.data(), workspace.chunk_normed.data(),
+    shared.linear.gemm_raw(weights.router.data(), workspace.normed.data(),
                            workspace.moe_router_logits.data(), rows, experts,
                            shared.program.hidden);
     for (size_t row = 0; row < rows; ++row) {
@@ -301,7 +301,7 @@ void execute_cpu_moe_chunk(CpuExecutionContext& context, size_t layer,
     for (size_t packed_route = 0; packed_route < routes; ++packed_route) {
         const size_t route = workspace.moe_route_order[packed_route];
         const size_t row = static_cast<size_t>(workspace.moe_route_rows[route]);
-        std::copy_n(workspace.chunk_normed.data() + row * hidden, hidden,
+        std::copy_n(workspace.normed.data() + row * hidden, hidden,
                     workspace.moe_gathered_normed.data() + packed_route * hidden);
     }
     shared.linear.gemm_grouped(workspace.moe_gemm_jobs,
@@ -333,7 +333,7 @@ void execute_cpu_moe_chunk(CpuExecutionContext& context, size_t layer,
     for (size_t packed_route = 0; packed_route < routes; ++packed_route) {
         const size_t route = workspace.moe_route_order[packed_route];
         const size_t row = static_cast<size_t>(workspace.moe_route_rows[route]);
-        float* destination = workspace.chunk_mlp.data() + row * hidden;
+        float* destination = workspace.mlp_output.data() + row * hidden;
         const float* source = workspace.moe_gathered_output.data() + packed_route * hidden;
         const float weight = workspace.moe_route_weights[route];
         for (size_t d = 0; d < hidden; ++d) destination[d] += weight * source[d];
@@ -342,27 +342,27 @@ void execute_cpu_moe_chunk(CpuExecutionContext& context, size_t layer,
     if (semantics.shared) {
         const int shared_intermediate = semantics.shared->mlp.intermediate_size;
         cpu_layer_gemm(shared, workspace, weights.shared_w13,
-                       workspace.chunk_normed.data(), workspace.chunk_gate_up.data(),
+                       workspace.normed.data(), workspace.gate_up.data(),
                        rows, hidden, normed_q8_ready);
         cpu_parallel_rows(shared.pool, rows, [&](size_t row) {
-            math.swiglu(workspace.chunk_gate_up.data() +
+            math.swiglu(workspace.gate_up.data() +
                             row * 2ULL * static_cast<size_t>(shared_intermediate),
-                        workspace.chunk_activated.data() +
+                        workspace.activated.data() +
                             row * static_cast<size_t>(shared_intermediate),
                         shared_intermediate);
         });
         cpu_layer_gemm(shared, workspace, weights.shared_w2,
-                       workspace.chunk_activated.data(), workspace.shared_output.data(),
+                       workspace.activated.data(), workspace.shared_output.data(),
                        rows, hidden, normed_q8_ready);
         if (weights.has_shared_gate) {
             cpu_layer_gemm(shared, workspace, weights.shared_gate,
-                           workspace.chunk_normed.data(), workspace.shared_gate.data(),
+                           workspace.normed.data(), workspace.shared_gate.data(),
                            rows, hidden, normed_q8_ready);
         }
         cpu_parallel_rows(shared.pool, rows, [&](size_t row) {
             const float gate = weights.has_shared_gate
                 ? cpu_moe_sigmoid(workspace.shared_gate[row]) : 1.0f;
-            float* destination = workspace.chunk_mlp.data() + row * hidden;
+            float* destination = workspace.mlp_output.data() + row * hidden;
             const float* source = workspace.shared_output.data() + row * hidden;
             for (size_t d = 0; d < hidden; ++d) destination[d] += gate * source[d];
         });

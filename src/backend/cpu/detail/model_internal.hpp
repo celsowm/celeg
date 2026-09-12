@@ -301,29 +301,6 @@ struct CpuWorkspace {
     std::vector<std::shared_ptr<const CpuExpertWeights>>& moe_cached_experts =
         feed_forward.moe_cached_experts;
 
-    /// Legacy chunk alias references for non-overlapping chunk forward paths
-    std::vector<float>& chunk_hidden = common.hidden;
-    std::vector<float>& chunk_residual = common.residual;
-    std::vector<float>& chunk_normed = common.normed;
-    std::vector<float>& chunk_op = attention.op_output;
-    std::vector<float>& chunk_qkv = attention.qkv;
-    std::vector<float>& chunk_conv = recurrent.conv_projected;
-    std::vector<float>& chunk_gate_up = feed_forward.gate_up;
-    std::vector<float>& chunk_latent_key = attention.latent_key;
-    std::vector<float>& chunk_latent_value = attention.latent_value;
-    std::vector<float>& chunk_latent_rope = attention.latent_rope;
-    std::vector<float>& chunk_latent_key_rope = attention.latent_key_rope;
-    std::vector<float>& chunk_latent_decompressed = attention.latent_decompressed;
-    std::vector<float>& chunk_latent_projection = attention.latent_projection;
-    std::vector<float>& chunk_attention_gate = attention.attention_gate;
-    std::vector<float>& chunk_gated_delta_qkv = recurrent.gated_delta_qkv;
-    std::vector<float>& chunk_gated_delta_z = recurrent.gated_delta_z;
-    std::vector<float>& chunk_gated_delta_b = recurrent.gated_delta_b;
-    std::vector<float>& chunk_gated_delta_a = recurrent.gated_delta_a;
-    std::vector<float>& chunk_gated_delta_output = recurrent.gated_delta_output;
-    std::vector<float>& chunk_activated = feed_forward.activated;
-    std::vector<float>& chunk_mlp = common.mlp_output;
-
     void ensure(size_t rows, const CpuWorkspacePlan& plan) {
         common.ensure(rows, plan);
         attention.ensure(rows, plan);
