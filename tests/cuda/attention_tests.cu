@@ -459,4 +459,88 @@ void run_attention_tests(celeg::CudaStream& stream) {
 
 }
 
+void run_attention_data_movement_tests(celeg::CudaStream& stream) {
+/// Packed attention query+gate extraction must de-interleave *per head*
+/// (query_head0, gate_head0, query_head1, gate_head1, ...) -- the
+/// HF/checkpoint convention from `q_proj(x).view(..., heads, 2*head_dim)`
+/// then `chunk(2, dim=-1)` -- not split coarsely into one contiguous
+/// query block followed by one contiguous gate block.
+{
+    constexpr int rows = 2, heads = 3, head_dim = 4, width = heads * head_dim;
+    std::vector<__nv_bfloat16> packed(rows * width * 2);
+    std::vector<float> expected_query(rows * width), expected_gate(rows * width);
+    for (int row = 0; row < rows; ++row) {
+        for (int head = 0; head < heads; ++head) {
+            for (int d = 0; d < head_dim; ++d) {
+                const float qv = static_cast<float>(row * 100 + head * 10 + d);
+                const float gv = static_cast<float>(row * 100 + head * 10 + d) + 0.5f;
+                const size_t base = static_cast<size_t>(row) * width * 2 +
+                    static_cast<size_t>(head) * 2 * head_dim;
+                packed[base + d] = to_bf16(qv);
+                packed[base + head_dim + d] = to_bf16(gv);
+                expected_query[row * width + head * head_dim + d] = qv;
+                expected_gate[row * width + head * head_dim + d] = gv;
+            }
+        }
+    }
+    celeg::DeviceBuffer<__nv_bfloat16> dpacked(packed.size()), dquery(rows * width), dgate(rows * width);
+    CELEG_CUDA(cudaMemcpy(dpacked.data(), packed.data(), dpacked.bytes(), cudaMemcpyHostToDevice));
+    celeg::launch_extract_attention_output_gate(
+        dpacked.data(), dquery.data(), dgate.data(), rows, width, head_dim, stream.get());
+    std::vector<__nv_bfloat16> got_query(rows * width), got_gate(rows * width);
+    CELEG_CUDA(cudaMemcpyAsync(got_query.data(), dquery.data(), dquery.bytes(), cudaMemcpyDeviceToHost, stream.get()));
+    CELEG_CUDA(cudaMemcpyAsync(got_gate.data(), dgate.data(), dgate.bytes(), cudaMemcpyDeviceToHost, stream.get()));
+    CELEG_CUDA(cudaStreamSynchronize(stream.get()));
+    for (size_t i = 0; i < got_query.size(); ++i) {
+        expect_near(to_float(got_query[i]), expected_query[i], 0.01f);
+        expect_near(to_float(got_gate[i]), expected_gate[i], 0.01f);
+    }
+}
+
+{
+    constexpr int rows = 2;
+    constexpr int q_width = 2;
+    constexpr int kv_width = 1;
+    std::vector<__nv_bfloat16> qkv = {
+        to_bf16(1), to_bf16(2), to_bf16(3), to_bf16(4),
+        to_bf16(5), to_bf16(6), to_bf16(7), to_bf16(8)};
+    celeg::DeviceBuffer<__nv_bfloat16> input(qkv.size());
+    celeg::DeviceBuffer<__nv_bfloat16> q(rows * q_width), k(rows * kv_width),
+        v(rows * kv_width);
+    CELEG_CUDA(cudaMemcpy(input.data(), qkv.data(), input.bytes(),
+                        cudaMemcpyHostToDevice));
+    celeg::launch_split_qkv_rows(input.data(), q.data(), k.data(), v.data(),
+                               rows, q_width, kv_width, stream.get());
+    std::vector<__nv_bfloat16> hq(q.size()), hk(k.size()), hv(v.size());
+    CELEG_CUDA(cudaMemcpyAsync(hq.data(), q.data(), q.bytes(),
+                             cudaMemcpyDeviceToHost, stream.get()));
+    CELEG_CUDA(cudaMemcpyAsync(hk.data(), k.data(), k.bytes(),
+                             cudaMemcpyDeviceToHost, stream.get()));
+    CELEG_CUDA(cudaMemcpyAsync(hv.data(), v.data(), v.bytes(),
+                             cudaMemcpyDeviceToHost, stream.get()));
+    CELEG_CUDA(cudaStreamSynchronize(stream.get()));
+    CELEG_TEST_CHECK(to_float(hq[0]) == 1 && to_float(hq[3]) == 6);
+    CELEG_TEST_CHECK(to_float(hk[0]) == 3 && to_float(hk[1]) == 7);
+    CELEG_TEST_CHECK(to_float(hv[0]) == 4 && to_float(hv[1]) == 8);
+
+    std::vector<__nv_bfloat16> gate_up = {
+        to_bf16(0), to_bf16(1), to_bf16(2), to_bf16(3),
+        to_bf16(1), to_bf16(-1), to_bf16(4), to_bf16(2)};
+    celeg::DeviceBuffer<__nv_bfloat16> dgu(gate_up.size()), out(4);
+    CELEG_CUDA(cudaMemcpy(dgu.data(), gate_up.data(), dgu.bytes(),
+                        cudaMemcpyHostToDevice));
+    celeg::launch_swiglu_interleaved(dgu.data(), out.data(), 2, 2,
+                                   stream.get());
+    std::vector<__nv_bfloat16> hout(4);
+    CELEG_CUDA(cudaMemcpyAsync(hout.data(), out.data(), out.bytes(),
+                             cudaMemcpyDeviceToHost, stream.get()));
+    CELEG_CUDA(cudaStreamSynchronize(stream.get()));
+    expect_near(to_float(hout[0]), 0.0f);
+    expect_near(to_float(hout[1]),
+                (1.0f / (1.0f + std::exp(-1.0f))) * 3.0f);
+    expect_near(to_float(hout[2]),
+                (1.0f / (1.0f + std::exp(-1.0f))) * 4.0f);
+}
+}
+
 }

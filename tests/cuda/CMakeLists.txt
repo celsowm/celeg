@@ -22,7 +22,16 @@ if(TARGET celeg_cuda_backend)
     add_executable(cuda_kernels_test
         tests/cuda/cuda_kernels_test.cu
         tests/cuda/sampling_tests.cu
-        tests/cuda/attention_tests.cu)
+        tests/cuda/attention_tests.cu
+        tests/cuda/mamba_tests.cu
+        tests/cuda/gated_delta_tests.cu
+        tests/cuda/embedding_tests.cu
+        tests/cuda/norm_activation_tests.cu
+        tests/cuda/quantized_linear_tests.cu
+        tests/cuda/gemm_dispatcher_tests.cu
+        tests/cuda/paged_decode_tests.cu
+        tests/cuda/paged_cache_tests.cu
+        tests/cuda/misc_tests.cu)
     target_include_directories(cuda_kernels_test PRIVATE
         ${CELEG_CUDA_TEST_PRIVATE_INCLUDE_DIRS})
     target_link_libraries(cuda_kernels_test PRIVATE

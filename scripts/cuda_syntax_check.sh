@@ -15,33 +15,26 @@ HOST_COMMON=(
     -std=c++20
     -Wall -Wextra -Wpedantic
     -I"$ROOT/include"
+    -I"$ROOT/src"
     -I"$CUDA_PATH/include"
     -fsyntax-only
 )
 
-for source in     "$ROOT/src/runtime_types.cpp"     "$ROOT/src/execution_plan.cpp"     "$ROOT/src/concurrent_metrics.cpp"     "$ROOT/src/prefix_cache.cpp"     "$ROOT/src/request_registry.cpp"     "$ROOT/src/batch_planner.cpp"     "$ROOT/src/engine_worker.cpp"; do
+for source in \
+    "$ROOT/src/model/execution/runtime_types.cpp" \
+    "$ROOT/src/backend/cuda/execution_plan.cpp" \
+    "$ROOT/src/backend/cpu/memory/prefix_cache.cpp" \
+    "$ROOT/src/runtime/concurrency/request_registry.cpp" \
+    "$ROOT/src/runtime/concurrency/batch_planner.cpp" \
+    "$ROOT/src/backend/cpu/concurrent.cpp" \
+    "$ROOT/apps/cuda/main.cpp"; do
     echo "checking ${source#$ROOT/}"
     "$CLANGXX" "${HOST_COMMON[@]}" "$source"
 done
 
-echo "checking src/main.cpp"
-"$CLANGXX" "${HOST_COMMON[@]}" "$ROOT/src/main.cpp"
-echo "checking src/c_api.cpp"
-"$CLANGXX" "${HOST_COMMON[@]}" "$ROOT/src/c_api.cpp"
-echo "checking src/concurrent.cpp"
-"$CLANGXX" "${HOST_COMMON[@]}" "$ROOT/src/concurrent.cpp"
-echo "checking src/concurrent_c_api.cpp"
-"$CLANGXX" "${HOST_COMMON[@]}" "$ROOT/src/concurrent_c_api.cpp"
-echo "checking src/concurrent_benchmark.cpp"
-"$CLANGXX" "${HOST_COMMON[@]}" "$ROOT/src/concurrent_benchmark.cpp"
-echo "checking src/prefix_cache_benchmark.cpp"
-"$CLANGXX" "${HOST_COMMON[@]}" "$ROOT/src/prefix_cache_benchmark.cpp"
-echo "checking examples/c_api_example.c"
+echo "checking examples/api_example.c"
 "${CC:-cc}" -std=c11 -Wall -Wextra -Wpedantic \
-    -I"$ROOT/include" -fsyntax-only "$ROOT/examples/c_api_example.c"
-echo "checking examples/concurrent_c_api_example.c"
-"${CC:-cc}" -std=c11 -Wall -Wextra -Wpedantic \
-    -I"$ROOT/include" -fsyntax-only "$ROOT/examples/concurrent_c_api_example.c"
+    -I"$ROOT/include" -fsyntax-only "$ROOT/examples/api_example.c"
 
 COMMON=(
     -std=c++20
@@ -50,18 +43,27 @@ COMMON=(
     "--cuda-path=$CUDA_PATH"
     "--cuda-gpu-arch=$CUDA_ARCH"
     -Wno-unknown-cuda-version
+    -isystem "$CUDA_PATH/include"
     -I"$ROOT/include"
+    -I"$ROOT/src"
+    -I"$ROOT/tests"
+    -I"$ROOT/src/backend/cuda"
+    -I"$ROOT/src/backend/cuda/kernels"
     -fsyntax-only
 )
 
-for source in \
-    "$ROOT/src/kernels.cu" \
-    "$ROOT/src/model.cu" \
-    "$ROOT/src/backend/cuda/kernels/packed/kernels.cu" \
-    "$ROOT/src/paged_kv.cu" \
-    "$ROOT/tests/cuda_kernels_test.cu"; do
+if ! echo '' | "$CLANGXX" "${COMMON[@]}" - >/dev/null 2>&1; then
+    echo "cuda_syntax_check: skipping CUDA TUs: $CLANGXX cannot parse" \
+        "the toolkit headers at $CUDA_PATH (host checks passed)"
+    exit 0
+fi
+
+while IFS= read -r source; do
     echo "checking ${source#$ROOT/}"
     "$CLANGXX" "${COMMON[@]}" "$source"
-done
+done < <(find \
+    "$ROOT/src/backend/cuda" \
+    "$ROOT/tests/cuda" \
+    -name '*.cu' -print | sort)
 
 echo "cuda_syntax_check: all CUDA translation units parsed"

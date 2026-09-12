@@ -288,7 +288,87 @@ void run_sampling_tests(celeg::CudaStream& stream) {
     }
 }
 
+}
 
+void run_packed_sampling_tests(celeg::CudaStream& stream) {
+{
+    constexpr int rows = 2;
+    constexpr int vocab = 4;
+    std::vector<__nv_bfloat16> a = {
+        to_bf16(1), to_bf16(5), to_bf16(2), to_bf16(0)};
+    std::vector<__nv_bfloat16> b = {
+        to_bf16(4), to_bf16(3), to_bf16(6), to_bf16(0)};
+    std::vector<uint8_t> seen_a(vocab, 0), seen_b(vocab, 0);
+    seen_b[2] = 1;
+    uint64_t rng_a = 1, rng_b = 2;
+    celeg::DeviceBuffer<__nv_bfloat16> da(vocab), db(vocab);
+    celeg::DeviceBuffer<uint8_t> dsa(vocab), dsb(vocab);
+    celeg::DeviceBuffer<uint64_t> dra(1), drb(1);
+    CELEG_CUDA(cudaMemcpy(da.data(), a.data(), da.bytes(), cudaMemcpyHostToDevice));
+    CELEG_CUDA(cudaMemcpy(db.data(), b.data(), db.bytes(), cudaMemcpyHostToDevice));
+    CELEG_CUDA(cudaMemcpy(dsa.data(), seen_a.data(), dsa.bytes(), cudaMemcpyHostToDevice));
+    CELEG_CUDA(cudaMemcpy(dsb.data(), seen_b.data(), dsb.bytes(), cudaMemcpyHostToDevice));
+    CELEG_CUDA(cudaMemcpy(dra.data(), &rng_a, sizeof(rng_a), cudaMemcpyHostToDevice));
+    CELEG_CUDA(cudaMemcpy(drb.data(), &rng_b, sizeof(rng_b), cudaMemcpyHostToDevice));
+    std::vector<__nv_bfloat16*> logits_ptrs = {da.data(), db.data()};
+    std::vector<uint8_t*> seen_ptrs = {dsa.data(), dsb.data()};
+    std::vector<uint64_t*> rng_ptrs = {dra.data(), drb.data()};
+    celeg::DeviceBuffer<__nv_bfloat16*> dlogits(rows);
+    celeg::DeviceBuffer<uint8_t*> dseen(rows);
+    celeg::DeviceBuffer<uint64_t*> drng(rows);
+    CELEG_CUDA(cudaMemcpy(dlogits.data(), logits_ptrs.data(), dlogits.bytes(), cudaMemcpyHostToDevice));
+    CELEG_CUDA(cudaMemcpy(dseen.data(), seen_ptrs.data(), dseen.bytes(), cudaMemcpyHostToDevice));
+    CELEG_CUDA(cudaMemcpy(drng.data(), rng_ptrs.data(), drng.bytes(), cudaMemcpyHostToDevice));
+    std::vector<float> temp = {0.0f, 0.0f};
+    std::vector<float> penalty = {1.0f, 2.0f};
+    std::vector<int32_t> topk = {1, 1};
+    std::vector<float> topp = {1.0f, 1.0f};
+    celeg::DeviceBuffer<float> dtemp(rows), dpenalty(rows), dtopp(rows);
+    celeg::DeviceBuffer<int32_t> dtopk(rows), result(rows);
+    celeg::DeviceBuffer<float> scores(rows * vocab), values(rows * celeg::kMaxTopK);
+    celeg::DeviceBuffer<int32_t> indices(rows * celeg::kMaxTopK);
+    CELEG_CUDA(cudaMemcpy(dtemp.data(), temp.data(), dtemp.bytes(), cudaMemcpyHostToDevice));
+    CELEG_CUDA(cudaMemcpy(dpenalty.data(), penalty.data(), dpenalty.bytes(), cudaMemcpyHostToDevice));
+    CELEG_CUDA(cudaMemcpy(dtopk.data(), topk.data(), dtopk.bytes(), cudaMemcpyHostToDevice));
+    CELEG_CUDA(cudaMemcpy(dtopp.data(), topp.data(), dtopp.bytes(), cudaMemcpyHostToDevice));
+    celeg::launch_packed_sample_topk(
+        dlogits.data(), dseen.data(), drng.data(), dtemp.data(),
+        dpenalty.data(), dtopk.data(), dtopp.data(), scores.data(),
+        values.data(), indices.data(), rows, vocab, celeg::kMaxTopK,
+        result.data(), stream.get());
+    std::vector<int32_t> tokens(rows);
+    CELEG_CUDA(cudaMemcpyAsync(tokens.data(), result.data(), result.bytes(),
+                             cudaMemcpyDeviceToHost, stream.get()));
+    CELEG_CUDA(cudaStreamSynchronize(stream.get()));
+    CELEG_TEST_CHECK(tokens[0] == 1);
+    CELEG_TEST_CHECK(tokens[1] == 0);
+}
+
+{
+    std::vector<int32_t> tokens = {3, 5};
+    celeg::DeviceBuffer<int32_t> dtokens(tokens.size());
+    celeg::DeviceBuffer<uint8_t> seen_a(8), seen_b(8);
+    celeg::PinnedBuffer<uint8_t*> hseen(2);
+    celeg::DeviceBuffer<uint8_t*> dseen(2);
+    seen_a.zero_async(stream.get());
+    seen_b.zero_async(stream.get());
+    hseen.data()[0] = seen_a.data();
+    hseen.data()[1] = seen_b.data();
+    CELEG_CUDA(cudaMemcpy(dtokens.data(), tokens.data(), dtokens.bytes(),
+                        cudaMemcpyHostToDevice));
+    CELEG_CUDA(cudaMemcpy(dseen.data(), hseen.data(), dseen.bytes(),
+                        cudaMemcpyHostToDevice));
+    celeg::launch_mark_seen_batch_ptrs(dtokens.data(), dseen.data(), 2, 8,
+                                     stream.get());
+    std::vector<uint8_t> a(8), b(8);
+    CELEG_CUDA(cudaMemcpyAsync(a.data(), seen_a.data(), seen_a.bytes(),
+                             cudaMemcpyDeviceToHost, stream.get()));
+    CELEG_CUDA(cudaMemcpyAsync(b.data(), seen_b.data(), seen_b.bytes(),
+                             cudaMemcpyDeviceToHost, stream.get()));
+    CELEG_CUDA(cudaStreamSynchronize(stream.get()));
+    CELEG_TEST_CHECK(a[3] == 1 && a[5] == 0);
+    CELEG_TEST_CHECK(b[5] == 1 && b[3] == 0);
+}
 }
 
 }
