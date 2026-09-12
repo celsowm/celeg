@@ -4,10 +4,13 @@
 
 - **Only Doxygen comments.** Plain `//` and `/* */` prose comments were
   swept from the tree (`scripts/strip_comments.py`, self-tested tokenizer
-  that preserves string/raw-string literals and the `/*param*/`
-  call-site-argument convention). Do not reintroduce prose comments — new
-  documentation must use Doxygen (`///`, `/**...*/`, `//!`, `/*!...*/`).
-  The `/*name*/` / `/*name=*/` argument-naming convention at call sites is
+  that preserves string/raw-string literals, Doxygen comments in every
+  form, and the `/*param*/` call-site-argument convention). Do not
+  reintroduce prose comments — new documentation must use Doxygen (`///`,
+  `/**...*/`, `//!`, `/*!...*/`). To rescue prose comments without losing
+  their content, run `python scripts/strip_comments.py --convert --apply`,
+  which republishes them as Doxygen instead of deleting them. The
+  `/*name*/` / `/*name=*/` argument-naming convention at call sites is
   still fine; it is not prose.
 - **NO backward compatibility.** When refactoring, fully replace old access
   patterns with the new interface. Do not keep legacy shortcuts, `impl_->`
