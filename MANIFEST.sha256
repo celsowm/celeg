@@ -186,5 +186,7 @@ f9da632102e1d23df7604718d9bfbd681b23a990251e936a99dd5a96196a03d0  ./validation/C
 05fbcae13cec4887b286722b967ebe033fce76a6dbc191801d44339cb92f2819  ./src/serve/chat_generation.cpp
 45d96ef8a61bfa1bc1969142e1b5a0161031b4dc278fad9016154de4a13f1ed1  ./MANIFEST.sha256
 5f00e9afd5d126d64b4398e31c350227f5ee9a3630a4acf24820067a3c6878c0  ./src/runtime/sampler.cpp
-6abd42e8b0f0899e3a8010e083e0083429597145ee458832b0ef595795501934  ./src/model/resolved.cpp
+0c78cd41afd449d7cc0aee0ccef61e6c8fda2e41fd431e91fcbc7d2e8b85b183  ./src/model/resolved/fingerprint.cpp
+d45b72d952b1a3cf2fca3891b6902bf017faacc90f0ad73ab45b4a9e225e9ed7  ./src/model/resolved/topology.cpp
+e3ada9c32b50dbf98fd549c09d00c9e179f145e70f3b221820d3eb31d42e2fea  ./src/model/resolved/validation.cpp
 9087126c2c8055b97af97d2fabe7d3e99d548617ad32505c0d378bb257278716  ./src/model/weight_plan.cpp

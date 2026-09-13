@@ -37,7 +37,9 @@ set(CELEG_MODEL_SOURCES
     src/model/inference/binding.cpp
     src/model/inference/synthesis.cpp
     src/model/inference/report.cpp
-    src/model/resolved.cpp
+    src/model/resolved/fingerprint.cpp
+    src/model/resolved/topology.cpp
+    src/model/resolved/validation.cpp
     src/model/program.cpp
     src/model/program_builder.cpp
     src/model/program_fingerprint.cpp
