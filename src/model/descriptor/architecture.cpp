@@ -32,20 +32,60 @@ public:
             throw std::runtime_error("descriptor cannot resolve checkpoint: " + descriptor_.id);
         }
         const CheckpointMetadata& metadata = checkpoint.metadata;
-        const int hidden = integer_value(metadata, descriptor_.dimensions.at("hidden"));
-        const int query_heads = integer_value(metadata, descriptor_.dimensions.at("query_heads"));
         CheckpointDimensions checkpoint_dimensions;
         ModelGraph graph;
         NumericalPolicy numerical_policy;
-        const int intermediate = integer_value(
+        int hidden = 0;
+        int query_heads = 0;
+        int intermediate = 0;
+        int physical_layer_count = 0;
+        int layer_count = 0;
+        int conv_cache = 0;
+        int conv_dim = 0;
+        int kv_heads = 0;
+        int head_dim = 0;
+        resolve_dimensions(metadata, checkpoint_dimensions, hidden, query_heads, intermediate,
+                           physical_layer_count, layer_count, conv_cache, conv_dim,
+                           kv_heads, head_dim);
+        double rope_theta = 0.0;
+        std::vector<float> scheduled_rope_theta;
+        RopeScalingSpec scaling;
+        double rotary_fraction = 1.0;
+        resolve_rope_scaling(metadata, layer_count, numerical_policy, rope_theta,
+                             scheduled_rope_theta, scaling, rotary_fraction);
+        resolve_numerical_policy(metadata, hidden, intermediate, layer_count,
+                                 numerical_policy, graph);
+        std::vector<int> scheduled_kv_heads;
+        resolve_mixer_schedule(metadata, layer_count, intermediate, conv_cache, conv_dim,
+                               graph, scheduled_kv_heads);
+        resolve_moe_config(metadata, layer_count, graph);
+        resolve_recurrent_geometry(metadata, layer_count, graph);
+        resolve_attention_variants(metadata, checkpoint_dimensions, physical_layer_count,
+                                   layer_count, hidden, query_heads, kv_heads, head_dim,
+                                   rope_theta, scheduled_rope_theta, rotary_fraction, scaling,
+                                   scheduled_kv_heads, numerical_policy, graph);
+        return wire_stages(checkpoint, metadata, checkpoint_dimensions, numerical_policy, graph);
+    }
+
+private:
+    /// Extracts the checkpoint dimensions shared by every later phase.
+    void resolve_dimensions(const CheckpointMetadata& metadata,
+                            CheckpointDimensions& checkpoint_dimensions,
+                            int& hidden, int& query_heads, int& intermediate,
+                            int& physical_layer_count, int& layer_count,
+                            int& conv_cache, int& conv_dim,
+                            int& kv_heads, int& head_dim) const {
+        hidden = integer_value(metadata, descriptor_.dimensions.at("hidden"));
+        query_heads = integer_value(metadata, descriptor_.dimensions.at("query_heads"));
+        intermediate = integer_value(
             metadata, descriptor_.dimensions.at("intermediate"));
-        const int physical_layer_count = integer_value(metadata, descriptor_.dimensions.at("layers"));
+        physical_layer_count = integer_value(metadata, descriptor_.dimensions.at("layers"));
         const int repeat_count = descriptor_.repeat_count
             ? integer_value(metadata, *descriptor_.repeat_count) : 1;
         if (physical_layer_count <= 0 || repeat_count <= 0) {
             throw std::invalid_argument("descriptor has invalid layer schedule");
         }
-        const int layer_count = physical_layer_count * repeat_count;
+        layer_count = physical_layer_count * repeat_count;
         if (const auto mtp = descriptor_.dimensions.find("mtp_layers");
             mtp != descriptor_.dimensions.end()) {
             checkpoint_dimensions.mtp_num_hidden_layers = integer_value(metadata, mtp->second);
@@ -55,29 +95,36 @@ public:
             checkpoint_dimensions.vocab_size = static_cast<int>(metadata.strings("tokenizer.ggml.tokens").size());
         }
         checkpoint_dimensions.max_position_embeddings = integer_value(metadata, descriptor_.dimensions.at("context"));
-        const int conv_cache = descriptor_.convolution_cache.has_value()
+        conv_cache = descriptor_.convolution_cache.has_value()
             ? integer_value(metadata, *descriptor_.convolution_cache) : 0;
-        const int conv_dim = descriptor_.convolution_channels.has_value()
+        conv_dim = descriptor_.convolution_channels.has_value()
             ? integer_value(metadata, *descriptor_.convolution_channels, hidden) : 0;
-        const int kv_heads = integer_value(metadata, descriptor_.dimensions.at("kv_heads"));
-        const int head_dim = integer_value(metadata, descriptor_.dimensions.at("head_dim"), hidden, query_heads);
+        kv_heads = integer_value(metadata, descriptor_.dimensions.at("kv_heads"));
+        head_dim = integer_value(metadata, descriptor_.dimensions.at("head_dim"), hidden, query_heads);
         checkpoint_dimensions.token_policy.bos_token_id = token_value(metadata, descriptor_.bos, descriptor_.gguf_bos);
         checkpoint_dimensions.token_policy.eos_token_ids = eos_values(metadata, descriptor_);
         checkpoint_dimensions.token_policy.pad_token_id = token_value(metadata, descriptor_.pad, descriptor_.gguf_pad);
+    }
+
+    /// Resolves RoPE scaling, norm epsilons, the theta schedule and the rotary fraction.
+    void resolve_rope_scaling(const CheckpointMetadata& metadata, int layer_count,
+                              NumericalPolicy& numerical_policy, double& rope_theta,
+                              std::vector<float>& scheduled_rope_theta,
+                              RopeScalingSpec& scaling, double& rotary_fraction) const {
         const auto& numbers = descriptor_.numbers;
         numerical_policy.norm_eps = static_cast<float>(number_value(metadata, numbers.at("norm_eps")));
         numerical_policy.post_norm_eps = numbers.contains("post_norm_eps")
             ? static_cast<float>(number_value(metadata, numbers.at("post_norm_eps")))
             : numerical_policy.norm_eps;
-        const double rope_theta = number_value(metadata, numbers.at("rope_theta"));
-        const std::vector<float> scheduled_rope_theta = scaling_factor_values(
+        rope_theta = number_value(metadata, numbers.at("rope_theta"));
+        scheduled_rope_theta = scaling_factor_values(
             metadata, descriptor_.rope_theta_schedule);
         if (!scheduled_rope_theta.empty() && scheduled_rope_theta.size() !=
             static_cast<size_t>(layer_count)) {
             throw std::invalid_argument("descriptor RoPE schedule length does not match layer schedule");
         }
         const std::string scaling_kind = scaling_kind_value(metadata, descriptor_);
-        RopeScalingSpec scaling = parse_scaling_kind(scaling_kind);
+        scaling = parse_scaling_kind(scaling_kind);
         std::visit([&](auto& value) {
             using Scaling = std::decay_t<decltype(value)>;
             if constexpr (std::is_same_v<Scaling, NoRopeScaling>) {
@@ -117,8 +164,15 @@ public:
                 static_assert(always_false_v<Scaling>, "unhandled RoPE scaling variant");
             }
         }, scaling);
-        const double rotary_fraction = descriptor_.rotary_fraction.has_value()
+        rotary_fraction = descriptor_.rotary_fraction.has_value()
             ? number_value(metadata, *descriptor_.rotary_fraction) : 1.0;
+    }
+
+    /// Assembles the numerical policy and seeds the graph skeleton and per-layer defaults.
+    void resolve_numerical_policy(const CheckpointMetadata& metadata, int hidden,
+                                  int intermediate, int layer_count,
+                                  NumericalPolicy& numerical_policy, ModelGraph& graph) const {
+        const auto& numbers = descriptor_.numbers;
         numerical_policy.embedding_multiplier = static_cast<float>(
             number_value(metadata, numbers.at("embedding_multiplier"), hidden));
         numerical_policy.logits_multiplier = numbers.contains("logits_multiplier")
@@ -149,12 +203,18 @@ public:
                 numerical_policy.norm_eps, descriptor_.feed_forward_norm_kind};
             semantic_layer.residual.multiplier = numerical_policy.residual_multiplier;
         }
+    }
+
+    /// Applies the mixer-kind schedule (convolution / gated-delta / mamba / MLP-only layers).
+    void resolve_mixer_schedule(const CheckpointMetadata& metadata, int layer_count,
+                                int intermediate, int conv_cache, int conv_dim,
+                                ModelGraph& graph, std::vector<int>& scheduled_kv_heads) const {
         const std::vector<std::string> scheduled_mixer = mixer_schedule_values(metadata, descriptor_);
         if (!scheduled_mixer.empty() && scheduled_mixer.size() !=
             static_cast<size_t>(layer_count)) {
             throw std::invalid_argument("descriptor mixer schedule length does not match layer schedule");
         }
-        const std::vector<int> scheduled_kv_heads = field_integer_values(
+        scheduled_kv_heads = field_integer_values(
             metadata, descriptor_.kv_heads_schedule);
         if (!scheduled_kv_heads.empty() && scheduled_kv_heads.size() !=
             static_cast<size_t>(layer_count)) {
@@ -180,6 +240,11 @@ public:
                 }
             }
         }
+    }
+
+    /// Wires mixture-of-experts feed-forward specs (routing groups and shared experts).
+    void resolve_moe_config(const CheckpointMetadata& metadata, int layer_count,
+                            ModelGraph& graph) const {
         const int dense_layers = descriptor_.moe_dense_layers.has_value()
             ? integer_value(metadata, *descriptor_.moe_dense_layers) : layer_count;
         const int moe_experts = descriptor_.moe_experts.has_value()
@@ -245,6 +310,11 @@ public:
                     .router_softmax = router_softmax};
             }
         }
+    }
+
+    /// Fills in gated-delta-net and mamba mixer geometries on scheduled recurrent layers.
+    void resolve_recurrent_geometry(const CheckpointMetadata& metadata, int layer_count,
+                                    ModelGraph& graph) const {
         const int gated_key_heads = descriptor_.recurrent_key_heads.has_value()
             ? integer_value(metadata, *descriptor_.recurrent_key_heads) : 0;
         const int gated_value_heads = descriptor_.recurrent_value_heads.has_value()
@@ -289,6 +359,21 @@ public:
                                !metadata.is_gguf()};
             }
         }
+    }
+
+    /// Resolves per-layer attention variants: sliding windows, KV sharing, position
+    /// encodings (RoPE / M-RoPE / ALiBi / relative bias), state storage and KV sources.
+    void resolve_attention_variants(const CheckpointMetadata& metadata,
+                                    CheckpointDimensions& checkpoint_dimensions,
+                                    int physical_layer_count, int layer_count,
+                                    int hidden, int query_heads, int kv_heads, int head_dim,
+                                    double rope_theta,
+                                    const std::vector<float>& scheduled_rope_theta,
+                                    double rotary_fraction,
+                                    const RopeScalingSpec& scaling,
+                                    const std::vector<int>& scheduled_kv_heads,
+                                    const NumericalPolicy& numerical_policy,
+                                    ModelGraph& graph) const {
         if (descriptor_.map_physical_layers) {
             checkpoint_dimensions.checkpoint_layer_for_layer.resize(static_cast<size_t>(layer_count));
             for (int layer = 0; layer < layer_count; ++layer) {
@@ -515,6 +600,14 @@ public:
             }
             graph.layers[static_cast<size_t>(layer)].mixer = std::move(attention);
         }
+    }
+
+    /// Wires the resolution stages, provenance identity and the final ResolvedModel.
+    ResolvedModel wire_stages(const CheckpointView& checkpoint,
+                              const CheckpointMetadata& metadata,
+                              const CheckpointDimensions& checkpoint_dimensions,
+                              const NumericalPolicy& numerical_policy,
+                              const ModelGraph& graph) const {
         const bool has_per_layer_input = descriptor_.per_layer_input_size.has_value();
         const int per_layer_input_size = has_per_layer_input
             ? integer_value(metadata, *descriptor_.per_layer_input_size) : 0;
@@ -550,7 +643,6 @@ public:
         return result;
     }
 
-private:
     Descriptor descriptor_;
 };
 
