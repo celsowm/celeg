@@ -26,7 +26,13 @@ set(CELEG_MODEL_SOURCES
     src/model/inference/rules_recurrent.cpp
     src/model/inference/support.cpp
     src/model/inference/metadata.cpp
+    src/model/inference/metadata/aliases.cpp
+    src/model/inference/metadata/core.cpp
+    src/model/inference/metadata/attention.cpp
     src/model/inference/inventory.cpp
+    src/model/inference/inventory/access.cpp
+    src/model/inference/inventory/attention.cpp
+    src/model/inference/inventory/norm.cpp
     src/model/inference/tensor_inventory.cpp
     src/model/inference/binding.cpp
     src/model/inference/synthesis.cpp
