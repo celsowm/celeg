@@ -22,7 +22,9 @@ set(CELEG_MODEL_SOURCES
     src/model/inference/bindings/attention_policy.cpp
     src/model/inference/bindings/resolve.cpp
     src/model/inference/rules.cpp
-    src/model/inference/rules_attention.cpp
+    src/model/inference/rules/attention_shared.cpp
+    src/model/inference/rules/attention_standard.cpp
+    src/model/inference/rules/attention_latent.cpp
     src/model/inference/rules_recurrent.cpp
     src/model/inference/support.cpp
     src/model/inference/metadata.cpp
