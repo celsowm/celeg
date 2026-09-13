@@ -385,51 +385,19 @@ std::vector<int> token_list(const CheckpointMetadata& metadata, std::string_view
                                    "token metadata has an incompatible type: " + resolved_key);
 }
 
-}
+/// Local facts produced by `normalize_rope_position_facts` and consumed by
+/// `normalize_rope_pairing`; the original single function carried them as
+/// locals between the two statement clusters.
+struct RopePositionFacts {
+    std::optional<double> rope_theta;
+    std::optional<float> rotary_fraction;
+    std::vector<int> mrope_sections;
+    bool mrope_interleaved = false;
+    bool architecture_never_applies_rope = false;
+};
 
-void reject_prior_unknown_semantics(const CheckpointMetadata& metadata) {
-    /// Preserve the pre-ledger hard-fail for the original trigger family so
-    /// direct `normalize_model_metadata` callers (including existing tests)
-    /// still fail loudly on unknown `xsa`/`qk_norm`/`rope_pair` keys without
-    /// needing the full ledger (which only runs in `build_inference_input`).
-    static const std::unordered_set<std::string> known = {
-        "qk_norm", "query_key_norm", "use_qk_norm", "qk_norm_type", "xsa_projection",
-        "xsa_projection_minimum_norm_squared", "rope_pairing", "rope_interleaved",
-        "rope_theta", "rotary_fraction", "rope_scaling", "rope_parameters",
-        "embedding_multiplier", "attention_multiplier", "residual_multiplier",
-        "logits_multiplier", "logits_divisor", "logits_scaling",
-    };
-    for (const auto& [key, value] : metadata.values) {
-        (void)value;
-        const std::string_view semantic_key = key.starts_with("text_config.")
-            ? std::string_view(key).substr(std::string_view("text_config.").size())
-            : std::string_view(key);
-        const bool semantic_name = semantic_key.find("xsa") != std::string::npos ||
-            semantic_key.find("qk_norm") != std::string::npos ||
-            semantic_key.find("rope_pair") != std::string::npos;
-        if (semantic_name && !known.contains(std::string(semantic_key))) {
-            inference_detail::fail(
-                ResolutionFailureKind::UnsupportedSemanticFeature,
-                "automatic resolution does not know the mathematics of metadata key: " + key);
-        }
-    }
-}
-
-NormalizedModelMetadata normalize_model_metadata(const CheckpointMetadata& metadata) {
-    reject_prior_unknown_semantics(metadata);
-    /// Catalog selection reads the architecture identity before any rule
-    /// runs (`automatic_architecture.cpp` via `metadata.architecture_type()`
-    /// and `repository_hint`), through direct accessors that bypass the alias
-    /// choke point. Record those keys here so the ledger does not mistake
-    /// identity for unconsumed mathematics. Recording an absent key is a
-    /// no-op for the gate, which only iterates present keys.
-    for (const std::string_view key : {std::string_view("model_type"),
-                                        std::string_view("general.architecture"),
-                                        std::string_view("general.name"),
-                                        std::string_view("general.basename")}) {
-        if (metadata.contains(key)) inference_detail::record_metadata_consumption(key);
-    }
-    NormalizedModelMetadata result;
+/// Core dimensions cluster of `normalize_model_metadata`.
+void normalize_core_dims(const CheckpointMetadata& metadata, NormalizedModelMetadata& result) {
     result.core.hidden_size = aliases<int>(metadata, {"hidden_size", "n_embd", "d_model"},
                                            result.evidence, "hidden_size", "embedding_length");
     result.core.intermediate_size = scoped_aliases<int>(
@@ -452,6 +420,10 @@ NormalizedModelMetadata normalize_model_metadata(const CheckpointMetadata& metad
         "attention.head_count_kv");
     result.attention.head_dim = scoped_aliases<int>(metadata, {"head_dim"}, result.evidence, "head_dim",
                                                     "attention.key_length");
+}
+
+/// Mamba2 cluster of `normalize_model_metadata`.
+void normalize_mamba2_facts(const CheckpointMetadata& metadata, NormalizedModelMetadata& result) {
     result.mamba2.intermediate = aliases<int>(
         metadata, {"mamba_intermediate", "ssm_inner_size"}, result.evidence,
         "mamba_intermediate", "ssm.inner_size");
@@ -478,7 +450,12 @@ NormalizedModelMetadata normalize_model_metadata(const CheckpointMetadata& metad
     result.mamba2.decay_encoding = metadata.is_gguf()
         ? DecayParameterEncoding::Pretransformed
         : DecayParameterEncoding::LogA;
+}
 
+/// Vocabulary/tokenizer policy cluster of `normalize_model_metadata`; groups
+/// the three token-policy blocks that were non-contiguous in the original
+/// body, keeping their relative order.
+void normalize_token_vocab_policy(const CheckpointMetadata& metadata, NormalizedModelMetadata& result) {
     result.core.vocab_size = aliases<int>(metadata, {"vocab_size", "n_vocab"}, result.evidence,
                                           "vocab_size", "vocab_size");
     if (!result.core.vocab_size.has_value()) {
@@ -490,6 +467,18 @@ NormalizedModelMetadata normalize_model_metadata(const CheckpointMetadata& metad
     result.core.norm_epsilon = aliases<float>(
         metadata, {"norm_eps", "rms_norm_eps", "rms_norm_epsilon", "layer_norm_epsilon"},
         result.evidence, "norm_epsilon", "attention.layer_norm_rms_epsilon");
+    result.core.bos_token_id = aliases<int>(metadata,
+                                            {"bos_token_id", "tokenizer.ggml.bos_token_id"},
+                                            result.evidence, "bos_token_id");
+    result.core.pad_token_id = aliases<int>(metadata,
+                                            {"pad_token_id", "tokenizer.ggml.padding_token_id"},
+                                            result.evidence, "pad_token_id");
+    const std::vector<int> eos = token_list(metadata, "eos_token_id");
+    result.core.eos_token_ids = eos.empty() ? token_list(metadata, "eos_token_ids") : eos;
+}
+
+/// `norm_type` gate of `normalize_model_metadata`.
+void normalize_norm_type_gate(const CheckpointMetadata& metadata, NormalizedModelMetadata& result) {
     /// `norm_type` states the normalization kind explicitly: every norm celeg
     /// binds is RMS, so `rmsnorm` merely confirms it, while anything else
     /// fails loudly instead of resolving (e.g.) a LayerNorm as RMS.
@@ -506,6 +495,12 @@ NormalizedModelMetadata normalize_model_metadata(const CheckpointMetadata& metad
         result.evidence.push_back({EvidenceKind::ExplicitMetadata, std::string(candidate),
                                    "norm_type = rmsnorm"});
     }
+}
+
+/// Logit multiplier cluster of `normalize_model_metadata`, plus the adjacent
+/// KV-sharing, activation and short-conv statements that sat inside the same
+/// contiguous span.
+void normalize_logit_multipliers(const CheckpointMetadata& metadata, NormalizedModelMetadata& result) {
     result.core.embedding_multiplier = aliases<float>(
         metadata, {"embedding_multiplier"}, result.evidence,
         "embedding_multiplier");
@@ -536,6 +531,12 @@ NormalizedModelMetadata normalize_model_metadata(const CheckpointMetadata& metad
         feed_forward_activation(metadata, result.evidence);
     result.short_conv.cache_length = aliases<int>(metadata, {"conv_L_cache"}, result.evidence,
                                                   "shortconv_cache", "shortconv.l_cache");
+}
+
+/// RoPE theta/rotary/mrope cluster of `normalize_model_metadata`; returns the
+/// local facts the pairing resolution at the end of the original body read.
+RopePositionFacts normalize_rope_position_facts(const CheckpointMetadata& metadata,
+                                                NormalizedModelMetadata& result) {
     /// Per-pattern thetas (`rope_parameters.<layer_type>.rope_theta`) are resolved
     /// layer-wise in `normalize_attention_schedule` once the `layer_types` schedule
     /// is known; they are intentionally absent here so that disagreeing per-pattern
@@ -595,12 +596,12 @@ NormalizedModelMetadata normalize_model_metadata(const CheckpointMetadata& metad
             }
         }
     }
-    result.core.bos_token_id = aliases<int>(metadata,
-                                            {"bos_token_id", "tokenizer.ggml.bos_token_id"},
-                                            result.evidence, "bos_token_id");
-    result.core.pad_token_id = aliases<int>(metadata,
-                                            {"pad_token_id", "tokenizer.ggml.padding_token_id"},
-                                            result.evidence, "pad_token_id");
+    return RopePositionFacts{rope_theta, rotary_fraction, mrope_sections,
+                             mrope_interleaved, architecture_never_applies_rope};
+}
+
+/// QK-norm cluster of `normalize_model_metadata`.
+void normalize_qk_norm_facts(const CheckpointMetadata& metadata, NormalizedModelMetadata& result) {
     result.attention.query_key_norm = aliases<bool>(
         metadata, {"qk_norm", "query_key_norm", "use_qk_norm"}, result.evidence,
         "query_key_norm");
@@ -642,6 +643,12 @@ NormalizedModelMetadata normalize_model_metadata(const CheckpointMetadata& metad
                                        "query_key_norm = rmsnorm"});
         }
     }
+}
+
+/// Gated-delta key cluster of `normalize_model_metadata`, plus the adjacent
+/// feed-forward auto-adjust and first-dense-layer statements that started the
+/// same contiguous span.
+void normalize_gated_delta_facts(const CheckpointMetadata& metadata, NormalizedModelMetadata& result) {
     result.core.feed_forward_auto_adjust = aliases<bool>(
         metadata, {"block_auto_adjust_ff_dim"}, result.evidence,
         "feed_forward_auto_adjust");
@@ -692,7 +699,11 @@ NormalizedModelMetadata normalize_model_metadata(const CheckpointMetadata& metad
         metadata, {"layer_group_size", "global_attention_interval",
                    "full_attention_interval"}, result.evidence,
         "recurrent_hybrid_group_size");
+}
 
+/// Latent-attention cluster of `normalize_model_metadata`.
+void normalize_latent_attention_facts(const CheckpointMetadata& metadata,
+                                      NormalizedModelMetadata& result) {
     result.latent_attention.query_rank = aliases<int>(
         metadata, {"q_lora_rank"}, result.evidence, "latent_query_rank");
     result.latent_attention.kv_rank = aliases<int>(
@@ -726,6 +737,10 @@ NormalizedModelMetadata normalize_model_metadata(const CheckpointMetadata& metad
                                    "latent_output_gate_granularity"});
         break;
     }
+}
+
+/// MoE cluster of `normalize_model_metadata`.
+void normalize_moe_facts(const CheckpointMetadata& metadata, NormalizedModelMetadata& result) {
     result.moe.experts = aliases<int>(
         metadata, {"num_experts"}, result.evidence, "moe_experts");
     result.moe.experts_per_token = aliases<int>(
@@ -801,6 +816,11 @@ NormalizedModelMetadata normalize_model_metadata(const CheckpointMetadata& metad
                                    "moe_selection_method"});
         break;
     }
+}
+
+/// XSA/tied-embedding cluster of `normalize_model_metadata`, plus the scoped
+/// attention-head validations that followed it in the original body.
+void normalize_xsa_ties(const CheckpointMetadata& metadata, NormalizedModelMetadata& result) {
     result.attention.xsa_projection = aliases<bool>(metadata, {"xsa_projection"}, result.evidence,
                                                     "xsa_projection");
     result.attention.xsa_minimum_norm_squared = aliases<float>(
@@ -813,9 +833,11 @@ NormalizedModelMetadata normalize_model_metadata(const CheckpointMetadata& metad
     validate_scoped_alias(result.attention.query_heads, result.core.layer_count, "query_heads");
     validate_scoped_alias(result.attention.key_value_heads, result.core.layer_count, "key_value_heads");
     validate_scoped_alias(result.attention.head_dim, result.core.layer_count, "head_dim");
+}
 
-    const std::vector<int> eos = token_list(metadata, "eos_token_id");
-    result.core.eos_token_ids = eos.empty() ? token_list(metadata, "eos_token_ids") : eos;
+/// Defaults block of `normalize_model_metadata`.
+void normalize_defaults(const CheckpointMetadata& metadata, NormalizedModelMetadata& result) {
+    (void)metadata;
     if (!result.core.bos_token_id.has_value()) result.core.bos_token_id = 0;
     if (result.core.eos_token_ids.empty()) result.core.eos_token_ids = {0};
     if (!result.core.pad_token_id.has_value()) result.core.pad_token_id = 1;
@@ -829,7 +851,11 @@ NormalizedModelMetadata normalize_model_metadata(const CheckpointMetadata& metad
     if (!result.attention.query_key_norm.has_value()) result.attention.query_key_norm = false;
     if (!result.attention.xsa_projection.has_value()) result.attention.xsa_projection = false;
     if (!result.attention.xsa_minimum_norm_squared.has_value()) result.attention.xsa_minimum_norm_squared = 1.0e-6f;
+}
 
+/// `position_embedding_type` gate of `normalize_model_metadata`.
+void normalize_position_embedding_gate(const CheckpointMetadata& metadata,
+                                       NormalizedModelMetadata& result) {
     /// `position_embedding_type` states the global position policy
     /// explicitly; celeg resolves RoPE everywhere by default, so `rope`
     /// merely confirms it, while anything else fails loudly instead of
@@ -847,7 +873,17 @@ NormalizedModelMetadata normalize_model_metadata(const CheckpointMetadata& metad
         result.evidence.push_back({EvidenceKind::ExplicitMetadata, std::string(candidate),
                                    "position_embedding_type = rope"});
     }
+}
 
+/// RoPE pairing resolution of `normalize_model_metadata`; the trailing
+/// cluster that consumes the facts returned by `normalize_rope_position_facts`.
+void normalize_rope_pairing(const CheckpointMetadata& metadata, NormalizedModelMetadata& result,
+                            const RopePositionFacts& facts) {
+    const std::optional<double>& rope_theta = facts.rope_theta;
+    const std::optional<float>& rotary_fraction = facts.rotary_fraction;
+    const std::vector<int>& mrope_sections = facts.mrope_sections;
+    const bool mrope_interleaved = facts.mrope_interleaved;
+    const bool architecture_never_applies_rope = facts.architecture_never_applies_rope;
     if (architecture_never_applies_rope) {
         /// Some GGUF architectures (mostly hybrid recurrent/attention models
         /// whose position information already flows through the recurrent
@@ -930,6 +966,67 @@ NormalizedModelMetadata normalize_model_metadata(const CheckpointMetadata& metad
                 mrope_interleaved};
         }
     }
+}
+
+}
+
+void reject_prior_unknown_semantics(const CheckpointMetadata& metadata) {
+    /// Preserve the pre-ledger hard-fail for the original trigger family so
+    /// direct `normalize_model_metadata` callers (including existing tests)
+    /// still fail loudly on unknown `xsa`/`qk_norm`/`rope_pair` keys without
+    /// needing the full ledger (which only runs in `build_inference_input`).
+    static const std::unordered_set<std::string> known = {
+        "qk_norm", "query_key_norm", "use_qk_norm", "qk_norm_type", "xsa_projection",
+        "xsa_projection_minimum_norm_squared", "rope_pairing", "rope_interleaved",
+        "rope_theta", "rotary_fraction", "rope_scaling", "rope_parameters",
+        "embedding_multiplier", "attention_multiplier", "residual_multiplier",
+        "logits_multiplier", "logits_divisor", "logits_scaling",
+    };
+    for (const auto& [key, value] : metadata.values) {
+        (void)value;
+        const std::string_view semantic_key = key.starts_with("text_config.")
+            ? std::string_view(key).substr(std::string_view("text_config.").size())
+            : std::string_view(key);
+        const bool semantic_name = semantic_key.find("xsa") != std::string::npos ||
+            semantic_key.find("qk_norm") != std::string::npos ||
+            semantic_key.find("rope_pair") != std::string::npos;
+        if (semantic_name && !known.contains(std::string(semantic_key))) {
+            inference_detail::fail(
+                ResolutionFailureKind::UnsupportedSemanticFeature,
+                "automatic resolution does not know the mathematics of metadata key: " + key);
+        }
+    }
+}
+
+NormalizedModelMetadata normalize_model_metadata(const CheckpointMetadata& metadata) {
+    reject_prior_unknown_semantics(metadata);
+    /// Catalog selection reads the architecture identity before any rule
+    /// runs (`automatic_architecture.cpp` via `metadata.architecture_type()`
+    /// and `repository_hint`), through direct accessors that bypass the alias
+    /// choke point. Record those keys here so the ledger does not mistake
+    /// identity for unconsumed mathematics. Recording an absent key is a
+    /// no-op for the gate, which only iterates present keys.
+    for (const std::string_view key : {std::string_view("model_type"),
+                                        std::string_view("general.architecture"),
+                                        std::string_view("general.name"),
+                                        std::string_view("general.basename")}) {
+        if (metadata.contains(key)) inference_detail::record_metadata_consumption(key);
+    }
+    NormalizedModelMetadata result;
+    normalize_core_dims(metadata, result);
+    normalize_mamba2_facts(metadata, result);
+    normalize_token_vocab_policy(metadata, result);
+    normalize_norm_type_gate(metadata, result);
+    normalize_logit_multipliers(metadata, result);
+    const RopePositionFacts rope_facts = normalize_rope_position_facts(metadata, result);
+    normalize_qk_norm_facts(metadata, result);
+    normalize_gated_delta_facts(metadata, result);
+    normalize_latent_attention_facts(metadata, result);
+    normalize_moe_facts(metadata, result);
+    normalize_xsa_ties(metadata, result);
+    normalize_defaults(metadata, result);
+    normalize_position_embedding_gate(metadata, result);
+    normalize_rope_pairing(metadata, result, rope_facts);
     return result;
 }
 
