@@ -1,414 +1,489 @@
 # Celeg
 
-Celeg is a native C++20 inference runtime for LFM2, LFM2.5, Granite, MiniCPM5,
-SmolLM3, Muse Glimmer, and Nemotron 3 Nano language models. It provides independent CPU, NVIDIA CUDA, and Apple Metal
-backends, direct checkpoint loading, quantized execution, an OpenAI-compatible
-server, and a public C API.
+**Celeg is an architecture-agnostic, backend-agnostic native inference runtime for modern generative models.**
 
-Celeg does not bundle model weights. Supply a Hugging Face repository, a local
-Safetensors checkpoint directory, or a local GGUF file.
+It is written in C++20 and designed around a simple principle:
 
-## Support matrix
+> **Models describe computation. Backends execute it. Neither should own the runtime.**
 
-| Architecture | Safetensors | GGUF | CPU | CUDA | Metal |
-| --- | :---: | :---: | :---: | :---: | :---: |
-| LFM2/LFM2.5 dense | Yes | Yes | Yes | Yes | LFM2.5-350M |
-| LFM2/LFM2.5 MoE | Yes | Yes | Yes | Yes | LFM2.5-8B-A1B (demand-loaded) |
-| Granite dense | Yes | No | Yes | Yes | No |
-| MiniCPM5-1B | Yes | Yes | Yes | Yes | No |
-| SmolLM3-3B | Yes | Yes | Yes | Yes | No |
-| Nemotron 3 Nano 4B | Yes | Q4_K_M | Yes | Yes | No |
-| Muse Glimmer 30B | Yes | UD-IQ2_XXS* | Yes | Yes | No |
-| Ling KDA+MLA | Yes | No | Yes | Yes | No |
-| Lizzy-7B | Yes | Yes | Yes | Yes | No |
-| LFM2.5-VL-450M | Yes | No | Yes | Yes | No |
-| Nanbeige-3B | Yes | Yes | Yes | Yes | No |
-| Gemma-4 E4B | Yes | No | Yes (bf16) | Yes | E4B-it text-only † |
+Celeg is not built around a particular model family, tensor format, accelerator, or serving stack. Model architectures are translated into common runtime contracts and execution programs, while CPU, CUDA, and Metal implement those contracts independently.
 
-* Muse Glimmer is Tier A native text support and includes a registered Tier B
-image provider for the official Safetensors packaging. The CUDA loader also
-supports managed host-preferred weight residency for low-VRAM smoke checks;
-enable it with `CELEG_CUDA_MANAGED_WEIGHTS=1`.
+The goal is to make adding a new architecture mostly a matter of describing its semantics and bindings — not rewriting an inference engine.
 
-† Gemma-4 E4B is a base checkpoint; the instruct `gemma-4-E4B-it` text-only
-Metal path is in tree but not validated on this machine.
+Celeg currently runs transformer, hybrid attention/recurrent, state-space, Mixture-of-Experts, multimodal-aware, and quantized model families across native CPU, NVIDIA CUDA, and Apple Metal execution paths.
 
-MiniCPM5-1B uses the standard Llama tensor layout with GQA (16 query heads,
-2 KV heads), 131072-token context metadata, and both EOS markers from the
-official checkpoint. Its GGUF variants are selected with the `--quant` tag.
+---
 
-## Supported LFM checkpoints
+## Why Celeg
 
-| Variant | Hugging Face repository |
-| --- | --- |
-| LFM2.5 230M | `LiquidAI/LFM2.5-230M` |
-| LFM2.5 1.2B Instruct | `LiquidAI/LFM2.5-1.2B-Instruct` |
-| LFM2.5 1.2B Thinking | `LiquidAI/LFM2.5-1.2B-Thinking` |
-| LFM2.5 8B-A1B | `LiquidAI/LFM2.5-8B-A1B` |
-| LFM2 8B-A1B | `LiquidAI/LFM2-8B-A1B` |
-
-Granite checkpoints are selected from their `config.json`. The runtime
-expects the architecture metadata to identify Granite with
-`model_type: "granite"`.
-
-## MiniCPM5 checkpoints
-
-The BF16 repository is `openbmb/MiniCPM5-1B`; the GGUF repository is
-`openbmb/MiniCPM5-1B-GGUF`, with `Q4_K_M`, `Q8_0`, and `F16` files. After the
-repositories are present in the Hugging Face cache, run either format with:
+Most inference runtimes gradually accumulate model-specific execution paths:
 
 ```text
-celeg-run --repo openbmb/MiniCPM5-1B --prompt "Hello" --max-new-tokens 32
-celeg-run --repo openbmb/MiniCPM5-1B-GGUF:Q4_K_M --prompt "Hello" --max-new-tokens 32
+if model == X:
+    ...
+else if model == Y:
+    ...
 ```
 
-For the OpenAI-compatible server, `--repo openbmb/MiniCPM5-1B` selects
-Safetensors automatically, while `--repo openbmb/MiniCPM5-1B-GGUF` selects the
-GGUF repository and its `--quant` tag. The `minicpm5-instruct` profile renders
-the official `<|im_start|>` template, tool definitions, `<function>` calls,
-tool responses, and multiple EOS markers.
+Celeg is deliberately designed against that model.
 
-## SmolLM3 checkpoints
+A model family may define:
 
-The BF16 checkpoint is `HuggingFaceTB/SmolLM3-3B`; GGUF files are available in
-`ggml-org/SmolLM3-3B-GGUF` as `Q4_K_M`, `Q8_0`, and `F16`. SmolLM3 uses a
-hybrid NoPE/RoPE attention schedule and defaults to extended thinking. Use
-`/no_think` or `/think` in the system message to select the reasoning mode:
+- layer topology
+- tensor bindings
+- attention geometry
+- recurrent/state-space behavior
+- normalization
+- positional encoding
+- feed-forward structure
+- expert routing
+- output gating
+- chat/template metadata
+
+But execution belongs to reusable backend operators.
+
+The intended architecture is:
 
 ```text
-celeg-run --repo HuggingFaceTB/SmolLM3-3B --prompt "Explain gravity" --max-new-tokens 32
-celeg-run --repo ggml-org/SmolLM3-3B-GGUF:Q4_K_M --prompt "Explain gravity" --max-new-tokens 32
+                  Checkpoint
+                      │
+          ┌───────────┴───────────┐
+          │                       │
+     Safetensors                 GGUF
+          │                       │
+          └───────────┬───────────┘
+                      │
+               Model discovery
+                      │
+               Architecture
+                 description
+                      │
+               Runtime program
+                      │
+        ┌─────────────┼─────────────┐
+        │             │             │
+       CPU           CUDA          Metal
+        │             │             │
+        └─────────────┴─────────────┘
+                      │
+              Inference engine
+                      │
+          ┌───────────┼───────────┐
+          │           │           │
+         CLI       C API       HTTP API
 ```
 
-The `smollm3-instruct` profile supports the official `<|im_start|>` format,
-NoPE-aware execution, XML tool calls, `/system_override`, and `/think` /
-`/no_think` system flags.
+The backend does not need to know that a graph came from LFM, Granite, Agnes, Gemma, MiniCPM, or another architecture.
 
-## Nemotron 3 Nano checkpoints
+The architecture layer does not need to know whether its operators will execute using AVX, CUDA kernels, Metal compute pipelines, quantized GEMV, paged attention, or another implementation.
 
-Nemotron 3 Nano 4B is a 42-block hybrid model with 21 Mamba-2 blocks, 17
-ReLU² MLP-only blocks, and four GQA attention blocks. The supported BF16
-checkpoint is `nvidia/NVIDIA-Nemotron-3-Nano-4B-BF16`; the official GGUF
-repository supports its `Q4_K_M` file (about 2.84 GB):
+That separation is one of Celeg's core design constraints.
 
-```text
-celeg-cpu-run --repo nvidia/NVIDIA-Nemotron-3-Nano-4B-BF16 --context 4096 --prompt "Hello"
-celeg-run --repo nvidia/NVIDIA-Nemotron-3-Nano-4B-GGUF:Q4_K_M --context 4096 --prompt "Hello"
+---
+
+## Design principles
+
+### Architecture agnostic
+
+Model-specific knowledge is isolated from the generic runtime.
+
+Adding support for a new model should extend architecture description, tensor binding, or semantics without introducing model-name switches throughout the execution engine.
+
+### Backend agnostic
+
+The execution model is shared across backends.
+
+Celeg currently provides native:
+
+- **CPU**
+- **NVIDIA CUDA**
+- **Apple Metal**
+
+Backends may optimize operations differently while preserving the same semantic contract.
+
+### Format agnostic
+
+Checkpoint format is not the model architecture.
+
+Celeg can discover and execute models from:
+
+- Safetensors
+- sharded Safetensors
+- GGUF
+
+Format-specific loading is kept separate from execution semantics.
+
+### Quantization is an execution concern
+
+Quantized formats are represented explicitly and can have backend-native implementations rather than forcing every model through a dequantize-first abstraction.
+
+Supported paths include native GGUF quantized execution and backend-specific quantized kernels.
+
+### Semantics before kernels
+
+Shared semantic contracts define behavior before optimized implementations do.
+
+This is particularly important for areas such as:
+
+- attention
+- RoPE / scaled RoPE / MRoPE
+- recurrent state updates
+- online softmax
+- MoE routing
+- causal masking
+- KV-cache behavior
+- sampling
+
+Optimized kernels should implement those semantics, not redefine them.
+
+### No compatibility baggage
+
+Celeg favors replacing obsolete abstractions rather than maintaining internal compatibility layers indefinitely.
+
+The runtime is still evolving, and architectural clarity takes precedence over preserving stale internal APIs.
+
+---
+
+## What Celeg supports
+
+Celeg is intended to support model **structures and semantics**, not a hard-coded list of brands.
+
+The repository currently contains validated support for architectures including combinations of:
+
+- dense transformer blocks
+- grouped-query attention
+- hybrid NoPE/RoPE attention
+- scaled RoPE
+- MRoPE
+- recurrent/state-space blocks
+- Mamba-2
+- gated-delta style layers
+- parallel feed-forward branches
+- Mixture-of-Experts
+- fused output gates
+- dynamic and sparse attention structures
+- multimodal-aware model descriptions
+
+These capabilities are exercised today by checkpoints from families such as:
+
+- LFM2 / LFM2.5
+- Granite
+- MiniCPM5
+- SmolLM3
+- Nemotron 3 Nano
+- Muse Glimmer
+- Ling
+- Lizzy
+- Nanbeige
+- Gemma 4
+- Agnes
+
+Model families are **validation targets**, not architectural dependencies of the runtime.
+
+Support differs by backend and checkpoint format. See the model sweep and backend documentation for the currently validated combinations.
+
+---
+
+## Execution backends
+
+### CPU
+
+The CPU backend provides native execution without requiring CUDA or Metal.
+
+Depending on the host and operation, Celeg can use optimized execution paths including:
+
+- scalar implementations
+- AVX2
+- VNNI
+- BF16 paths
+- quantized kernels
+- packed execution
+- configurable threading and affinity
+
+### CUDA
+
+The CUDA backend is designed for native GPU inference and includes infrastructure for:
+
+- CUDA Graphs
+- cuBLAS / cuBLASLt
+- native quantized weights
+- paged KV cache
+- prefix reuse
+- packed prefill
+- batched execution
+- expert offload
+- MoE execution
+- backend-native attention kernels
+- recurrent and hybrid architectures
+
+### Metal
+
+The Metal backend targets Apple Silicon using native Metal compute kernels.
+
+It is not a wrapper around another inference runtime.
+
+Coverage is actively expanding toward the same architecture-level semantics implemented by CPU and CUDA, including quantized execution, attention variants, recurrent structures, RoPE/MRoPE variants, and MoE paths.
+
+---
+
+## Model loading
+
+Celeg does not bundle model weights.
+
+Models can be loaded from:
+
+- a Hugging Face repository already present in the local cache
+- a local Safetensors checkpoint directory
+- a local GGUF file
+
+### Hugging Face cache
+
+```bash
+celeg-run \
+  --repo LiquidAI/LFM2.5-230M \
+  --prompt "Explain CUDA in one sentence." \
+  --max-new-tokens 32
 ```
 
-The `nemotron-h-instruct` profile supports `system`, `user`, and `assistant`
-messages and the official thinking markers. Pass `enable_thinking=false` in
-chat-template options to emit an empty `<think></think>` section. Native
-XML tool-calling is intentionally not advertised for this profile.
+Celeg resolves the checkpoint directly from the local Hugging Face cache.
 
-## Requirements
+A model can be downloaded with:
 
-For CPU builds:
+```bash
+celeg-download LiquidAI/LFM2.5-230M
+```
 
-- CMake 3.24 or newer.
-- A C++20 compiler.
-- Python 3 for the developer helper.
+### Local Safetensors
 
-For CUDA builds, add a compatible NVIDIA CUDA Toolkit and GPU. CUDA is
-optional; the CPU backend can be built without it.
+```bash
+celeg-run \
+  --model path/to/checkpoint \
+  --prompt "Hello"
+```
 
-For Metal builds, use an Apple Silicon Mac with the macOS SDK and an
-Objective-C++ compiler. The native Metal path covers the cached LFM2.5-350M
-convolution/attention model, native Q4_K/Q6_K GGUF kernels, and one-token
-demand-loaded inference for the cached LFM2.5-8B-A1B MoE checkpoint. Text-only
-inference for the cached Gemma-4 E4B-it instruct checkpoint (through the
-generic Jinja interpreter) is present in tree but is not part of the automated
-CPU/CUDA sweep and has not been validated on this machine.
+Sharded checkpoints using `model.safetensors.index.json` are supported.
 
-The repository is developed and tested on Windows and Linux. On Windows,
-executables have an `.exe` suffix.
+### Local GGUF
 
-## Build and verify
+```bash
+celeg-run \
+  --model path/to/model.gguf \
+  --prompt "Hello"
+```
 
-The portable developer entrypoint discovers the available compiler, CUDA
-toolkit, GPU architecture, and runtime dependencies:
+GGUF metadata, tokenizer information, tensor structure, and quantization information are read directly from the file.
+
+---
+
+## Chat templates
+
+Chat behavior is also model-agnostic.
+
+Celeg can compile Hugging Face/Jinja chat templates obtained from checkpoint metadata or companion template files.
+
+The runtime includes a deterministic restricted Jinja implementation supporting the constructs needed by modern model templates while rejecting unsafe or unsupported behavior.
+
+Template handling includes support for concepts such as:
+
+- system/user/assistant roles
+- generation prompts
+- thinking modes
+- tools
+- tool calls
+- tool responses
+- multiple EOS markers
+
+A template can also be overridden explicitly:
+
+```bash
+celeg-run \
+  --model path/to/model \
+  --chat-template-file path/to/chat_template.jinja
+```
+
+---
+
+## OpenAI-compatible server
+
+Celeg includes an HTTP server exposing an OpenAI-compatible interface:
+
+```bash
+celeg-serve \
+  --model path/to/model \
+  --backend cuda \
+  --port 8080 \
+  --served-model-name celeg
+```
+
+The same server can use:
 
 ```text
+--backend cpu
+--backend cuda
+--backend metal
+```
+
+The serving layer is intentionally separate from model semantics and backend execution.
+
+---
+
+## C API
+
+Celeg exposes a public C ABI through:
+
+```text
+include/celeg/api.h
+```
+
+The C interface makes the runtime usable from other languages and environments such as:
+
+- C
+- C++
+- Rust
+- Zig
+- Node.js native addons
+- Python native extensions
+- other FFI-capable runtimes
+
+It provides APIs for model creation, tokenization, inference requests, stepping, polling, cancellation, backend capabilities, and diagnostics.
+
+See `docs/API.md` for details.
+
+---
+
+## Build
+
+Requirements:
+
+- CMake 3.24+
+- C++20 compiler
+- Python 3 for development tooling
+
+CUDA builds additionally require a compatible NVIDIA CUDA Toolkit.
+
+Metal builds require Apple Silicon and the macOS SDK.
+
+The recommended developer entrypoint is:
+
+```bash
 python scripts/dev.py doctor
 python scripts/dev.py verify --backend cpu
 python scripts/dev.py verify --backend cuda
 python scripts/dev.py verify --backend metal
 ```
 
-Use `--backend auto` to select CUDA when available and CPU otherwise. Other
-useful options are `--build-type Release`, `--arch 86`, `--jobs 8`, and
-`--build-dir PATH`.
+Or build using CMake presets:
 
-The helper supports these commands:
-
-```text
-python scripts/dev.py doctor
-python scripts/dev.py build --backend cpu
-python scripts/dev.py test --backend cpu
-python scripts/dev.py smoke --backend cuda
-python scripts/dev.py verify --backend cpu
-```
-
-`verify` performs a fresh configure, build, and test run. Build directories are
-written under `out/` by default.
-
-For direct CMake builds, use the checked-in presets:
-
-```text
+```bash
 cmake --preset cpu-relwithdebinfo
 cmake --build --preset cpu-relwithdebinfo
 ctest --preset cpu-relwithdebinfo
 ```
 
-CUDA presets are named `cuda-release` and `cuda-relwithdebinfo`.
-Metal presets are named `metal-release` and `metal-relwithdebinfo`.
+CUDA and Metal presets are also provided.
 
-## Obtain a model
+---
 
-### Hugging Face cache
+## Architecture development
 
-The `--repo` option resolves a repository from the local Hugging Face cache.
-This is the preferred workflow when a checkpoint has already been downloaded:
+When adding a new model architecture, the preferred direction is:
 
 ```text
-celeg-cpu-run --repo LiquidAI/LFM2.5-230M \
-  --prompt "Explain CUDA in one sentence." \
-  --max-new-tokens 32
+checkpoint metadata
+        ↓
+architecture interpretation
+        ↓
+tensor / semantic bindings
+        ↓
+shared runtime representation
+        ↓
+existing backend operators
 ```
 
-The CUDA runner uses the same repository IDs:
+A new model should not normally require:
 
 ```text
-celeg-run --repo LiquidAI/LFM2.5-230M \
-  --prompt "Explain CUDA in one sentence." \
-  --max-new-tokens 32
+CPU model-specific forward()
+CUDA model-specific forward()
+Metal model-specific forward()
 ```
 
-On Apple Silicon, the Metal runner uses the same cached checkpoint resolution:
+If a model introduces genuinely new semantics, those semantics should become explicit runtime concepts and then receive backend implementations.
+
+This keeps new architecture support additive rather than multiplying independent inference engines.
+
+---
+
+## Validation
+
+Celeg uses several levels of validation:
+
+- unit tests
+- semantic/reference tests
+- cross-backend comparisons
+- checkpoint smoke tests
+- model sweeps
+- numerical comparisons
+- quantization quality checks
+- deterministic benchmark manifests
+- real checkpoint parity tests
+
+Optimizations are expected to preserve semantic behavior across backends.
+
+The repository also contains reproducible benchmark manifests under:
 
 ```text
-celeg-metal-run --repo LiquidAI/LFM2.5-350M-GGUF \
-  --prompt "Explain gravity in one sentence." \
-  --max-new-tokens 32
+benchmarks/manifests/
 ```
 
-The cached MoE checkpoint can be smoke-tested on Metal with demand-loaded
-experts:
+and model/backend validation reports under:
 
 ```text
-celeg-metal-run --repo LiquidAI/LFM2.5-8B-A1B \
-  --context 64 --prompt "Hello" --max-new-tokens 1
+docs/
 ```
 
-Gemma-4 E4B-it (the *instruct* variant, distinct from the base
-`google/gemma-4-E4B` exercised by the sweep) can be smoke-tested through the
-cached repository as a text-only Metal run. Its upstream template is supported
-by CELEG's generic Jinja interpreter. This path is not covered by the automated
-CPU/CUDA sweep and has not been validated on this machine:
+---
+
+## Project status
+
+Celeg is under active development.
+
+The architectural direction is stable — **one model-independent runtime with multiple native execution backends** — but backend coverage and performance are still evolving rapidly.
+
+CPU and CUDA currently have the broadest validated model coverage. Metal support is actively converging on the same semantic surface.
+
+Not every checkpoint × format × backend combination should be assumed to work merely because an architecture is represented in the runtime. Refer to the current model sweep and backend validation reports for tested combinations.
+
+---
+
+## What Celeg is not
+
+Celeg is not:
+
+- a wrapper around llama.cpp
+- a wrapper around PyTorch
+- a CUDA-only inference engine
+- an LFM-specific runtime
+- a collection of unrelated model implementations
+- tied to GGUF
+- tied to Safetensors
+- tied to Hugging Face
+- tied to the OpenAI API
+
+Those are integrations, formats, validation targets, or execution environments around the runtime — not its architecture.
+
+---
+
+## Long-term direction
+
+Celeg aims to make native model inference composable across:
 
 ```text
-celeg-metal-run --repo google/gemma-4-E4B-it \
-  --context 64 --prompt "Hello" --max-new-tokens 4
+models × checkpoint formats × quantizations × execution backends
 ```
 
-The Metal benchmark uses the same cached file without downloading it:
+without making those dimensions depend on each other.
 
-```text
-python benchmarks/run_metal_bench.py \
-  benchmarks/manifests/metal_lfm25_350m_q4_k_m.json
-```
+The long-term goal is straightforward:
 
-Use `celeg-download` to populate the Hugging Face cache from a repository:
-
-```text
-celeg-download LiquidAI/LFM2.5-230M
-```
-
-The project script provides convenient LFM2.5 presets and downloads into a
-local directory:
-
-```text
-./scripts/download_model.sh 230m
-./scripts/download_model.sh 1.2b-instruct
-./scripts/download_model.sh 1.2b-thinking
-./scripts/download_model.sh 8b-a1b
-```
-
-### Local Safetensors
-
-For a local Safetensors checkpoint, pass the directory containing
-`config.json`, tokenizer files, and either `model.safetensors` or a
-`model.safetensors.index.json` plus its shards:
-
-```text
-celeg-cpu-run --model path/to/checkpoint-directory \
-  --prompt "Write a short welcome message." \
-  --max-new-tokens 32
-```
-
-This also works for Granite checkpoints whose `config.json` declares
-`model_type: "granite"`.
-
-### Local GGUF
-
-GGUF checkpoints are concrete files, not checkpoint directories. Pass the
-`.gguf` file directly to the runner:
-
-```text
-celeg-cpu-run --model path/to/model.gguf \
-  --prompt "Write a short welcome message." \
-  --max-new-tokens 32
-```
-
-CUDA GGUF inference can select native GGUF weight handling explicitly:
-
-```text
-celeg-run --model path/to/model.gguf \
-  --weight-mode native \
-  --prompt "Write a short welcome message." \
-  --max-new-tokens 32
-```
-
-Celeg reads GGUF model metadata and tokenizer data directly. Supported GGUF
-execution is selected from tensor structure and checkpoint evidence rather
-than a repository or architecture-name switch. The cached LFM2.5-350M,
-MiniCPM5-1B, Nemotron-3-Nano-4B, and Qwen3.5-0.8B GGUF fixtures exercise dense
-and hybrid attention/recurrent schedules through that same path.
-
-### Chat-template resolution
-
-Chat behavior is model-agnostic. Celeg compiles a deterministic Hugging Face
-chat template supplied by checkpoint metadata or a companion
-`chat_template.jinja`, or—for GGUF files without either—infers a
-role-delimited program only when the tokenizer proves its BOS, role delimiter,
-turn terminator, and assistant-generation prefix. It reports the source,
-fingerprint, and any inference diagnostic on startup and `--print-config`.
-A present template that uses unsupported or unsafe Jinja constructs fails with
-a source location rather than changing the prompt format.
-
-The deterministic safe-Jinja boundary includes variables, branches, loops,
-`set`, macros, string/list operations, JSON rendering, and the thinking/tool
-fields exposed by the canonical message data model. Includes/imports, I/O,
-dynamic execution, and object introspection are rejected. Tool definitions
-may be rendered by any template; a tool-enabled completion is accepted only
-when the compiled program also proves a supported response grammar.
-
-Use `--chat-template-file path/to/chat_template.jinja` with `celeg-run`,
-`celeg-cpu-run`, or `celeg-serve` to override checkpoint metadata. The override
-is read once when the model loads and is used by chat completions and
-tokenization alike.
-
-The cached LFM2.5 350M GGUF can be used directly on CUDA:
-
-```text
-celeg-run --repo LiquidAI/LFM2.5-350M-GGUF:Q4_K_M --prompt "Hello" --max-new-tokens 32
-```
-
-## Runner options
-
-Both runners support model selection, prompts, context length, maximum output
-tokens, sampling controls, and memory reporting. The CUDA runner additionally
-supports CUDA Graphs, cuBLAS/cuBLASLt selection, quantized weight modes,
-attention modes, paged KV cache controls, session persistence, and LFM2-MoE
-expert offload.
-
-Inspect the complete options for the binary produced by your build:
-
-```text
-celeg-cpu-run --help
-celeg-run --help
-```
-
-Typical CPU controls include `--cpu-isa`, `--threads`, `--cpu-kv-cache`,
-`--cpu-prefill-chunk`, and `--cpu-affinity`. Typical CUDA controls include
-`--weight-mode`, `--kv-cache`, `--attention-mode`, `--no-cuda-graph`, and
-`--expert-offload`.
-
-## OpenAI-compatible server
-
-`celeg-serve` exposes an OpenAI-compatible HTTP API. It uses a local model path
-and can select the CPU, CUDA, or Metal backend:
-
-```text
-celeg-serve \
-  --model path/to/checkpoint-directory \
-  --backend cpu \
-  --port 8080 \
-  --served-model-name celeg
-```
-
-Start the CUDA or Metal version by changing `--backend cpu` to `--backend cuda`
-or `--backend metal`. The server provides health, model, tokenizer, and
-chat-completion routes. See the
-generated API documentation served by the process for the exact HTTP schema.
-
-## C API
-
-The public C ABI is declared in [`include/celeg/api.h`](include/celeg/api.h).
-It uses the `celeg_*` function and type namespace and is suitable for C, Rust,
-Zig, Node native addons, and other FFI consumers.
-
-The API supports:
-
-- CPU model creation and direct prefill/decode.
-- Request-oriented engine submission, polling, stepping, and cancellation.
-- Tokenizer encoding and decoding with caller-provided buffers.
-- Backend capability and diagnostic queries.
-
-See [`API.md`](API.md) for initialization rules, handle ownership, status
-codes, and short C examples.
-
-## Features
-
-- LFM2/LFM2.5 dense and MoE model variants.
-- Granite dense architecture support through the same backend-neutral model
-  contracts.
-- Safetensors, sharded Safetensors, and LFM2/LFM2-MoE GGUF loading.
-- CPU scalar, AVX2, and VNNI execution paths where available.
-- CUDA quantized weights, paged KV cache, prefix reuse, packed prefill and
-  decode, CUDA Graphs, and cuBLAS/cuBLASLt.
-- LFM2-MoE expert residency, host offload, and cache policies.
-- Concurrent scheduling, session persistence, diagnostics, and benchmarks.
-
-## Benchmarks and architecture
-
-- [`BENCHMARK.md`](BENCHMARK.md) contains benchmark commands and reproducible
-  comparison procedures.
-- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) describes model providers,
-  checkpoint contracts, runtime scheduling, and backend boundaries.
-- [`docs/ARCHITECTURE_RULES.md`](docs/ARCHITECTURE_RULES.md) records the
-  architectural constraints used for changes.
-- [`scripts/gguf_census.py`](scripts/gguf_census.py) inventories GGUF tensor
-  types and estimated traffic.
-- [`scripts/profile_decode.py`](scripts/profile_decode.py) profiles decode
-  phases and can compare CUDA configurations.
-
-## Troubleshooting
-
-### CUDA is unavailable
-
-Run `python scripts/dev.py doctor --backend cuda --json` to inspect the CUDA
-toolkit, compiler, GPU architecture, and runtime libraries. If CUDA is not
-available, build and run the CPU backend explicitly.
-
-### A repository cannot be resolved
-
-`--repo` requires the requested snapshot to exist in the local Hugging Face
-cache. Run `celeg-download REPO_ID` or `scripts/download_model.sh VARIANT`,
-then retry. Use `--model` when the checkpoint is stored at a known local path.
-
-### A Safetensors checkpoint fails to load
-
-Confirm that the directory contains `config.json`, tokenizer files, and either
-an unsharded `model.safetensors` or every shard referenced by
-`model.safetensors.index.json`.
-
-### A GGUF checkpoint fails to load
-
-Confirm that the path points to a `.gguf` file and that its metadata describes
-an LFM2 or LFM2-MoE model. Granite GGUF files are not supported by the current
-loader.
-
-## License
-
-See [`LICENSE`](LICENSE).
+> **Describe a model once. Execute it anywhere Celeg has a backend.**
