@@ -25,7 +25,8 @@ set(CELEG_MODEL_SOURCES
     src/model/inference/rules/attention_shared.cpp
     src/model/inference/rules/attention_standard.cpp
     src/model/inference/rules/attention_latent.cpp
-    src/model/inference/rules_recurrent.cpp
+    src/model/inference/rules/recurrent_gated_delta.cpp
+    src/model/inference/rules/recurrent_mamba.cpp
     src/model/inference/support.cpp
     src/model/inference/metadata.cpp
     src/model/inference/metadata/aliases.cpp
