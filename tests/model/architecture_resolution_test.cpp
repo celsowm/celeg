@@ -19,21 +19,20 @@ int main() {
     const auto runtime = celeg::create_builtin_runtime_context();
     const auto& catalog = runtime->architectures();
 
-    using namespace celeg::architecture_resolution_test;
-    run_structural_tests(catalog);
-    run_identity_tests(catalog);
-    run_norm_layout_tests(catalog);
-    run_failure_modes_tests(catalog);
-    run_sliding_window_tests(catalog);
-    run_yarn_tests(catalog);
-    run_postnorm_evidence_tests(catalog);
-    run_rope_layer_schedule_tests(catalog);
-    run_stated_policy_tests(catalog);
-    run_gguf_spelling_tests(catalog);
-    run_late_failure_modes_tests(catalog);
-    run_topology_fixture_tests(catalog);
-    run_hybrid_kda_mla_tests(catalog);
-    run_catalog_tests();
+    celeg::architecture_resolution_test::run_structural_tests(catalog);
+    celeg::architecture_resolution_test::run_identity_tests(catalog);
+    celeg::architecture_resolution_test::run_norm_layout_tests(catalog);
+    celeg::architecture_resolution_test::run_failure_modes_tests(catalog);
+    celeg::architecture_resolution_test::run_sliding_window_tests(catalog);
+    celeg::architecture_resolution_test::run_yarn_tests(catalog);
+    celeg::architecture_resolution_test::run_postnorm_evidence_tests(catalog);
+    celeg::architecture_resolution_test::run_rope_layer_schedule_tests(catalog);
+    celeg::architecture_resolution_test::run_stated_policy_tests(catalog);
+    celeg::architecture_resolution_test::run_gguf_spelling_tests(catalog);
+    celeg::architecture_resolution_test::run_late_failure_modes_tests(catalog);
+    celeg::architecture_resolution_test::run_topology_fixture_tests(catalog);
+    celeg::architecture_resolution_test::run_hybrid_kda_mla_tests(catalog);
+    celeg::architecture_resolution_test::run_catalog_tests();
 
     std::cout << "architecture_resolution_test: ok\n";
 }

@@ -13,14 +13,13 @@ int main() {
     catalog.add(celeg::make_automatic_architecture());
     catalog.freeze();
 
-    using namespace celeg::automatic_inference_test;
-    run_hf_fixtures_tests(catalog);
-    run_gguf_resolution_tests(catalog);
-    run_hybrid_gguf_tests(catalog);
-    run_alias_conflict_tests();
-    run_layer_facts_tests(catalog);
-    run_ling_hybrid_tests(catalog);
-    run_qwen35_tests(catalog);
-    run_agnes_tests(catalog);
+    celeg::automatic_inference_test::run_hf_fixtures_tests(catalog);
+    celeg::automatic_inference_test::run_gguf_resolution_tests(catalog);
+    celeg::automatic_inference_test::run_hybrid_gguf_tests(catalog);
+    celeg::automatic_inference_test::run_alias_conflict_tests();
+    celeg::automatic_inference_test::run_layer_facts_tests(catalog);
+    celeg::automatic_inference_test::run_ling_hybrid_tests(catalog);
+    celeg::automatic_inference_test::run_qwen35_tests(catalog);
+    celeg::automatic_inference_test::run_agnes_tests(catalog);
     return 0;
 }
