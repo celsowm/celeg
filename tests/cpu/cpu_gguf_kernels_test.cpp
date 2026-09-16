@@ -3,6 +3,7 @@
 #include "celeg/backend/cpu/linear.hpp"
 #include "celeg/backend/cpu/model.hpp"
 #include "celeg/checkpoint/formats/gguf.hpp"
+#include "celeg/quantization/scalars.hpp"
 #include "support/assertions.hpp"
 
 #include <algorithm>
@@ -616,6 +617,58 @@ int main() {
         }
     } else {
         std::cout << "real_gguf SKIP (set CELEG_GGUF_TEST_FILE)\n";
+    }
+
+    /// Host Q4_K encoder roundtrip: pack deterministic pseudo-random rows
+    /// (including a constant row, a negative-only row and an outlier row)
+    /// with quantize_f32_q4k and read them back through ggml_decode_row;
+    /// per-sub-block max relative-to-range error must stay under half of
+    /// the (hi-lo)/15 quantization step plus a fp16-scales slack.
+    {
+        constexpr size_t rows = 6;
+        constexpr size_t cols = 512;  /// two superblocks per row
+        std::vector<float> in(rows * cols);
+        for (size_t i = 0; i < in.size(); ++i) {
+            in[i] = std::sin(static_cast<float>(i) * 0.37f) *
+                    std::cos(static_cast<float>(i) * 0.011f) * 2.0f;
+        }
+        for (size_t i = 0; i < cols; ++i) in[cols + i] = 1.25f;
+        for (size_t i = 0; i < cols; ++i) in[2 * cols + i] = -0.5f;
+        in[cols + 100] = 9.75f;
+        for (size_t i = 0; i < cols; ++i) in[5 * cols + i] *= 1.0e-4f;
+        const std::vector<std::uint8_t> packed =
+            celeg::quantize_f32_q4k(in, rows, cols);
+        CELEG_TEST_CHECK(packed.size() == rows * (cols / 256) * 144);
+        celeg::GgmlMatrixView matrix{celeg::GgmlType::Q4_K,
+                                     static_cast<std::uint32_t>(rows),
+                                     static_cast<std::uint32_t>(cols),
+                                     reinterpret_cast<const std::byte*>(
+                                         packed.data()),
+                                     packed.size()};
+        matrix.validate();
+        std::vector<float> decoded(cols);
+        for (size_t row = 0; row < rows; ++row) {
+            celeg::ggml_decode_row(matrix, row, decoded.data());
+            float amax = 0.0f;
+            for (size_t i = 0; i < cols; ++i) {
+                amax = std::max(amax, std::fabs(in[row * cols + i]));
+            }
+            /// Worst-case per-element error is half a sub-block step
+            /// ((range/15)/2 ~ amax/15), plus fp16 super-scale slack.
+            const float tolerance = amax / 8.0f + 1.0e-3f;
+            for (size_t i = 0; i < cols; ++i) {
+                const float expected = in[row * cols + i];
+                const float actual = decoded[i];
+                if (std::fabs(actual - expected) > tolerance) {
+                    fprintf(stderr,
+                            "Q4K roundtrip row=%zu col=%zu expected=%f "
+                            "actual=%f\n",
+                            row, i, expected, actual);
+                    fflush(stderr);
+                }
+                CELEG_TEST_CHECK(std::fabs(actual - expected) <= tolerance);
+            }
+        }
     }
 
     std::cout << "cpu_gguf_kernels_test: isa=" << celeg::cpu_isa_name(isa)

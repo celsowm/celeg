@@ -87,6 +87,22 @@ int main() {
         CELEG_TEST_CHECK(throws_oob);
     }
 
+    {
+        /// Releasing consumed pages is best-effort and repeatable: unknown
+        /// names are ignored, and a released tensor faults straight back
+        /// in on its next read.
+        celeg::SafeTensorFile file(path.string());
+        file.release("no-such-tensor");
+        file.release("x");
+        const auto tensor = file.tensor("x");
+        CELEG_TEST_CHECK(tensor.bytes == 4);
+        CELEG_TEST_CHECK(std::memcmp(tensor.data, values, 4) == 0);
+        celeg::TensorLocator loc = file.locate("x");
+        std::vector<std::byte> dest(4);
+        file.read(loc, dest);
+        CELEG_TEST_CHECK(std::memcmp(dest.data(), values, 4) == 0);
+    }
+
     CELEG_TEST_CHECK(rejects(path,
                    R"({"x":{"dtype":"BF16","shape":[3],"data_offsets":[0,4]}})",
                    values, sizeof(values)));

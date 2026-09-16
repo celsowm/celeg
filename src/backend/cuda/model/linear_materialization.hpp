@@ -54,6 +54,14 @@ std::optional<LinearSource> classify_linear_source(
     std::string_view name,
     std::span<const std::int64_t> expected);
 
+/// Unified bisect predicate over CELEG_BF16_LAYERS (layer indices/ranges,
+/// "head", "all") and CELEG_BF16_FORMATS ("fp8", "nvfp4", "all"). Each
+/// unset filter matches everything in its dimension; when both are set a
+/// tensor must match both (intersection), so one format can be bisected
+/// within a layer range that fits in VRAM. Both unset disables the
+/// override entirely.
+bool debug_bisect_hit(std::string_view name, std::string_view format);
+
 DeviceWeight materialize_linear(
     const LinearSource& source,
     WeightMode mode,

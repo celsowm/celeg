@@ -86,11 +86,16 @@ void CudaCompiledModel::warmup_decode_gemms() {
     linear(workspace_.normed_.data(), *attention_layer->query, workspace_.qkv_output_.data(),
            1, query_projection_width, resources_.program_.hidden);
     if (attention_layer->key && attention_layer->value) {
+        /// Key/value follow the full packed query projection, not the bare
+        /// query width: with a packed Q+Gate projection the query GEMM above
+        /// writes query_projection_width elements (mirrors
+        /// make_cuda_qkv_projection_view). Warmup outputs are discarded, but
+        /// the offsets must still agree with the decode layout.
         linear(workspace_.normed_.data(), *attention_layer->key,
-               workspace_.qkv_output_.data() + layout.query_width(),
+               workspace_.qkv_output_.data() + query_projection_width,
                1, layout.key_value_width(), resources_.program_.hidden);
         linear(workspace_.normed_.data(), *attention_layer->value,
-               workspace_.qkv_output_.data() + layout.query_width() + layout.key_value_width(),
+               workspace_.qkv_output_.data() + query_projection_width + layout.key_value_width(),
                1, layout.key_value_width(), resources_.program_.hidden);
     }
     if (const DenseFfnWeights* dense = as_dense_ffn(first_common.feed_forward)) {

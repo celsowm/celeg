@@ -172,4 +172,15 @@ std::filesystem::path SafeTensorRepository::shard_path(std::uint32_t shard_id) c
     return dir_ / shard_filenames_[shard_id];
 }
 
+void SafeTensorRepository::release(std::string_view name) const {
+    if (!sharded_) {
+        if (single_file_) single_file_->release(name);
+        return;
+    }
+    const auto it = name_to_shard_.find(std::string(name));
+    if (it == name_to_shard_.end()) return;
+    const auto shard = shards_.find(it->second);
+    if (shard != shards_.end()) shard->second->release(name);
+}
+
 }

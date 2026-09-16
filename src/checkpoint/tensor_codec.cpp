@@ -95,6 +95,15 @@ std::vector<float> decode_tensor_f32(const HostTensorView& tensor,
         }
         return result;
     }
+    if (tensor.dtype == TensorDType::F8_E4M3) {
+        require_bytes(tensor, checked_byte_count(count, sizeof(std::uint8_t), name), name);
+        for (std::size_t index = 0; index < count; ++index) {
+            std::uint8_t bits = 0;
+            std::memcpy(&bits, tensor.data + index * sizeof(bits), sizeof(bits));
+            result[index] = e4m3_bits_to_float(bits);
+        }
+        return result;
+    }
     if (tensor.dtype == TensorDType::Quantized && expected.size() == 2) {
         GgmlMatrixView matrix;
         matrix.type = ggml_type_from_block_encoding(tensor.block_encoding);

@@ -4,6 +4,8 @@
 #include <cstring>
 #include <stdexcept>
 
+#include "celeg/quantization/scalars.hpp"
+
 namespace celeg {
 namespace {
 
@@ -90,6 +92,21 @@ PackedFp8Matrix load_packed_fp8_matrix(
         result.scales[static_cast<size_t>(row)] = read_scale(scale, static_cast<size_t>(row));
     }
     result.validate();
+    return result;
+}
+
+std::vector<float> dequantize_packed_fp8(const PackedFp8Matrix& matrix) {
+    matrix.validate();
+    std::vector<float> result(static_cast<size_t>(matrix.rows) * matrix.cols);
+    for (int row = 0; row < matrix.rows; ++row) {
+        const float scale = matrix.scales[static_cast<size_t>(row)];
+        const uint8_t* source = matrix.values.data() +
+            static_cast<size_t>(row) * static_cast<size_t>(matrix.cols);
+        for (int column = 0; column < matrix.cols; ++column) {
+            result[static_cast<size_t>(row) * matrix.cols + column] =
+                e4m3_bits_to_float(source[column]) * scale;
+        }
+    }
     return result;
 }
 

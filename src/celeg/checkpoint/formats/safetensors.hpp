@@ -26,6 +26,11 @@ public:
     TensorLocator locate(std::string_view name, std::uint32_t shard_id = 0) const;
     void read(const TensorLocator& locator, std::span<std::byte> destination) const;
 
+    /// Advises the kernel that a consumed tensor's pages are no longer
+    /// needed (POSIX MADV_DONTNEED); unknown names are ignored. A no-op on
+    /// platforms without page-release support.
+    void release(std::string_view name) const;
+
 private:
     struct Entry {
         TensorDType dtype;

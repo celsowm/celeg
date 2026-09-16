@@ -14,16 +14,51 @@
 
 #include <cstddef>
 #include <algorithm>
+#include <cstdlib>
 #include <cuda_bf16.h>
 #include <cuda_runtime.h>
 #include <cstring>
 #include <filesystem>
+#include <set>
 #include <sstream>
 #include <stdexcept>
 #include <string_view>
 #include <vector>
 
 namespace celeg {
+namespace {
+
+/// Binds an already-dequantized host float matrix as bf16 device storage,
+/// honoring the active weight mode exactly like the packed-int4
+/// materialization path does. In rowwise-quantized modes the values bind
+/// directly from the host buffer with no bf16 fallback resident (the
+/// fallback would retain a full bf16 copy of every tensor). The caller
+/// commits the returned weight.
+DeviceWeight dequantized_bf16_weight(
+    const std::vector<float>& values,
+    int rows, int cols, WeightMode mode,
+    CudaMemoryKind memory_kind) {
+    std::vector<__nv_bfloat16> dense(values.size());
+    for (size_t index = 0; index < values.size(); ++index) {
+        dense[index] = __float2bfloat16(values[index]);
+    }
+    DeviceWeight weight(memory_kind);
+    weight.shape = {rows, cols};
+    if (is_rowwise_quantized_weight_mode(mode)) {
+        cuda_loader_detail::quantize_and_bind(
+            weight, reinterpret_cast<const std::byte*>(dense.data()),
+            rows, cols, mode, /*bf16_fallback=*/nullptr);
+        return weight;
+    }
+    weight.bf16_storage.reset(dense.size());
+    CELEG_CUDA(cudaMemcpy(weight.bf16_storage.data(), dense.data(),
+                           dense.size() * sizeof(__nv_bfloat16),
+                           cudaMemcpyHostToDevice));
+    weight.linear.storage = Bf16LinearStorage{weight.bf16_storage.data()};
+    return weight;
+}
+
+}
 
 const LinearWeight* WeightLoader::commit_linear(std::string_view name,
                                                 DeviceWeight&& weight,
@@ -49,6 +84,32 @@ const LinearWeight* WeightLoader::load_linear_weight(
         return &cached->second.linear;
     }
     const WeightMode weight_mode = resolve_weight_mode(name);
+    /// Bisect override (CELEG_BF16_LAYERS / CELEG_BF16_FORMATS):
+    /// checkpoint-quantized tensors matching the filters load dequantized
+    /// to bf16 so quantized-kernel suspects can be bisected out without
+    /// touching any other tensor.
+    if (expected.size() == 2) {
+        const int rows = static_cast<int>(expected[0]);
+        const int cols = static_cast<int>(expected[1]);
+        if (has_packed_fp8_matrix(repo, name) && debug_bisect_hit(name, "fp8")) {
+            const std::vector<float> values = dequantize_packed_fp8(
+                load_packed_fp8_matrix(repo, name, expected));
+            return commit_linear(
+                name,
+                dequantized_bf16_weight(values, rows, cols, weight_mode,
+                                        weights_->memory_kind),
+                rows, cols);
+        }
+        if (has_packed_nvfp4_matrix(repo, name) && debug_bisect_hit(name, "nvfp4")) {
+            const std::vector<float> values = dequantize_packed_nvfp4(
+                load_packed_nvfp4_matrix(repo, name, expected));
+            return commit_linear(
+                name,
+                dequantized_bf16_weight(values, rows, cols, weight_mode,
+                                        weights_->memory_kind),
+                rows, cols);
+        }
+    }
     const auto source = classify_linear_source(repo, name, expected);
     if (!source || expected.size() != 2) {
         throw std::runtime_error("unexpected linear tensor: " + name);
@@ -72,6 +133,41 @@ const LinearWeight* WeightLoader::load_concat_linear_weight(
     }
     if (parts.empty()) throw std::invalid_argument("concat weight requires parts");
     const WeightMode weight_mode = resolve_weight_mode(synthetic_name);
+    /// Bisect override for fused parts (e.g. NVFP4 gate+up): matching parts
+    /// dequantize on the host and bind bf16, bypassing the packed concat
+    /// branches below (whose generic fallback cannot read F8/U8).
+    {
+        const bool all_fp8 = std::all_of(parts.begin(), parts.end(),
+            [&](const auto& part) { return has_packed_fp8_matrix(repo, part.first); });
+        const bool all_nvfp4 = !all_fp8 && std::all_of(parts.begin(), parts.end(),
+            [&](const auto& part) { return has_packed_nvfp4_matrix(repo, part.first); });
+        const bool force_bf16 =
+            (all_fp8 && debug_bisect_hit(parts.front().first, "fp8")) ||
+            (all_nvfp4 && debug_bisect_hit(parts.front().first, "nvfp4"));
+        if ((all_fp8 || all_nvfp4) && force_bf16) {
+            const int64_t cols = parts.front().second.at(1);
+            int64_t rows = 0;
+            std::vector<float> stacked;
+            for (const auto& [name, expected] : parts) {
+                const std::vector<float> values = all_fp8
+                    ? dequantize_packed_fp8(
+                        load_packed_fp8_matrix(repo, name, expected))
+                    : dequantize_packed_nvfp4(
+                        load_packed_nvfp4_matrix(repo, name, expected));
+                if (!expected.empty() && expected.back() != cols) {
+                    throw std::runtime_error("packed concat width mismatch");
+                }
+                rows += static_cast<int64_t>(values.size()) / cols;
+                stacked.insert(stacked.end(), values.begin(), values.end());
+            }
+            return commit_linear(
+                synthetic_name,
+                dequantized_bf16_weight(stacked, static_cast<int>(rows),
+                                        static_cast<int>(cols), weight_mode,
+                                        weights_->memory_kind),
+                static_cast<int>(rows), static_cast<int>(cols));
+        }
+    }
     if (std::all_of(parts.begin(), parts.end(), [&](const auto& part) {
             return has_packed_int8_matrix(repo, part.first);
         })) {

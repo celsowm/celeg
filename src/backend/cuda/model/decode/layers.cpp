@@ -7,11 +7,52 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
 #include <stdexcept>
 #include <vector>
 
 namespace celeg {
+
+/// Mirrors prefill_detail::debug_layer_stats for the single-token decode
+/// path so a CPU-vs-CUDA divergence can be bisected to the decode layer
+/// where it first appears. Enabled only by CELEG_DEBUG_LAYER_STATS (plus
+/// CELEG_DEBUG_HIDDEN_DIR for the per-layer dumps); never in normal runs.
+void debug_token_layer_stats(CudaCompiledModel& model, int layer_index,
+                             const char* stage) {
+    static const bool enabled = getenv("CELEG_DEBUG_LAYER_STATS") != nullptr;
+    if (!enabled) return;
+    const int hidden = model.resources_.program_.hidden;
+    std::vector<__nv_bfloat16> host(static_cast<size_t>(hidden));
+    CELEG_CUDA(cudaStreamSynchronize(model.stream_.get()));
+    CELEG_CUDA(cudaMemcpy(host.data(), model.workspace_.hidden_.data(),
+                          host.size() * sizeof(__nv_bfloat16),
+                          cudaMemcpyDeviceToHost));
+    double sq = 0.0;
+    float mx = 0.0f;
+    bool bad = false;
+    for (const __nv_bfloat16 value : host) {
+        const float element = __bfloat162float(value);
+        sq += static_cast<double>(element) * element;
+        mx = std::max(mx, std::fabs(element));
+        if (!std::isfinite(element)) bad = true;
+    }
+    fprintf(stderr, "[cuda tok layer %d %s] norm=%.4f max=%.4f bad=%d\n",
+            layer_index, stage, std::sqrt(sq), mx, bad ? 1 : 0);
+    const char* dump_dir = getenv("CELEG_DEBUG_HIDDEN_DIR");
+    if (!dump_dir) return;
+    std::vector<float> row(static_cast<size_t>(hidden));
+    for (int i = 0; i < hidden; ++i) {
+        row[static_cast<size_t>(i)] = __bfloat162float(host[static_cast<size_t>(i)]);
+    }
+    char path[512];
+    snprintf(path, sizeof(path), "%s/cuda_tok_layer%d_%s.f32", dump_dir,
+             layer_index, stage);
+    if (FILE* out = fopen(path, "wb")) {
+        fwrite(row.data(), sizeof(float), row.size(), out);
+        fclose(out);
+    }
+}
 
 void CudaCompiledModel::run_token_layers(const TokenKvPolicy& kv) {
     int layer_index = 0;
@@ -49,6 +90,7 @@ void CudaCompiledModel::run_token_layer(Layer& layer, int layer_index,
     }
 
     run_token_mixer(layer, semantics, layer_index, kv);
+    debug_token_layer_stats(*this, layer_index, "mixer-out");
 
     if (mixer_after) {
         launch_rmsnorm(workspace_.hidden_.data(), common_layer.mixer_norm_after,
@@ -62,6 +104,7 @@ void CudaCompiledModel::run_token_layer(Layer& layer, int layer_index,
     if (!mixer_only) {
         run_mlp_decode(common_layer, layer_index);
     }
+    debug_token_layer_stats(*this, layer_index, "post-mlp");
     if (std::binary_search(resources_.program_.norm_after_layers.begin(),
                            resources_.program_.norm_after_layers.end(), layer_index)) {
         launch_rmsnorm(workspace_.hidden_.data(), resources_.final_norm_,

@@ -3,6 +3,8 @@
 #include <cstring>
 #include <stdexcept>
 
+#include "celeg/quantization/scalars.hpp"
+
 namespace celeg {
 namespace {
 
@@ -119,6 +121,28 @@ PackedNvfp4Matrix load_packed_nvfp4_matrix(
     }
 
     result.validate();
+    return result;
+}
+
+std::vector<float> dequantize_packed_nvfp4(const PackedNvfp4Matrix& matrix) {
+    matrix.validate();
+    std::vector<float> result(static_cast<size_t>(matrix.rows) * matrix.cols);
+    const int blocks_per_row = matrix.cols / kNvfp4PackedBlockSize;
+    for (int row = 0; row < matrix.rows; ++row) {
+        for (int column = 0; column < matrix.cols; ++column) {
+            const size_t packed_index =
+                static_cast<size_t>(row) * matrix.cols + column;
+            const uint8_t byte = matrix.packed[packed_index / 2];
+            const uint8_t nibble = (column & 1) != 0
+                ? static_cast<uint8_t>(byte >> 4)
+                : static_cast<uint8_t>(byte & 0xFu);
+            const float block_scale = e4m3_bits_to_float(
+                matrix.block_scales[static_cast<size_t>(row) * blocks_per_row +
+                                    column / kNvfp4PackedBlockSize]);
+            result[packed_index] =
+                e2m1_nibble_to_float(nibble) * block_scale / matrix.global_scale;
+        }
+    }
     return result;
 }
 

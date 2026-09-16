@@ -29,4 +29,7 @@ PackedFp8Matrix load_packed_fp8_matrix(
     const IWeightRepository& repository, std::string_view name,
     const std::vector<int64_t>& expected_shape);
 
+/// Dequantizes a packed FP8 matrix to float: value * per-row scale.
+std::vector<float> dequantize_packed_fp8(const PackedFp8Matrix& matrix);
+
 }

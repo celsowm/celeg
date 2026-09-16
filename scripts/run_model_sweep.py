@@ -16,6 +16,9 @@ from datetime import datetime
 
 REPO_LIST = [
     # (repo_id, weight_type)
+    # Every entry must resolve from the local HF cache (`--repo` never
+    # downloads); uncached entries fail slow (300 s timeout each backend),
+    # so keep this list in sync with the machines under test.
     ("LiquidAI/LFM2.5-230M", "safetensors"),
     ("LiquidAI/LFM2.5-350M", "safetensors"),
     ("LiquidAI/LFM2.5-VL-450M", "safetensors"),
@@ -31,7 +34,7 @@ REPO_LIST = [
     ("flwrlabs/Lizzy-7B-GGUF", "gguf"),
     ("bartowski/Nanbeige_Nanbeige4.2-3B-GGUF", "gguf"),
     ("openbmb/MiniCPM5-1B-GGUF", "gguf"),
-    ("Agnes-AI/Agnes-3.0-Flash", "safetensors"),
+    ("unsloth/Qwen3.8-27B-NVFP4", "safetensors"),
 ]
 
 PROMPT = "What is the capital of France?"
@@ -48,6 +51,9 @@ MAX_TOKENS_BY_MODEL = {
     "inclusionAI/Ling-3.0-tiny": 300,
     "Nanbeige/Nanbeige4.2-3B": 300,
     "bartowski/Nanbeige_Nanbeige4.2-3B-GGUF": 300,
+    # Qwen3.8's thinking-style template burns the opening tokens on a
+    # preamble before the final answer, like the entries above.
+    "unsloth/Qwen3.8-27B-NVFP4": 300,
 }
 TEMP = 0.0
 TOP_K = 1
@@ -69,13 +75,7 @@ EXTRA_ARGS_BY_MODEL = {
 }
 
 # Extra args applied on CUDA only (never passed to celeg-cpu-run).
-# Agnes-3.0-Flash is ~62 GB in BF16 and OOMs a 32 GB card under the default
-# auto (bf16) mode; int4 runs end to end. Coarse per-row int4/int8
-# quantization compounds over its 72 hybrid layers, so CUDA output diverges
-# from the CPU answer (see docs/MODEL_SWEEP_REPORT.md); the sweep records the
-# honest end-to-end behavior rather than an OOM.
 CUDA_EXTRA_ARGS_BY_MODEL = {
-    "Agnes-AI/Agnes-3.0-Flash": ["--weight-mode", "int4"],
 }
 
 # Base checkpoints have no "correct answer": the verdict is token parity

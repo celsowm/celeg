@@ -3,6 +3,7 @@
 #include "utils.cuh"
 #include "../support/assertions.hpp"
 #include "../support/cuda_kernel_assertions.cuh"
+#include "../support/numerical_compare.hpp"
 #include "kernels/kernels.cuh"
 #include "backend/cuda/paged_kv.hpp"
 #include "celeg/model/reference.hpp"
@@ -11,6 +12,8 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <limits>
+#include <utility>
 #include <vector>
 
 namespace celeg::cuda_test {
@@ -41,6 +44,102 @@ void run_attention_tests(celeg::CudaStream& stream) {
         expect_near(to_float(q[i]), expected_q[i], 0.01f);
         expect_near(to_float(k[i]), expected_k[i], 0.01f);
     }
+}
+
+/// Partial-rotary reference: full-width RMS norm, then the first
+/// `rotary_pairs` pairs rotate. Proportional RoPE pads its table to the full
+/// head width, so pairs are full-dimension pairs; other scalings keep
+/// prefix-local pairs.
+auto partial_rope_reference = [](const std::vector<float>& input,
+                                 const std::vector<float>& weight,
+                                 int head_dim, int rotary_dim,
+                                 bool full_dim_pairs, double theta,
+                                 double fraction, bool proportional,
+                                 int position, float eps) {
+    const int rotated_pairs = rotary_dim / 2;
+    const int pair_count = full_dim_pairs ? head_dim / 2 : rotated_pairs;
+    std::vector<float> output = input;
+    double sum = 0.0;
+    for (float v : output) sum += static_cast<double>(v) * v;
+    const float inv =
+        1.0f / std::sqrt(static_cast<float>(sum / head_dim) + eps);
+    for (int d = 0; d < head_dim; ++d) output[d] *= inv * weight[d];
+    for (int pair = 0; pair < rotated_pairs; ++pair) {
+        const int first = pair;
+        const int second = pair_count + pair;
+        double frequency =
+            std::pow(theta, -2.0 * static_cast<double>(pair) /
+                                static_cast<double>(rotary_dim));
+        if (proportional) frequency = std::pow(frequency, fraction);
+        const float angle =
+            static_cast<float>(position) * static_cast<float>(frequency);
+        const float c = std::cos(angle);
+        const float s = std::sin(angle);
+        const float a = output[first];
+        const float b = output[second];
+        output[first] = a * c - b * s;
+        output[second] = b * c + a * s;
+    }
+    return output;
+};
+
+{
+    /// Proportional partial rotary (gemma-4 full-attention convention):
+    /// head_dim 8, rotary fraction 0.25, theta 1e6. The rotated pair must be
+    /// (0, 4); the old kernel rotated (0, 1).
+    const std::vector<float> weight = {0.5f, 0.625f, 0.75f, 0.875f,
+                                       1.0f, 1.125f, 1.25f, 1.375f};
+    /// Loud partner swap: dims 1 and 4 differ by ~500x, so rotating (0, 1)
+    /// instead of (0, 4) misses by O(1), well above bf16 noise.
+    std::vector<float> input = {10, 1, 2, 3, 500, 5, 6, 7};
+    const std::vector<float> expected = partial_rope_reference(
+        input, weight, 8, 2, true, 1000000.0, 0.25, true, 7, 1e-6f);
+    std::vector<__nv_bfloat16> q(8), norm(8);
+    for (int i = 0; i < 8; ++i) {
+        q[i] = to_bf16(input[i]);
+        norm[i] = to_bf16(weight[i]);
+    }
+    celeg::DeviceBuffer<__nv_bfloat16> dq(8), dn(8);
+    CELEG_CUDA(cudaMemcpy(dq.data(), q.data(), dq.bytes(), cudaMemcpyHostToDevice));
+    CELEG_CUDA(cudaMemcpy(dn.data(), norm.data(), dn.bytes(), cudaMemcpyHostToDevice));
+    celeg::CudaRopeScaling scaling{};
+    scaling.kind = 6;
+    scaling.factor = 1.0f;
+    scaling.rotary_fraction = 0.25f;
+    celeg::launch_dynamic_qk_norm_rope(
+        dq.data(), nullptr, dn.data(), nullptr, 1, 0, 8, 7,
+        1000000.0f, 0.25f, 1e-6f, true, scaling,
+        celeg::RopePairingKind::SplitHalf, stream.get());
+    CELEG_CUDA(cudaStreamSynchronize(stream.get()));
+    CELEG_CUDA(cudaMemcpy(q.data(), dq.data(), dq.bytes(), cudaMemcpyDeviceToHost));
+    for (int i = 0; i < 8; ++i) expect_near(to_float(q[i]), expected[i], 0.05f);
+}
+
+{
+    /// Legacy partial rotary (prefix pairs + normalized tail): head_dim 8,
+    /// rotary fraction 0.5, default scaling. Guards the proportional scoping
+    /// above -- legacy pairing must not move.
+    const std::vector<float> weight = {1.5f, 1.375f, 1.25f, 1.125f,
+                                       1.0f, 0.875f, 0.75f, 0.625f};
+    std::vector<float> input = {1, 2, 3, 4, 5, 6, 7, 320};
+    const std::vector<float> expected = partial_rope_reference(
+        input, weight, 8, 4, false, 10000.0, 0.5, false, 3, 1e-6f);
+    std::vector<__nv_bfloat16> q(8), norm(8);
+    for (int i = 0; i < 8; ++i) {
+        q[i] = to_bf16(input[i]);
+        norm[i] = to_bf16(weight[i]);
+    }
+    celeg::DeviceBuffer<__nv_bfloat16> dq(8), dn(8);
+    CELEG_CUDA(cudaMemcpy(dq.data(), q.data(), dq.bytes(), cudaMemcpyHostToDevice));
+    CELEG_CUDA(cudaMemcpy(dn.data(), norm.data(), dn.bytes(), cudaMemcpyHostToDevice));
+    celeg::CudaRopeScaling scaling{};
+    celeg::launch_dynamic_qk_norm_rope(
+        dq.data(), nullptr, dn.data(), nullptr, 1, 0, 8, 3,
+        10000.0f, 0.5f, 1e-6f, true, scaling,
+        celeg::RopePairingKind::SplitHalf, stream.get());
+    CELEG_CUDA(cudaStreamSynchronize(stream.get()));
+    CELEG_CUDA(cudaMemcpy(q.data(), dq.data(), dq.bytes(), cudaMemcpyDeviceToHost));
+    for (int i = 0; i < 8; ++i) expect_near(to_float(q[i]), expected[i], 0.05f);
 }
 
 {
@@ -541,6 +640,256 @@ void run_attention_data_movement_tests(celeg::CudaStream& stream) {
     expect_near(to_float(hout[2]),
                 (1.0f / (1.0f + std::exp(-1.0f))) * 4.0f);
 }
+}
+
+namespace {
+
+/// Geometry for one packed-gate decode-sequence case: a tiny exact case plus
+/// the Qwen3.5 full-attention scale (24 query heads, 4 KV heads, head_dim
+/// 256, partial rotary) that caught the missing decode-side extraction.
+struct PackedGateDecodeCase {
+    int q_heads;
+    int kv_heads;
+    int head_dim;
+    int seq_len;
+    float theta;
+    float rotary_fraction;
+};
+
+/// Drives the exact launcher sequence the CUDA decode path must honor for a
+/// packed Q+Gate projection: per-head extraction, QK-norm/RoPE prepare at
+/// position 0 (identity rotation, normalization applied), contiguous
+/// strict + online decode, and sigmoid gate apply -- checking every stage
+/// against a host reference. A final halves-split pass (the old
+/// `[Q|G]`-halves misreading) must clearly diverge, proving the test is
+/// sensitive to the bug class.
+void check_packed_gate_decode_case(celeg::CudaStream& stream,
+                                   const PackedGateDecodeCase& geometry) {
+    const int q_heads = geometry.q_heads;
+    const int kv_heads = geometry.kv_heads;
+    const int head_dim = geometry.head_dim;
+    const int seq_len = geometry.seq_len;
+    const int q_width = q_heads * head_dim;
+    const int kv_width = kv_heads * head_dim;
+    constexpr float kEps = 1e-6f;
+
+    /// Deterministic synthetic q_proj output, interleaved per head: head h
+    /// owns [q_h, g_h]. Gate values span both sigmoid regimes.
+    std::vector<float> packed_f(2 * static_cast<size_t>(q_width));
+    std::vector<float> query_f(q_width), gate_f(q_width);
+    for (int head = 0; head < q_heads; ++head) {
+        for (int d = 0; d < head_dim; ++d) {
+            const float qv = 0.05f * static_cast<float>((head * 131 + d * 17) % 19) - 0.4f;
+            const float gv = 2.0f * qv +
+                static_cast<float>((head * 7 + d * 3) % 5 - 2);
+            query_f[static_cast<size_t>(head) * head_dim + d] = qv;
+            gate_f[static_cast<size_t>(head) * head_dim + d] = gv;
+            const size_t base = static_cast<size_t>(head) * 2 * head_dim;
+            packed_f[base + d] = qv;
+            packed_f[base + head_dim + d] = gv;
+        }
+    }
+    std::vector<float> k_cache_f(seq_len * kv_width), v_cache_f(seq_len * kv_width);
+    for (int token = 0; token < seq_len; ++token) {
+        for (int i = 0; i < kv_width; ++i) {
+            k_cache_f[static_cast<size_t>(token) * kv_width + i] =
+                0.07f * static_cast<float>((token * 37 + i * 11) % 13) - 0.35f;
+            v_cache_f[static_cast<size_t>(token) * kv_width + i] =
+                0.11f * static_cast<float>((token * 53 + i * 29) % 17) - 0.8f;
+        }
+    }
+    const std::vector<float> ones(static_cast<size_t>(q_width), 1.0f);
+    const std::vector<float> ones_kv(static_cast<size_t>(kv_width), 1.0f);
+
+    auto to_device = [&](const std::vector<float>& host) {
+        std::vector<__nv_bfloat16> bf16(host.size());
+        for (size_t i = 0; i < host.size(); ++i) bf16[i] = to_bf16(host[i]);
+        celeg::DeviceBuffer<__nv_bfloat16> device(bf16.size());
+        CELEG_CUDA(cudaMemcpy(device.data(), bf16.data(), device.bytes(),
+                              cudaMemcpyHostToDevice));
+        return device;
+    };
+    celeg::DeviceBuffer<__nv_bfloat16> dpacked = to_device(packed_f);
+    celeg::DeviceBuffer<__nv_bfloat16> dk = to_device(k_cache_f);
+    celeg::DeviceBuffer<__nv_bfloat16> dv = to_device(v_cache_f);
+    celeg::DeviceBuffer<__nv_bfloat16> dquery_norm = to_device(ones);
+    celeg::DeviceBuffer<__nv_bfloat16> dkey_norm = to_device(ones_kv);
+    celeg::DeviceBuffer<__nv_bfloat16> dquery(q_width), dgate(q_width);
+    celeg::DeviceBuffer<__nv_bfloat16> dattn(q_width);
+    celeg::DeviceBuffer<int32_t> dposition(1);
+    /// The current token's key (last cache row): prepared single-row exactly
+    /// like decode does. The multi-row cache itself stays as uploaded --
+    /// cache preparation belongs to prefill, and the decode kernel only
+    /// ever reads it.
+    std::vector<float> cur_k_f(k_cache_f.end() - kv_width, k_cache_f.end());
+    celeg::DeviceBuffer<__nv_bfloat16> dcur_k = to_device(cur_k_f);
+    auto download = [&](const celeg::DeviceBuffer<__nv_bfloat16>& device) {
+        std::vector<__nv_bfloat16> bf16(device.size());
+        CELEG_CUDA(cudaMemcpyAsync(bf16.data(), device.data(), device.bytes(),
+                                   cudaMemcpyDeviceToHost, stream.get()));
+        CELEG_CUDA(cudaStreamSynchronize(stream.get()));
+        std::vector<float> out(bf16.size());
+        for (size_t i = 0; i < bf16.size(); ++i) out[i] = to_float(bf16[i]);
+        return out;
+    };
+
+    /// Stage 1: per-head extraction must recover the interleaved query/gate.
+    celeg::launch_extract_attention_output_gate(
+        dpacked.data(), dquery.data(), dgate.data(), 1, q_width, head_dim,
+        stream.get());
+    for (const auto& [got, expected] :
+         {std::pair{download(dquery), query_f}, {download(dgate), gate_f}}) {
+        CELEG_TEST_CHECK(got.size() == expected.size());
+        for (size_t i = 0; i < got.size(); ++i) expect_near(got[i], expected[i], 0.01f);
+    }
+
+    /// Stage 2: QK-norm/RoPE prepare of the current token at position 0
+    /// rotates by the identity, so the outputs must equal per-head RMSNorm
+    /// of the extracted query and current key.
+    const int32_t zero = 0;
+    CELEG_CUDA(cudaMemcpy(dposition.data(), &zero, sizeof(zero), cudaMemcpyHostToDevice));
+    celeg::launch_dynamic_qk_norm_rope_device(
+        dquery.data(), dcur_k.data(), dquery_norm.data(), dkey_norm.data(),
+        q_heads, kv_heads, head_dim, dposition.data(), geometry.theta,
+        geometry.rotary_fraction, kEps, true, celeg::CudaRopeScaling{},
+        celeg::RopePairingKind::SplitHalf, stream.get());
+    std::vector<float> query_normed(q_width), cur_k_normed(kv_width);
+    for (int head = 0; head < q_heads; ++head) {
+        const std::vector<float> slice(query_f.begin() + head * head_dim,
+                                       query_f.begin() + (head + 1) * head_dim);
+        const std::vector<float> ref = celeg::reference::rmsnorm_bf16(
+            slice, std::vector<float>(head_dim, 1.0f), kEps);
+        std::copy(ref.begin(), ref.end(),
+                  query_normed.begin() + head * head_dim);
+    }
+    for (int head = 0; head < kv_heads; ++head) {
+        const std::vector<float> slice(cur_k_f.begin() + head * head_dim,
+                                       cur_k_f.begin() + (head + 1) * head_dim);
+        const std::vector<float> ref = celeg::reference::rmsnorm_bf16(
+            slice, std::vector<float>(head_dim, 1.0f), kEps);
+        std::copy(ref.begin(), ref.end(), cur_k_normed.begin() + head * head_dim);
+    }
+    for (const auto& [got, expected] :
+         {std::pair{download(dquery), query_normed}, {download(dcur_k), cur_k_normed}}) {
+        CELEG_TEST_CHECK(got.size() == expected.size());
+        for (size_t i = 0; i < got.size(); ++i) expect_near(got[i], expected[i], 0.02f);
+    }
+
+    /// Stage 3: strict decode must match the bf16 host reference; the online
+    /// device kernel (the real decode kernel) must agree with it as well.
+    celeg::launch_gqa_decode_strict({
+        .query = dquery.data(),
+        .kv = {.keys = dk.data(), .values = dv.data()},
+        .out = dattn.data(),
+        .geometry = {.q_heads = q_heads, .kv_heads = kv_heads, .head_dim = head_dim},
+        .extent = {.seq_len = seq_len},
+        .stream = stream.get()});
+    const std::vector<float> attn_ref = celeg::reference::gqa_decode_strict_bf16(
+        query_normed, k_cache_f, v_cache_f, seq_len, q_heads, kv_heads, head_dim);
+    /// The softmax must actually spread mass: a one-hot peak would make the
+    /// rest of the test insensitive to the query.
+    float ref_max_prob = 0.0f;
+    {
+        const float scale = 1.0f / std::sqrt(static_cast<float>(head_dim));
+        float maximum = -std::numeric_limits<float>::infinity();
+        for (int token = 0; token < seq_len; ++token) {
+            float dot = 0.0f;
+            for (int d = 0; d < head_dim; ++d) dot += query_normed[d] * k_cache_f[token * kv_width + d];
+            maximum = std::max(maximum, dot * scale);
+        }
+        float denominator = 0.0f;
+        for (int token = 0; token < seq_len; ++token) {
+            float dot = 0.0f;
+            for (int d = 0; d < head_dim; ++d) dot += query_normed[d] * k_cache_f[token * kv_width + d];
+            denominator += std::exp(dot * scale - maximum);
+            ref_max_prob = std::max(ref_max_prob, std::exp(dot * scale - maximum));
+        }
+        ref_max_prob /= denominator;
+    }
+    CELEG_TEST_CHECK(ref_max_prob < 0.99f);
+    const std::vector<float> attn_strict = download(dattn);
+    CELEG_TEST_CHECK(attn_strict.size() == attn_ref.size());
+    for (size_t i = 0; i < attn_strict.size(); ++i) {
+        expect_near(attn_strict[i], attn_ref[i], 0.02f);
+    }
+    const int32_t last = seq_len - 1;
+    CELEG_CUDA(cudaMemcpy(dposition.data(), &last, sizeof(last), cudaMemcpyHostToDevice));
+    celeg::launch_gqa_decode_online_device({
+        .query = dquery.data(),
+        .kv = {.keys = dk.data(), .values = dv.data()},
+        .out = dattn.data(),
+        .geometry = {.q_heads = q_heads, .kv_heads = kv_heads, .head_dim = head_dim},
+        .extent = {.position = dposition.data()},
+        .stream = stream.get()});
+    const std::vector<float> attn_online = download(dattn);
+    CELEG_TEST_CHECK(attn_online.size() == attn_ref.size());
+    for (size_t i = 0; i < attn_online.size(); ++i) {
+        expect_near(attn_online[i], attn_ref[i], 0.05f);
+    }
+    CELEG_TEST_CHECK(
+        celeg::test::numerical::cosine_similarity(attn_online, attn_ref) >= 0.999);
+
+    /// Stage 4: sigmoid gate apply over the strict-decoded output.
+    celeg::launch_gqa_decode_strict({
+        .query = dquery.data(),
+        .kv = {.keys = dk.data(), .values = dv.data()},
+        .out = dattn.data(),
+        .geometry = {.q_heads = q_heads, .kv_heads = kv_heads, .head_dim = head_dim},
+        .extent = {.seq_len = seq_len},
+        .stream = stream.get()});
+    celeg::launch_sigmoid_multiply(dattn.data(), dgate.data(), q_width, stream.get());
+    const std::vector<float> gated = download(dattn);
+    CELEG_TEST_CHECK(gated.size() == attn_ref.size());
+    for (size_t i = 0; i < gated.size(); ++i) {
+        const float expected = attn_ref[i] / (1.0f + std::exp(-gate_f[i]));
+        expect_near(gated[i], expected, 0.02f);
+    }
+
+    /// Sensitivity: the coarse halves reading ([Q|G] split, the old bug)
+    /// must clearly diverge from the reference through the same stages. The
+    /// key cache is restored first so its single normalization matches the
+    /// extracted path exactly, leaving the halves misreading as the only
+    /// variable under test.
+    std::vector<float> halves_q(packed_f.begin(), packed_f.begin() + q_width);
+    std::vector<float> halves_g(packed_f.begin() + q_width, packed_f.end());
+    celeg::DeviceBuffer<__nv_bfloat16> dhalves_q = to_device(halves_q);
+    celeg::DeviceBuffer<__nv_bfloat16> dhalves_g = to_device(halves_g);
+    celeg::DeviceBuffer<__nv_bfloat16> dhalves_k = to_device(cur_k_f);
+    CELEG_CUDA(cudaMemcpy(dposition.data(), &zero, sizeof(zero), cudaMemcpyHostToDevice));
+    celeg::launch_dynamic_qk_norm_rope_device(
+        dhalves_q.data(), dhalves_k.data(), dquery_norm.data(), dkey_norm.data(),
+        q_heads, kv_heads, head_dim, dposition.data(), geometry.theta,
+        geometry.rotary_fraction, kEps, true, celeg::CudaRopeScaling{},
+        celeg::RopePairingKind::SplitHalf, stream.get());
+    celeg::launch_gqa_decode_strict({
+        .query = dhalves_q.data(),
+        .kv = {.keys = dk.data(), .values = dv.data()},
+        .out = dattn.data(),
+        .geometry = {.q_heads = q_heads, .kv_heads = kv_heads, .head_dim = head_dim},
+        .extent = {.seq_len = seq_len},
+        .stream = stream.get()});
+    celeg::launch_sigmoid_multiply(dattn.data(), dhalves_g.data(), q_width, stream.get());
+    const std::vector<float> halves_out = download(dattn);
+    CELEG_TEST_CHECK(halves_out.size() == gated.size());
+    /// Sensitivity floor: the halves misreading must clearly diverge
+    /// (measured 0.35 tiny / 0.68 Qwen-scale on the reference machine, vs
+    /// ~0.01 numerical noise), proving this test catches the skipped
+    /// extraction it guards against.
+    CELEG_TEST_CHECK(
+        celeg::test::numerical::max_absolute_error(halves_out, gated) > 0.1f);
+}
+
+}
+
+void run_packed_gate_decode_tests(celeg::CudaStream& stream) {
+/// Tiny exact-geometry case plus the Qwen3.5 full-attention scale whose
+/// packed gate the CUDA decode path once skipped.
+check_packed_gate_decode_case(
+    stream, {.q_heads = 2, .kv_heads = 1, .head_dim = 8, .seq_len = 3,
+             .theta = 10000.0f, .rotary_fraction = 1.0f});
+check_packed_gate_decode_case(
+    stream, {.q_heads = 24, .kv_heads = 4, .head_dim = 256, .seq_len = 2,
+             .theta = 10000000.0f, .rotary_fraction = 0.25f});
 }
 
 }

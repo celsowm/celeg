@@ -3,6 +3,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <span>
+#include <vector>
 
 namespace celeg {
 
@@ -53,5 +55,17 @@ GgmlType ggml_type_from_ordinal(std::int32_t raw);
 std::optional<GgmlDecodeRowFunction> ggml_row_decoder(GgmlType type);
 void ggml_decode_row(const GgmlMatrixView& matrix, std::size_t row,
                      float* output);
+
+/// Host-side Q4_K encoder: packs a row-major float matrix into llama.cpp
+/// BlockQ4K layout (256-value superblocks, 8 sub-blocks of 32, 6-bit
+/// packed scale/min pair, fp16 super-scales). Columns must be a multiple
+/// of the 256-value superblock size -- the native CUDA MMQ kernels impose
+/// the same constraint, so loaders gate on it before calling. Returns one
+/// packed block stream of rows * (cols/256) * 144 bytes. The encoder is
+/// the exact structural inverse of the Q4_K branch of ggml_decode_row;
+/// tests roundtrip through it.
+std::vector<std::uint8_t> quantize_f32_q4k(std::span<const float> values,
+                                           std::size_t rows,
+                                           std::size_t cols);
 
 }

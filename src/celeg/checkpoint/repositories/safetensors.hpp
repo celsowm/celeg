@@ -14,7 +14,8 @@ namespace celeg {
 class SafeTensorRepository final
     : public IWeightRepository,
       public ILocatableTensorRepository,
-      public IRandomAccessTensorReader {
+      public IRandomAccessTensorReader,
+      public IReleasableTensorRepository {
 public:
     explicit SafeTensorRepository(const std::filesystem::path& model_dir);
 
@@ -25,6 +26,9 @@ public:
     TensorLocator locate(std::string_view name) const override;
     void read(const TensorLocator& locator,
               std::span<std::byte> destination) const override;
+
+    /// Drops the consumed tensor's shard pages; unknown names are ignored.
+    void release(std::string_view name) const override;
 
     bool sharded() const { return sharded_; }
 

@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <bit>
+#include <cstdint>
 #include <cstring>
 #include <limits>
 #include <stdexcept>
@@ -318,6 +319,23 @@ TensorLocator SafeTensorFile::locate(std::string_view name, std::uint32_t shard_
     locator.dtype = entry.dtype;
     locator.shape = entry.shape;
     return locator;
+}
+
+void SafeTensorFile::release(std::string_view name) const {
+    const auto it = entries_.find(std::string(name));
+    if (it == entries_.end()) return;
+#if !defined(_WIN32)
+    const uintptr_t begin =
+        reinterpret_cast<uintptr_t>(mapping_) + data_offset_ + it->second.begin;
+    const uintptr_t end =
+        reinterpret_cast<uintptr_t>(mapping_) + data_offset_ + it->second.end;
+    const size_t page = static_cast<size_t>(::sysconf(_SC_PAGESIZE));
+    if (page == 0) return;
+    const uintptr_t aligned_begin = begin & ~(page - 1);
+    const size_t length = static_cast<size_t>(end - aligned_begin);
+    if (length == 0) return;
+    ::madvise(reinterpret_cast<void*>(aligned_begin), length, MADV_DONTNEED);
+#endif
 }
 
 void SafeTensorFile::read(const TensorLocator& locator, std::span<std::byte> destination) const {

@@ -78,6 +78,139 @@ void test_adjacent_pair_rope() {
     CELEG_TEST_CHECK(close(values[3], 4.0f * c1 + 3.0f * s1));
 }
 
+/// HF-style partial-rotary reference: the whole head is RMS-normalized,
+/// then the first `rotary_pairs` pairs rotate. Proportional RoPE pads its
+/// frequency table to the full head width, so pairs are full-dimension
+/// pairs (`i` mixes `(i, i + head_dim / 2)`); every other scaling builds
+/// prefix-width tables, so pairs stay prefix-local.
+std::vector<float> reference_partial_qk_norm_rope(
+    const std::vector<float>& input, const std::vector<float>& norm_weight,
+    int heads, int head_dim, int rotary_dim, bool full_dim_pairs,
+    double theta, double fraction, bool proportional, int position,
+    float eps) {
+    const int rotated_pairs = rotary_dim / 2;
+    const int pair_count = full_dim_pairs ? head_dim / 2 : rotated_pairs;
+    std::vector<float> output = input;
+    for (int head = 0; head < heads; ++head) {
+        float* vector = output.data() + static_cast<size_t>(head) * head_dim;
+        double sum = 0.0;
+        for (int d = 0; d < head_dim; ++d) {
+            sum += static_cast<double>(vector[d]) * vector[d];
+        }
+        const float inv = 1.0f / std::sqrt(static_cast<float>(sum / head_dim) + eps);
+        for (int d = 0; d < head_dim; ++d) {
+            vector[d] *= inv * norm_weight[static_cast<size_t>(d)];
+        }
+        for (int pair = 0; pair < rotated_pairs; ++pair) {
+            int first = pair;
+            int second = pair_count + pair;
+            double base_frequency = std::pow(
+                theta, -2.0 * static_cast<double>(pair) / static_cast<double>(rotary_dim));
+            if (proportional) {
+                base_frequency = std::pow(base_frequency, fraction);
+            }
+            const float angle = static_cast<float>(position) * static_cast<float>(base_frequency);
+            const float c = std::cos(angle);
+            const float s = std::sin(angle);
+            const float a = vector[first];
+            const float b = vector[second];
+            vector[first] = a * c - b * s;
+            vector[second] = b * c + a * s;
+        }
+    }
+    return output;
+}
+
+void test_proportional_partial_rope_uses_full_dim_pairs() {
+    /// Gemma-4 full-attention geometry, scaled down: head_dim 8, rotary
+    /// fraction 0.25 (one rotated pair), theta 1e6. The rotated pair must be
+    /// (0, 4) with a fully normalized tail; the old code rotated (0, 1) and
+    /// left dims 2..7 as raw GEMM output.
+    constexpr int kHeadDim = 8;
+    constexpr int kHeads = 2;
+    constexpr int kPosition = 7;
+    constexpr float kEps = 1.0e-6f;
+
+    celeg::RopePositionSpec rope;
+    rope.theta = 1000000.0;
+    rope.rotary_fraction = 0.25;
+    rope.scaling = celeg::ProportionalRopeScaling{1.0};
+    rope.pairing = celeg::RopePairingKind::SplitHalf;
+
+    std::vector<float> norm_weight(kHeadDim);
+    for (int d = 0; d < kHeadDim; ++d) {
+        norm_weight[d] = 0.5f + 0.125f * static_cast<float>(d);
+    }
+    std::vector<float> input(static_cast<size_t>(kHeads) * kHeadDim);
+    for (size_t i = 0; i < input.size(); ++i) {
+        input[i] = static_cast<float>(i + 1) * (i % kHeadDim == 6 ? 50.0f : 1.0f);
+    }
+    const std::vector<float> expected = reference_partial_qk_norm_rope(
+        input, norm_weight, kHeads, kHeadDim, 2, true,
+        rope.theta, rope.rotary_fraction, true, kPosition, kEps);
+
+    std::vector<float> fused = input;
+    scalar_math().qk_norm_rope(fused.data(), norm_weight.data(), kHeads,
+                               kHeadDim, kPosition, rope, kEps);
+    CELEG_TEST_CHECK(fused.size() == expected.size());
+    for (size_t i = 0; i < expected.size(); ++i) {
+        CELEG_TEST_CHECK(close(fused[i], expected[i], 1.0e-4f));
+    }
+
+    std::vector<float> rope_only = input;
+    celeg::cpu_rope(rope_only.data(), kHeads, kHeadDim, kPosition, rope);
+    const float angle = static_cast<float>(kPosition);
+    const float c = std::cos(angle);
+    const float s = std::sin(angle);
+    for (int head = 0; head < kHeads; ++head) {
+        const float* row_in = input.data() + static_cast<size_t>(head) * kHeadDim;
+        const float* row_out = rope_only.data() + static_cast<size_t>(head) * kHeadDim;
+        CELEG_TEST_CHECK(close(row_out[0], row_in[0] * c - row_in[4] * s, 1.0e-5f));
+        CELEG_TEST_CHECK(close(row_out[4], row_in[4] * c + row_in[0] * s, 1.0e-5f));
+        for (int d = 1; d < kHeadDim; ++d) {
+            if (d == 4) continue;
+            CELEG_TEST_CHECK(close(row_out[d], row_in[d], 1.0e-5f));
+        }
+    }
+}
+
+void test_default_partial_rope_keeps_prefix_pairs_and_norms_tail() {
+    /// Ling-style legacy convention: head_dim 8, rotary fraction 0.5, no
+    /// scaling. Pairs stay prefix-local ((0, 2), (1, 3)) but the whole head
+    /// -- including the unrotated tail -- is normalized; the old code left
+    /// dims 4..7 raw.
+    constexpr int kHeadDim = 8;
+    constexpr int kHeads = 2;
+    constexpr int kPosition = 3;
+    constexpr float kEps = 1.0e-6f;
+
+    celeg::RopePositionSpec rope;
+    rope.theta = 10000.0;
+    rope.rotary_fraction = 0.5;
+    rope.scaling = celeg::NoRopeScaling{};
+    rope.pairing = celeg::RopePairingKind::SplitHalf;
+
+    std::vector<float> norm_weight(kHeadDim);
+    for (int d = 0; d < kHeadDim; ++d) {
+        norm_weight[d] = 1.5f - 0.125f * static_cast<float>(d);
+    }
+    std::vector<float> input(static_cast<size_t>(kHeads) * kHeadDim);
+    for (size_t i = 0; i < input.size(); ++i) {
+        input[i] = static_cast<float>(i + 1) * (i % kHeadDim == 7 ? 40.0f : 1.0f);
+    }
+    const std::vector<float> expected = reference_partial_qk_norm_rope(
+        input, norm_weight, kHeads, kHeadDim, 4, false,
+        rope.theta, rope.rotary_fraction, false, kPosition, kEps);
+
+    std::vector<float> fused = input;
+    scalar_math().qk_norm_rope(fused.data(), norm_weight.data(), kHeads,
+                               kHeadDim, kPosition, rope, kEps);
+    CELEG_TEST_CHECK(fused.size() == expected.size());
+    for (size_t i = 0; i < expected.size(); ++i) {
+        CELEG_TEST_CHECK(close(fused[i], expected[i], 1.0e-4f));
+    }
+}
+
 void test_bidirectional_pattern_reads_future_keys() {
     celeg::CpuAttentionPattern pattern;
     pattern.storage = celeg::BidirectionalPattern{};
@@ -216,6 +349,8 @@ void test_key_only_norm_without_query_norm() {
 int main() {
     test_current_value_orthogonalization();
     test_adjacent_pair_rope();
+    test_proportional_partial_rope_uses_full_dim_pairs();
+    test_default_partial_rope_keeps_prefix_pairs_and_norms_tail();
     test_bidirectional_pattern_reads_future_keys();
     test_prefix_lm_pattern_boundaries();
     test_query_key_norm_uses_same_query_scale();

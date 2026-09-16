@@ -62,7 +62,8 @@ if(TARGET celeg_cuda_backend)
         moe_integration_test
         expert_residency_test
         cuda_granite_test
-        cuda_parallel_ffn_test)
+        cuda_parallel_ffn_test
+        cuda_packed_gate_model_test)
         add_executable(${test_name} tests/cuda/${test_name}.cu)
         target_include_directories(${test_name} PRIVATE
             ${CELEG_CUDA_TEST_PRIVATE_INCLUDE_DIRS})
@@ -73,4 +74,5 @@ if(TARGET celeg_cuda_backend)
     endforeach()
 
     target_link_libraries(cuda_relative_bias_attention_test PRIVATE celeg_cpu_backend)
+    target_link_libraries(cuda_packed_gate_model_test PRIVATE celeg_cpu_backend)
 endif()

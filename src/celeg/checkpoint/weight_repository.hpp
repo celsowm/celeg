@@ -38,6 +38,18 @@ public:
     virtual bool has_native_block_storage() const = 0;
 };
 
+/// Optional capability: drops already-consumed source pages (e.g. an mmap'd
+/// safetensors shard) so a loader that dequantizes tensor-by-tensor never
+/// holds the whole checkpoint resident alongside the packed weights.
+/// Best-effort and repeatable: re-reading a released tensor simply faults
+/// its pages back in. Repositories without paged source storage do not
+/// implement it; callers probe with try_release_tensor_repository.
+class IReleasableTensorRepository {
+public:
+    virtual ~IReleasableTensorRepository() = default;
+    virtual void release(std::string_view name) const = 0;
+};
+
 inline const ILocatableTensorRepository&
 require_locatable_tensor_repository(const IWeightRepository& repository) {
     const auto* locator = dynamic_cast<const ILocatableTensorRepository*>(&repository);
@@ -56,6 +68,14 @@ require_random_access_tensor_reader(const IWeightRepository& repository) {
             "checkpoint repository does not provide random-access tensor reads");
     }
     return *reader;
+}
+
+/// Non-throwing probe for the release capability: returns nullptr when the
+/// repository keeps no paged source storage, in which case the caller simply
+/// skips releasing.
+inline const IReleasableTensorRepository*
+try_release_tensor_repository(const IWeightRepository& repository) {
+    return dynamic_cast<const IReleasableTensorRepository*>(&repository);
 }
 
 class ITokenizerDataRepository {

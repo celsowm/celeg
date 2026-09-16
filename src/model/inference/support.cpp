@@ -100,6 +100,12 @@ void reject_unknown_semantic_metadata(const CheckpointMetadata& metadata,
         /// Vision tiling budgets for a tower celeg does not bind (same
         /// standing as the flat keys above).
         "min_tiles", "max_tiles", "tile_size",
+        /// Checkpoint-composition flag (`language_model_only: false` ships
+        /// on multimodal checkpoints whose tower celeg does not bind in a
+        /// text-only run): tensor binding is grammar-driven, so the flag
+        /// cannot change the resolved text graph either way. Binding a
+        /// vision tower off this flag later must revisit this entry.
+        "language_model_only",
         /// Vision projector internals (width, activation, layernorm toggle,
         /// patch size) for a tower celeg does not bind: with no projector
         /// in the graph none of these can change resolution. Binding a

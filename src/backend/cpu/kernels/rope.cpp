@@ -45,23 +45,42 @@ void build_rope_tables(const RopePositionSpec& rope, int rotary_dim, int positio
     }
 }
 
+/// Partial-rotary pairing convention. Proportional RoPE returns head_dim-wide
+/// (zero-padded) frequency tables, so its pairs are full-dimension pairs:
+/// pair `i` mixes `(i, i + head_dim / 2)`. Every other scaling builds
+/// prefix-width tables (Ling pins `partial_rotary_factor = 1.0` over the
+/// `qk_rope_head_dim` prefix and rotates the prefix with `rotate_half`), so
+/// pairs stay prefix-local. Pairing proportional the legacy way mixes the
+/// wrong partner dims (seen on gemma-4 full-attention layers).
+int rope_pair_count(const RopePositionSpec& rope, int head_dim, int rotary_dim) {
+    if (std::holds_alternative<ProportionalRopeScaling>(rope.scaling)) {
+        return rope_geometry::rotary_pairs(head_dim);
+    }
+    return rope_geometry::rotary_pairs(rotary_dim);
+}
+
 void apply_qk_norm_rope_scalar(float* data, const float* norm_weight,
                                const float* cos_vals, const float* sin_vals,
-                               int heads, int head_dim, int rotary_dim,
-                               RopePairingKind pairing, float eps) {
-    const int half = rope_geometry::rotary_pairs(rotary_dim);
+                               int heads, int head_dim, int rotated_pairs,
+                               int pair_count, RopePairingKind pairing, float eps) {
     for (int head = 0; head < heads; ++head) {
         float* vector = data + static_cast<size_t>(head) * head_dim;
         double sum = 0.0;
         for (int d = 0; d < head_dim; ++d) {
             sum += static_cast<double>(vector[d]) * vector[d];
         }
+        /// HF normalizes the whole head before rotating; the old fused loop
+        /// only normalized the rotated prefix and left the tail as raw GEMM
+        /// output, which collapses downstream attention.
         const float inv = 1.0f / std::sqrt(static_cast<float>(sum / head_dim) + eps);
-        for (int pair = 0; pair < half; ++pair) {
+        for (int d = 0; d < head_dim; ++d) {
+            vector[d] *= inv * norm_weight[d];
+        }
+        for (int pair = 0; pair < rotated_pairs; ++pair) {
             const auto [first, second] = rope_geometry::pair_components(
-                pair, half, pairing);
-            const float a = vector[first] * inv * norm_weight[first];
-            const float b = vector[second] * inv * norm_weight[second];
+                pair, pair_count, pairing);
+            const float a = vector[first];
+            const float b = vector[second];
             vector[first] = a * cos_vals[pair] - b * sin_vals[pair];
             vector[second] = b * cos_vals[pair] + a * sin_vals[pair];
         }
@@ -98,7 +117,10 @@ void cpu_qk_norm_rope_scalar_dispatch(float* data, const float* norm_weight,
     thread_local std::vector<float> sin_vals;
     build_rope_tables(rope, rotary_dim, position, cos_vals, sin_vals);
     apply_qk_norm_rope_scalar(data, norm_weight, cos_vals.data(), sin_vals.data(),
-                              heads, head_dim, rotary_dim, rope.pairing, eps);
+                              heads, head_dim,
+                              rope_geometry::rotary_pairs(rotary_dim),
+                              rope_pair_count(rope, head_dim, rotary_dim),
+                              rope.pairing, eps);
 }
 
 #if ((defined(__GNUC__) || defined(__clang__)) && \
@@ -125,7 +147,10 @@ void cpu_qk_norm_rope_avx2_dispatch(float* data, const float* norm_weight,
         return;
     }
     apply_qk_norm_rope_scalar(data, norm_weight, cos_vals.data(), sin_vals.data(),
-                              heads, head_dim, rotary_dim, rope.pairing, eps);
+                              heads, head_dim,
+                              rope_geometry::rotary_pairs(rotary_dim),
+                              rope_pair_count(rope, head_dim, rotary_dim),
+                              rope.pairing, eps);
 }
 #endif
 
@@ -184,6 +209,7 @@ void cpu_rope(float* data, int heads, int head_dim, int position,
     }
     const int rotary_dim = static_cast<int>(static_cast<float>(head_dim) * rope.rotary_fraction);
     const int half = rope_geometry::rotary_pairs(rotary_dim);
+    const int pair_count = rope_pair_count(rope, head_dim, rotary_dim);
     std::vector<float> cos_vals(static_cast<size_t>(half));
     std::vector<float> sin_vals(static_cast<size_t>(half));
     for (int pair = 0; pair < half; ++pair) {
@@ -197,7 +223,7 @@ void cpu_rope(float* data, int heads, int head_dim, int position,
         float* row = data + static_cast<size_t>(head) * head_dim;
         for (int pair = 0; pair < half; ++pair) {
             const auto [first, second] = rope_geometry::pair_components(
-                pair, half, rope.pairing);
+                pair, pair_count, rope.pairing);
             const float x0 = row[first];
             const float x1 = row[second];
             row[first] = x0 * cos_vals[static_cast<size_t>(pair)] -

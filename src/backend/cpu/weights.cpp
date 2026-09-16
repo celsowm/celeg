@@ -4,6 +4,7 @@
 #include "celeg/backend/cpu/compiler.hpp"
 #include "celeg/backend/cpu/kernel_backend.hpp"
 #include "celeg/backend/cpu/weight_codec.hpp"
+#include "celeg/checkpoint/packed/nvfp4.hpp"
 #include "celeg/checkpoint/weight_repository.hpp"
 #include "celeg/checkpoint/tensor_names.hpp"
 #include "celeg/model/weights/quantization.hpp"
@@ -83,9 +84,22 @@ CpuCompiledModel::Shared::Shared(const std::string& path, int context,
     weight_requests = bootstrap.model.weight_plan.requests;
     repository = bootstrap.checkpoint.repository;
     const std::vector<std::string> repository_names = repository->names();
+    /// Legacy packed checkpoints (packed int8/int4) share one on-disk tensor
+    /// across requests, so repeat loads are served from a shared cache.
+    /// NVFP4 triples also carry a "<base>_packed" sidecar, but each of their
+    /// tensors loads independently through the ordinary codec path -- routing
+    /// them through the shared cache would retain a second copy of every
+    /// matrix (cache plus weight store) and double peak RAM. Detect the
+    /// layout from the sidecars themselves, not the "_packed" suffix alone.
     checkpoint.compressed_checkpoint = std::any_of(
         repository_names.begin(), repository_names.end(),
-        [](const std::string& name) { return name.ends_with("_packed"); });
+        [&](const std::string& name) {
+            constexpr std::string_view packed_suffix = "_packed";
+            if (!name.ends_with(packed_suffix)) return false;
+            const std::string base =
+                name.substr(0, name.size() - packed_suffix.size());
+            return !has_packed_nvfp4_matrix(*repository, base);
+        });
     prepare_pack_path();
     if (options.expert_backing == CpuExpertBacking::DiskCached &&
         !checkpoint.native_checkpoint && !checkpoint.compressed_checkpoint &&

@@ -38,4 +38,10 @@ PackedNvfp4Matrix load_packed_nvfp4_matrix(
     const IWeightRepository& repository, std::string_view name,
     const std::vector<int64_t>& expected_shape);
 
+/// Dequantizes a packed NVFP4 matrix to float: e2m1 * per-16-block e4m3
+/// scale / per-tensor global scale. The input_global_scale calibrates the
+/// dynamic activation quantization only and never applies to weights --
+/// see GemmDispatcher::linear_nvfp4_w4a4.
+std::vector<float> dequantize_packed_nvfp4(const PackedNvfp4Matrix& matrix);
+
 }

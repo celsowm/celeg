@@ -288,9 +288,18 @@ __global__ void dynamic_qk_norm_rope_kernel(
     __syncthreads();
     const int position = mode == 2 ? row :
         resolved_position(position_value, position_pointer, mode == 1);
+    /// Partial-rotary pairing convention: proportional RoPE returns
+    /// head_dim-wide (zero-padded) frequency tables, so its pairs are
+    /// full-dimension pairs (`i` mixes `(i, i + head_dim / 2)`); every other
+    /// scaling builds prefix-width tables, so pairs stay prefix-local (Ling
+    /// pins `partial_rotary_factor = 1.0` over its rope prefix). The Q/K norm
+    /// runs ahead of this kernel over the full width, so unrotated dims keep
+    /// their normalized values either way.
+    const int pair_count =
+        scaling.kind == 6 ? head_dim / 2 : rotary_pairs;
     for (int i = threadIdx.x; i < rotary_pairs; i += blockDim.x) {
         const auto components = rope_geometry::pair_components(
-            i, rotary_pairs, pairing);
+            i, pair_count, pairing);
         const int low = components.first;
         const int high = components.second;
         const float a = bf16_float(vector[low]) * inv *
@@ -306,8 +315,26 @@ __global__ void dynamic_qk_norm_rope_kernel(
         vector[high] = __float2bfloat16(b * c + a * s);
     }
     if (normalize) {
-        for (int i = threadIdx.x + 2 * rotary_pairs; i < head_dim; i += blockDim.x) {
-            vector[i] = __float2bfloat16(bf16_float(vector[i]) * inv * bf16_float(norm_weight[i]));
+        if (scaling.kind == 6) {
+            /// Proportional pairs are full-dimension pairs: rotated dims are
+            /// `[0, rotary_pairs)` and `[head_dim / 2, head_dim / 2 +
+            /// rotary_pairs)`, so the unrotated gaps on both halves still
+            /// need their norm. The legacy prefix convention rotates one
+            /// contiguous `[0, 2 * rotary_pairs)` block (handled below).
+            for (int i = threadIdx.x + rotary_pairs; i < head_dim / 2;
+                 i += blockDim.x) {
+                vector[i] = __float2bfloat16(bf16_float(vector[i]) * inv *
+                                             bf16_float(norm_weight[i]));
+            }
+            for (int i = threadIdx.x + head_dim / 2 + rotary_pairs; i < head_dim;
+                 i += blockDim.x) {
+                vector[i] = __float2bfloat16(bf16_float(vector[i]) * inv *
+                                             bf16_float(norm_weight[i]));
+            }
+        } else {
+            for (int i = threadIdx.x + 2 * rotary_pairs; i < head_dim; i += blockDim.x) {
+                vector[i] = __float2bfloat16(bf16_float(vector[i]) * inv * bf16_float(norm_weight[i]));
+            }
         }
     }
     __syncthreads();

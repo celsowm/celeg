@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
 #include <limits>
 #include <stdexcept>
@@ -14,6 +15,47 @@
 #include <vector>
 
 namespace celeg {
+
+/// Decode-path counterpart of prefill_detail::debug_layer_stats: dumps the
+/// single-token hidden state after the mixer and after the MLP. Only runs
+/// when CELEG_DEBUG_LAYER_STATS is set AND CUDA graphs are disabled
+/// (--no-cuda-graph): the synchronous copy and file write below are host
+/// work that must never execute inside a graph capture.
+void debug_decode_layer_stats(CudaCompiledModel& model, int layer_index,
+                              const char* stage) {
+    static const bool enabled = getenv("CELEG_DEBUG_LAYER_STATS") != nullptr;
+    if (!enabled || model.resources_.options().cuda_graph) return;
+    const int hidden = model.resources_.program_.hidden;
+    std::vector<__nv_bfloat16> host(static_cast<size_t>(hidden));
+    CELEG_CUDA(cudaStreamSynchronize(model.stream_.get()));
+    CELEG_CUDA(cudaMemcpy(host.data(), model.workspace_.hidden_.data(),
+                          host.size() * sizeof(__nv_bfloat16),
+                          cudaMemcpyDeviceToHost));
+    double sq = 0.0;
+    float mx = 0.0f;
+    bool bad = false;
+    for (const __nv_bfloat16 value : host) {
+        const float element = __bfloat162float(value);
+        sq += static_cast<double>(element) * element;
+        mx = std::max(mx, std::fabs(element));
+        if (!std::isfinite(element)) bad = true;
+    }
+    fprintf(stderr, "[cuda dec layer %d %s] norm=%.4f max=%.4f bad=%d\n",
+            layer_index, stage, std::sqrt(sq), mx, bad ? 1 : 0);
+    const char* dump_dir = getenv("CELEG_DEBUG_HIDDEN_DIR");
+    if (!dump_dir) return;
+    std::vector<float> row(static_cast<size_t>(hidden));
+    for (int i = 0; i < hidden; ++i) {
+        row[static_cast<size_t>(i)] = __bfloat162float(host[static_cast<size_t>(i)]);
+    }
+    char path[512];
+    snprintf(path, sizeof(path), "%s/cuda_dec_layer%d_%s.f32", dump_dir,
+             layer_index, stage);
+    if (FILE* out = fopen(path, "wb")) {
+        fwrite(row.data(), sizeof(float), row.size(), out);
+        fclose(out);
+    }
+}
 void CudaCompiledModel::set_generation_config(GenerationConfig generation) {
     generation.validate();
     if (session_.phase_ == SessionPhase::DecodePending) {
@@ -77,6 +119,7 @@ void CudaCompiledModel::enqueue_decode_forward() {
         } else {
             enqueue_decode_non_attention_mixer(layer, layer_idx);
         }
+        debug_decode_layer_stats(*this, layer_idx, "mixer-out");
         if (semantics.mixer_norm.after) {
             launch_rmsnorm(workspace_.hidden_.data(), common_layer.mixer_norm_after,
                            workspace_.hidden_.data(), 1, resources_.program_.hidden,
@@ -92,6 +135,7 @@ void CudaCompiledModel::enqueue_decode_forward() {
         if (!mixer_only) {
             run_mlp_decode(common_layer, layer_idx);
         }
+        debug_decode_layer_stats(*this, layer_idx, "post-mlp");
         if (std::binary_search(resources_.program_.norm_after_layers.begin(),
                                resources_.program_.norm_after_layers.end(), layer_idx)) {
             launch_rmsnorm(workspace_.hidden_.data(), resources_.final_norm_,

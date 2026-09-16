@@ -2,8 +2,10 @@
 #include "celeg/checkpoint/formats/gguf.hpp"
 
 #include "celeg/checkpoint/weight_repository.hpp"
+#include "celeg/checkpoint/packed/fp8.hpp"
 #include "celeg/checkpoint/packed/int8.hpp"
 #include "celeg/checkpoint/packed/int4.hpp"
+#include "celeg/checkpoint/packed/nvfp4.hpp"
 #include "celeg/checkpoint/tensor_codec.hpp"
 #include "celeg/model/weights/quantization.hpp"
 
@@ -14,7 +16,7 @@ namespace celeg {
 namespace {
 
 GgmlMatrixView gguf_matrix(const HostTensorView& tensor,
-                          const std::string& name) {
+                           const std::string& name) {
     const GgmlType type = ggml_type_from_block_encoding(tensor.block_encoding);
     if (!gguf_type_dequantizable(type)) {
         throw std::runtime_error("unsupported CPU GGUF linear quantization: " +
@@ -28,6 +30,38 @@ GgmlMatrixView gguf_matrix(const HostTensorView& tensor,
     matrix.bytes = tensor.bytes;
     matrix.validate();
     return matrix;
+}
+
+/// Drops a consumed checkpoint-quantized tensor's source pages so the
+/// loader never holds the whole checkpoint resident alongside the packed
+/// weights. Only touches the physical sidecars of `name`; repositories
+/// without paged storage ignore it. Callers invoke this exactly once per
+/// tensor, after its final consumption -- never on views the returned
+/// weight still references (e.g. native GGUF segments).
+void release_packed_sources(const IWeightRepository* source,
+                            const std::string& name, bool nvfp4) {
+    if (source == nullptr) return;
+    const IReleasableTensorRepository* releasable =
+        try_release_tensor_repository(*source);
+    if (releasable == nullptr) return;
+    auto drop = [&](const std::string& tensor) {
+        if (source->contains(tensor)) releasable->release(tensor);
+    };
+    if (nvfp4) {
+        drop(name + "_packed");
+        drop(name + "_scale");
+        drop(name + "_global_scale");
+        constexpr std::string_view weight_suffix = ".weight";
+        std::string module = name;
+        if (module.size() > weight_suffix.size() &&
+            module.ends_with(weight_suffix)) {
+            module.erase(module.size() - weight_suffix.size());
+        }
+        drop(module + ".input_global_scale");
+        return;
+    }
+    drop(name);
+    drop(name + "_scale");
 }
 
 }
@@ -85,6 +119,24 @@ CpuLinearWeight CpuWeightCodec::matrix(
     if (has_packed_int4_matrix(*source_, name)) {
         const PackedInt4Matrix packed = load_packed_int4_matrix(*source_, name, expected);
         std::vector<float> values = dequantize_packed_int4(packed);
+        return dense_result(std::move(values), static_cast<uint32_t>(packed.rows),
+                            static_cast<uint32_t>(packed.cols), name);
+    }
+    /// Checkpoint-quantized FP8/NVFP4 tensors (e.g. compressed-tensors
+    /// float-quantized / nvfp4-pack-quantized) dequantize to float on load,
+    /// then join the ordinary dense path: bf16 storage in bf16 mode, the
+    /// CPU-native groupwise Q4 otherwise. Mirrors the packed-int4 branch.
+    if (has_packed_fp8_matrix(*source_, name)) {
+        const PackedFp8Matrix packed = load_packed_fp8_matrix(*source_, name, expected);
+        std::vector<float> values = dequantize_packed_fp8(packed);
+        release_packed_sources(source_, name, /*nvfp4=*/false);
+        return dense_result(std::move(values), static_cast<uint32_t>(packed.rows),
+                            static_cast<uint32_t>(packed.cols), name);
+    }
+    if (has_packed_nvfp4_matrix(*source_, name)) {
+        const PackedNvfp4Matrix packed = load_packed_nvfp4_matrix(*source_, name, expected);
+        std::vector<float> values = dequantize_packed_nvfp4(packed);
+        release_packed_sources(source_, name, /*nvfp4=*/true);
         return dense_result(std::move(values), static_cast<uint32_t>(packed.rows),
                             static_cast<uint32_t>(packed.cols), name);
     }
@@ -157,6 +209,22 @@ CpuLinearWeight CpuWeightCodec::concat(
     std::vector<HostTensorView> tensors;
     tensors.reserve(parts.size());
     for (const auto& [name, expected] : parts) {
+        if (has_packed_fp8_matrix(*source_, name)) {
+            const PackedFp8Matrix packed = load_packed_fp8_matrix(*source_, name, expected);
+            if (packed.cols != cols) throw std::runtime_error("packed FP8 concat width mismatch");
+            total_rows += static_cast<size_t>(packed.rows);
+            all_quantized = false;
+            tensors.push_back(HostTensorView{});
+            continue;
+        }
+        if (has_packed_nvfp4_matrix(*source_, name)) {
+            const PackedNvfp4Matrix packed = load_packed_nvfp4_matrix(*source_, name, expected);
+            if (packed.cols != cols) throw std::runtime_error("packed NVFP4 concat width mismatch");
+            total_rows += static_cast<size_t>(packed.rows);
+            all_quantized = false;
+            tensors.push_back(HostTensorView{});
+            continue;
+        }
         if (has_packed_int4_matrix(*source_, name)) {
             const PackedInt4Matrix packed = load_packed_int4_matrix(*source_, name, expected);
             if (packed.cols != cols) throw std::runtime_error("packed INT4 concat width mismatch");
@@ -199,7 +267,15 @@ CpuLinearWeight CpuWeightCodec::concat(
     for (size_t i = 0; i < parts.size(); ++i) {
         const auto& [name, expected] = parts[i];
         std::vector<float> values;
-        if (has_packed_int4_matrix(*source_, name)) {
+        if (has_packed_fp8_matrix(*source_, name)) {
+            values = dequantize_packed_fp8(
+                load_packed_fp8_matrix(*source_, name, expected));
+            release_packed_sources(source_, name, /*nvfp4=*/false);
+        } else if (has_packed_nvfp4_matrix(*source_, name)) {
+            values = dequantize_packed_nvfp4(
+                load_packed_nvfp4_matrix(*source_, name, expected));
+            release_packed_sources(source_, name, /*nvfp4=*/true);
+        } else if (has_packed_int4_matrix(*source_, name)) {
             values = dequantize_packed_int4(
                 load_packed_int4_matrix(*source_, name, expected));
         } else {

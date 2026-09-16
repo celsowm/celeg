@@ -5,13 +5,109 @@
 #include "backend/cuda/weights_loader.hpp"
 #include "linear_storage_internal.hpp"
 
+#include <cstdlib>
 #include <cuda_bf16.h>
 #include <cuda_runtime.h>
+#include <set>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <type_traits>
 
 namespace celeg {
+
+/// Layer-index sentinel for the lm_head output projection, which carries
+/// no "...layers.<N>..." infix but is still bisected like a layer
+/// ("head") because it shapes every generated token.
+inline constexpr int kBisectLmHead = 1000000;
+
+/// Parses CELEG_BF16_LAYERS ("all", comma-separated indices/ranges like
+/// "0-7,56-63", plus "head" for the lm_head projection) into layer
+/// indices. Absent or unparsable entries yield an empty set.
+std::set<int> debug_bisect_layers() {
+    std::set<int> layers;
+    const char* raw = std::getenv("CELEG_BF16_LAYERS");
+    if (raw == nullptr || *raw == '\0') return layers;
+    const std::string text(raw);
+    if (text == "all") return std::set<int>{-1};
+    std::istringstream stream(text);
+    std::string item;
+    while (std::getline(stream, item, ',')) {
+        if (item == "head") {
+            layers.insert(kBisectLmHead);
+            continue;
+        }
+        const size_t dash = item.find('-');
+        try {
+            if (dash == std::string::npos) {
+                layers.insert(std::stoi(item));
+            } else {
+                const int first = std::stoi(item.substr(0, dash));
+                const int last = std::stoi(item.substr(dash + 1));
+                for (int layer = first; layer <= last; ++layer) {
+                    layers.insert(layer);
+                }
+            }
+        } catch (const std::exception&) {
+        }
+    }
+    return layers;
+}
+
+/// Extracts the physical layer index from a resolved tensor name
+/// ("...layers.<N>...."), kBisectLmHead for the lm_head projection, or -1
+/// when the name carries neither (embeddings, norms, ...).
+int debug_bisect_layer_index(std::string_view name) {
+    if (name == "lm_head.weight" || name.starts_with("lm_head.")) {
+        return kBisectLmHead;
+    }
+    constexpr std::string_view marker = "layers.";
+    const size_t begin = name.find(marker);
+    if (begin == std::string_view::npos) return -1;
+    size_t end = begin + marker.size();
+    int layer = 0;
+    bool digits = false;
+    while (end < name.size() && name[end] >= '0' && name[end] <= '9') {
+        digits = true;
+        layer = layer * 10 + static_cast<int>(name[end] - '0');
+        ++end;
+    }
+    return digits ? layer : -1;
+}
+
+/// True when CELEG_BF16_FORMATS lists the named checkpoint-quantized
+/// format ("fp8", "nvfp4", or "all"). Debug/bisect aid only.
+bool debug_bisect_format(std::string_view format) {
+    const char* raw = std::getenv("CELEG_BF16_FORMATS");
+    if (raw == nullptr || *raw == '\0') return false;
+    const std::string text(raw);
+    if (text == "all") return true;
+    size_t begin = 0;
+    while (begin < text.size()) {
+        const size_t end = text.find(',', begin);
+        const std::string item =
+            text.substr(begin, end == std::string::npos ? end : end - begin);
+        if (item == format) return true;
+        if (end == std::string::npos) break;
+        begin = end + 1;
+    }
+    return false;
+}
+
+bool debug_bisect_hit(std::string_view name, std::string_view format) {
+    const std::set<int> layers = debug_bisect_layers();
+    const char* formats = std::getenv("CELEG_BF16_FORMATS");
+    const bool format_filter = formats != nullptr && *formats != '\0';
+    if (layers.empty() && !format_filter) return false;
+    bool layer_hit = true;
+    if (!layers.empty()) {
+        const int layer = debug_bisect_layer_index(name);
+        layer_hit = layers.count(-1) != 0 ? layer >= 0
+                                           : layers.count(layer) != 0;
+    }
+    const bool format_hit = !format_filter || debug_bisect_format(format);
+    return layer_hit && format_hit;
+}
 
 std::optional<LinearSource> classify_linear_source(
     const IWeightRepository& repository,
@@ -71,8 +167,8 @@ DeviceWeight materialize_linear(
             }
             weight.bf16_storage.reset(dense.size());
             CELEG_CUDA(cudaMemcpy(weight.bf16_storage.data(), dense.data(),
-                                  dense.size() * sizeof(__nv_bfloat16),
-                                  cudaMemcpyHostToDevice));
+                                   dense.size() * sizeof(__nv_bfloat16),
+                                   cudaMemcpyHostToDevice));
             const std::byte* data = reinterpret_cast<const std::byte*>(dense.data());
             if (is_rowwise_quantized_weight_mode(mode)) {
                 cuda_loader_detail::quantize_and_bind(
@@ -83,8 +179,13 @@ DeviceWeight materialize_linear(
             }
         } else if constexpr (std::is_same_v<Source, PackedFp8Source>) {
             cuda_loader_detail::bind_fp8_storage(weight, source.matrix.values,
-                                                  source.matrix.scales);
+                                                 source.matrix.scales);
         } else if constexpr (std::is_same_v<Source, PackedNvfp4Source>) {
+            /// Native NVFP4 runtime path: the packed E2M1 payload and the
+            /// per-16-block UE4M3 scales bind directly to the W4A4 cuBLASLt
+            /// matmul (LinearKernelKind::Nvfp4W4A4); the per-tensor global
+            /// scales apply after the matmul. Bisect overrides (see
+            /// load_linear_weight) dequantize to bf16 before reaching here.
             cuda_loader_detail::bind_nvfp4_storage(
                 weight, source.matrix.packed, source.matrix.block_scales,
                 source.matrix.global_scale, source.matrix.input_global_scale);

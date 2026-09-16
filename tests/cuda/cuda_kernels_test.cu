@@ -19,6 +19,7 @@ int main() {
     celeg::cuda_test::run_mamba_tests(stream);
     celeg::cuda_test::run_gated_delta_tests(stream);
     celeg::cuda_test::run_attention_data_movement_tests(stream);
+    celeg::cuda_test::run_packed_gate_decode_tests(stream);
     celeg::cuda_test::run_embedding_tests(stream);
     celeg::cuda_test::run_quantized_linear_tests(stream);
     celeg::cuda_test::run_norm_activation_tests(stream);

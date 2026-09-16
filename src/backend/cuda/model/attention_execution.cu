@@ -40,7 +40,12 @@ void CudaCompiledModel::enqueue_decode_standard_attention(
 
     decode_phase_profile().begin(stream_.get());
     const CudaQkvProjectionView qkv = project_standard_attention_qkv(*attention);
-    __nv_bfloat16* q = qkv.query;
+    /// Checkpoint-packed Q+Gate projections interleave [query, gate] per
+    /// head, so the gate must be de-interleaved into its own buffer before
+    /// any per-head code (QK norm, RoPE, attention) runs on the query --
+    /// the same extraction the prefill path performs. Skipping it leaves
+    /// gate values inside every query head and misroutes the gate itself.
+    __nv_bfloat16* q = prepare_cuda_token_attention_gate(*this, *attention, qkv.query);
     __nv_bfloat16* k = qkv.key;
     __nv_bfloat16* v = qkv.value;
     decode_phase_profile().end(DecodePhase::Projection, stream_.get());
@@ -99,7 +104,7 @@ void CudaCompiledModel::enqueue_decode_standard_attention(
             layout.key_value_heads, layout.head_dim,
             transform->minimum_norm_squared, stream_.get());
     }
-    apply_cuda_graph_attention_gate(*this, *attention, q);
+    apply_cuda_token_attention_gate(*this, *attention);
     decode_phase_profile().end(DecodePhase::Attention, stream_.get());
 
     decode_phase_profile().begin(stream_.get());

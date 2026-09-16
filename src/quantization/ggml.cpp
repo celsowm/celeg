@@ -3,6 +3,8 @@
 #include "celeg/quantization/gguf_blocks.hpp"
 #include "celeg/checkpoint/gguf_iq.hpp"
 
+#include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <stdexcept>
 #include <string>
@@ -316,6 +318,127 @@ void ggml_decode_row(const GgmlMatrixView& matrix, size_t row,
             }
         }
     }
+}
+
+}
+
+namespace celeg {
+
+std::vector<uint8_t> quantize_f32_q4k(std::span<const float> values,
+                                      std::size_t rows,
+                                      std::size_t cols) {
+    constexpr size_t kSuperBlock = 256;
+    constexpr size_t kSubBlocks = 8;
+    constexpr size_t kSubSize = kSuperBlock / kSubBlocks;
+    constexpr size_t kBlockBytes = sizeof(BlockQ4K);
+    if (rows == 0 || cols == 0 || cols % kSuperBlock != 0) {
+        throw std::invalid_argument(
+            "Q4_K pack requires a column count that is a multiple of 256");
+    }
+    if (values.size() != rows * cols) {
+        throw std::invalid_argument("Q4_K pack input size mismatch");
+    }
+    std::vector<uint8_t> result(rows * (cols / kSuperBlock) * kBlockBytes);
+    BlockQ4K* blocks = reinterpret_cast<BlockQ4K*>(result.data());
+    for (size_t row = 0; row < rows; ++row) {
+        const float* source = values.data() + row * cols;
+        for (size_t sb = 0; sb < cols / kSuperBlock; ++sb) {
+            const float* block_in = source + sb * kSuperBlock;
+            BlockQ4K& block = blocks[row * (cols / kSuperBlock) + sb];
+            block = BlockQ4K{};
+
+            /// Per-sub ranges; a sub with all-positive values quantizes from
+            /// zero (its codes never reach into negatives), a negative-mix
+            /// sub keeps its true minimum.
+            float sub_scale[kSubBlocks] = {};
+            float sub_low[kSubBlocks] = {};
+            float sub_min[kSubBlocks] = {};
+            float sub_max[kSubBlocks] = {};
+            for (size_t j = 0; j < kSubBlocks; ++j) {
+                const float* s = block_in + j * kSubSize;
+                float lo = s[0], hi = s[0];
+                for (size_t i = 1; i < kSubSize; ++i) {
+                    lo = std::min(lo, s[i]);
+                    hi = std::max(hi, s[i]);
+                }
+                sub_min[j] = lo;
+                sub_max[j] = hi;
+            }
+            float max_scale = 0.0f;
+            float max_min = 0.0f;
+            for (size_t j = 0; j < kSubBlocks; ++j) {
+                const float low = std::min(sub_min[j], 0.0f);
+                sub_low[j] = low;
+                sub_scale[j] = (sub_max[j] - low) / 15.0f;
+                max_scale = std::max(max_scale, sub_scale[j]);
+                max_min = std::max(max_min, -low);
+            }
+            const float d_model = max_scale > 0.0f ? max_scale / 63.0f : 0.0f;
+            block.d = float_to_fp16_bits(d_model);
+            const float d = fp16_bits_to_float(block.d);
+            /// A superblock with no per-sub spread at all (e.g. a constant
+            /// row) carries d==0 but may still hold a non-zero minimum;
+            /// dmin stays independent of d so "all mins, no spread" decodes
+            /// to the constant value instead of 0.
+            const float dmin_model = max_min > 0.0f ? max_min / 63.0f : 0.0f;
+            block.dmin = float_to_fp16_bits(dmin_model);
+            const float dmin = fp16_bits_to_float(block.dmin);
+            if (d <= 0.0f && dmin <= 0.0f) continue;
+
+            uint8_t sc[kSubBlocks] = {};
+            uint8_t m[kSubBlocks] = {};
+            for (size_t j = 0; j < kSubBlocks; ++j) {
+                /// fp16 rounding of d/dmin can push an extreme ratio one
+                /// step past the 6-bit code range; clamp instead of letting
+                /// the 7th bit bleed into a neighbor's packed lane.
+                sc[j] = d > 0.0f
+                    ? static_cast<uint8_t>(
+                          std::clamp(std::lround(sub_scale[j] / d), 0L, 63L))
+                    : uint8_t{0};
+                m[j] = dmin > 0.0f
+                    ? static_cast<uint8_t>(
+                        std::clamp(std::lround(-sub_low[j] / dmin), 0L, 63L))
+                    : uint8_t{0};
+                /// Packed layout, decoding forwards: bytes 0-3 carry the
+                /// low 6 bits of sc_0..3; bytes 4-7 carry the low 6 bits
+                /// of m_0..3; bytes 8-11 interleave the low nibbles of
+                /// sc_4..7 and m_4..7; the missing top 2 bits of the subs
+                /// 4..7 live in the high 2 bits of bytes 0..3 (sc) and
+                /// bytes 4..7 (m) -- so those bytes are only ever |=d
+                /// here, never assigned twice.
+                if (j < 4) {
+                    block.scales[j] = sc[j];
+                    block.scales[j + 4] = m[j];
+                } else {
+                    block.scales[j + 4] = static_cast<uint8_t>((sc[j] & 0x0f) |
+                        ((m[j] & 0x0f) << 4));
+                    block.scales[j - 4] |= static_cast<uint8_t>(
+                        ((sc[j] >> 4) & 0x03) << 6);
+                    block.scales[j] |= static_cast<uint8_t>(
+                        ((m[j] >> 4) & 0x03) << 6);
+                }
+                const float step = d * static_cast<float>(sc[j]);
+                if (step <= 0.0f) continue;
+                const float base = -dmin * static_cast<float>(m[j]);
+                for (size_t i = 0; i < kSubSize; ++i) {
+                    const size_t col = j * kSubSize + i;
+                    const float nominal =
+                        block_in[col] / step - base / step;  /// (x-lo)/scale
+                    const long q = std::lround(nominal);
+                    const int code =
+                        static_cast<int>(q < 0 ? 0 : (q > 15 ? 15 : q));
+                    const size_t within = col & (kSubSize - 1);
+                    uint8_t& byte = block.qs[(j >> 1) * kSubSize + within];
+                    if ((j & 1) == 0) {
+                        byte = static_cast<uint8_t>((byte & 0xF0) | code);
+                    } else {
+                        byte = static_cast<uint8_t>((byte & 0x0F) | (code << 4));
+                    }
+                }
+            }
+        }
+    }
+    return result;
 }
 
 }
