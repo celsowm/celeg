@@ -38,6 +38,17 @@ inline float moe_sigmoid(float x) {
 #endif
 }
 
+/// SiLU expert activation (SwiGLU family: silu(gate) * up), matching the CPU
+/// `swiglu` path and the reference MoE implementations. Native-quant expert
+/// kernels previously applied a bare sigmoid here, which no passing model
+/// exercised; keep `moe_sigmoid` for the router score variant that needs it.
+#if defined(__CUDACC__)
+__host__ __device__
+#endif
+inline float moe_silu(float x) {
+    return x * moe_sigmoid(x);
+}
+
 struct MoeRouterConfig {
     int num_experts = 0;
     int experts_per_token = 0;
@@ -96,6 +107,19 @@ struct MoeFfnDevice {
     size_t expert_down_row_bytes = 0;
     size_t expert_gate_up_byte_stride = 0;
     size_t expert_down_byte_stride = 0;
+
+    /// Split native gate/up tables for mixed-quant experts (e.g. Q4_K gate
+    /// with Q6_K up, the standard Q4_K_M MoE layout): each projection keeps
+    /// its own blocks, type and stride instead of sharing one fused table.
+    /// Null when gate/up share one table (or are not native-quantized).
+    const uint8_t* gate_gguf = nullptr;
+    const uint8_t* up_gguf = nullptr;
+    GgmlType gate_gguf_type = GgmlType::Unknown;
+    GgmlType up_gguf_type = GgmlType::Unknown;
+    size_t expert_gate_row_bytes = 0;
+    size_t expert_up_row_bytes = 0;
+    size_t expert_gate_byte_stride = 0;
+    size_t expert_up_byte_stride = 0;
 
     const __nv_bfloat16* const* gate_up_ptrs = nullptr;
     const __nv_bfloat16* const* down_ptrs = nullptr;

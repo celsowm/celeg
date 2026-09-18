@@ -487,6 +487,11 @@ bool layer_has_feed_forward(const CanonicalInferenceContext& context,
     const std::string index = std::to_string(context.physical_layer(layer));
     return find_mamba_tensor(input, context.physical_layer(layer), "in_proj.weight") == nullptr &&
         (has_tensor("blk." + index + ".ffn_up.weight") ||
+         /// Stacked GGUF MoE grammars keep routed experts in 3D
+         /// `ffn_*_exps` tensors (expert dim last) and the shared expert in
+         /// `ffn_*_shexp` tensors instead of per-expert dense projections.
+         has_tensor("blk." + index + ".ffn_up_exps.weight") ||
+         has_tensor("blk." + index + ".ffn_up_shexp.weight") ||
          has_tensor("model.layers." + index + ".mlp.up_proj.weight") ||
          has_tensor("model.language_model.layers." + index + ".mlp.up_proj.weight") ||
          has_tensor("transformer.h." + index + ".mlp.w_up.weight") ||

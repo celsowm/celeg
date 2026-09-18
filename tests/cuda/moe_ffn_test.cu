@@ -156,7 +156,137 @@ void run_native_quantized_case(celeg::GgmlType gate_type,
         float sum = 0.0f;
         for (int h = 0; h < hidden; ++h)
             sum += __bfloat162float(hidden_bf16[static_cast<size_t>(row) * hidden + h]);
-        const float activated_value = (1.0f / (1.0f + std::exp(-sum))) * sum;
+        const float activated_value = sum * (1.0f / (1.0f + std::exp(-sum))) * sum;
+        const float expected = (routing_host[row * K] + routing_host[row * K + 1]) *
+            static_cast<float>(inter) * activated_value;
+        for (int h = 0; h < hidden; ++h) {
+            const float denom = std::max(1.0f, std::fabs(expected));
+            CELEG_TEST_CHECK(std::fabs(actual[static_cast<size_t>(row) * hidden + h] - expected) /
+                           denom < 0.02f);
+        }
+    }
+}
+
+/// Split native gate/up tables for mixed-quant experts (gate and up use
+/// different block types, e.g. Q4_K gate with Q6_K up as produced by Q4_K_M
+/// MoE quantization). Same crafted-block reference math as the fused case,
+/// but gate and up live in separate tables with their own strides.
+void run_native_quantized_split_case(celeg::GgmlType gate_type,
+                                     celeg::GgmlType up_type,
+                                     celeg::GgmlType down_type) {
+    constexpr int rows = 2;
+    constexpr int hidden = 256;
+    constexpr int inter = 256;
+    constexpr int experts = 2;
+    constexpr int K = 2;
+    constexpr size_t q4_row_bytes = 144;
+    constexpr size_t q6_row_bytes = 210;
+
+    const auto row_bytes_of = [](celeg::GgmlType type) {
+        return type == celeg::GgmlType::Q4_K ? q4_row_bytes : q6_row_bytes;
+    };
+    const size_t gate_row_bytes = row_bytes_of(gate_type);
+    const size_t up_row_bytes = row_bytes_of(up_type);
+    const size_t down_row_bytes = row_bytes_of(down_type);
+    const size_t gate_stride = static_cast<size_t>(inter) * gate_row_bytes;
+    const size_t up_stride = static_cast<size_t>(inter) * up_row_bytes;
+    const size_t down_stride = static_cast<size_t>(hidden) * down_row_bytes;
+
+    auto make_blocks = [](celeg::GgmlType type, size_t count) {
+        const size_t row_bytes = type == celeg::GgmlType::Q4_K
+            ? q4_row_bytes : q6_row_bytes;
+        std::vector<uint8_t> bytes(count * row_bytes, 0);
+        for (size_t i = 0; i < count; ++i) {
+            uint8_t* block = bytes.data() + i * row_bytes;
+            block[type == celeg::GgmlType::Q4_K ? 0 : 208] = 0x00;
+            block[type == celeg::GgmlType::Q4_K ? 1 : 209] = 0x3c;
+            if (type == celeg::GgmlType::Q4_K) {
+                for (int s = 4; s < 12; ++s) block[s] = 1;
+                for (int q = 16; q < 144; ++q) block[q] = 0x22;
+            } else {
+                for (int q = 0; q < 128; ++q) block[q] = 0x11;
+                for (int q = 128; q < 192; ++q) block[q] = 0xaa;
+                for (int q = 192; q < 208; ++q) block[q] = 1;
+            }
+        }
+        return bytes;
+    };
+
+    const std::vector<uint8_t> gate_host = make_blocks(
+        gate_type, static_cast<size_t>(experts) * inter);
+    const std::vector<uint8_t> up_host = make_blocks(
+        up_type, static_cast<size_t>(experts) * inter);
+    const std::vector<uint8_t> down_host = make_blocks(
+        down_type, static_cast<size_t>(experts) * hidden);
+    celeg::DeviceBuffer<uint8_t> gate_device(gate_host.size());
+    celeg::DeviceBuffer<uint8_t> up_device(up_host.size());
+    celeg::DeviceBuffer<uint8_t> down_device(down_host.size());
+    CELEG_CUDA(cudaMemcpy(gate_device.data(), gate_host.data(), gate_host.size(),
+                        cudaMemcpyHostToDevice));
+    CELEG_CUDA(cudaMemcpy(up_device.data(), up_host.data(), up_host.size(),
+                        cudaMemcpyHostToDevice));
+    CELEG_CUDA(cudaMemcpy(down_device.data(), down_host.data(), down_host.size(),
+                        cudaMemcpyHostToDevice));
+
+    std::vector<float> hidden_host(static_cast<size_t>(rows) * hidden);
+    for (size_t i = 0; i < hidden_host.size(); ++i)
+        hidden_host[i] = 0.01f + 0.0001f * static_cast<float>(i % 17);
+    std::vector<__nv_bfloat16> hidden_bf16(hidden_host.size());
+    for (size_t i = 0; i < hidden_host.size(); ++i)
+        hidden_bf16[i] = to_bf16(hidden_host[i]);
+    celeg::DeviceBuffer<__nv_bfloat16> hidden_device(hidden_bf16.size());
+    CELEG_CUDA(cudaMemcpy(hidden_device.data(), hidden_bf16.data(),
+                        hidden_device.bytes(), cudaMemcpyHostToDevice));
+
+    const int selected_host[] = {0, 1, 1, 0};
+    const float routing_host[] = {0.25f, 0.75f, 0.6f, 0.4f};
+    celeg::DeviceBuffer<int> selected_device(rows * K);
+    celeg::DeviceBuffer<float> routing_device(rows * K);
+    CELEG_CUDA(cudaMemcpy(selected_device.data(), selected_host,
+                        selected_device.bytes(), cudaMemcpyHostToDevice));
+    CELEG_CUDA(cudaMemcpy(routing_device.data(), routing_host,
+                        routing_device.bytes(), cudaMemcpyHostToDevice));
+
+    celeg::DeviceBuffer<float> accum(rows * hidden);
+    celeg::DeviceBuffer<__nv_bfloat16> activated(rows * K * inter);
+    celeg::CudaStream stream;
+    accum.zero_async(stream.get());
+    celeg::MoeFfnDevice device;
+    device.gate_gguf = gate_device.data();
+    device.up_gguf = up_device.data();
+    device.down_gguf = down_device.data();
+    device.gate_gguf_type = gate_type;
+    device.up_gguf_type = up_type;
+    device.down_gguf_type = down_type;
+    device.expert_gate_row_bytes = gate_row_bytes;
+    device.expert_up_row_bytes = up_row_bytes;
+    device.expert_down_row_bytes = down_row_bytes;
+    device.expert_gate_byte_stride = gate_stride;
+    device.expert_up_byte_stride = up_stride;
+    device.expert_down_byte_stride = down_stride;
+    device.num_experts = experts;
+    device.inter = inter;
+    device.hidden_dim = hidden;
+
+    celeg::launch_moe_ffn(device, selected_device.data(), routing_device.data(),
+                        hidden_device.data(), accum.data(), rows, K, nullptr,
+                        activated.data(), stream.get());
+    celeg::DeviceBuffer<__nv_bfloat16> output(rows * hidden);
+    celeg::launch_finalize_moe_output(accum.data(), output.data(), rows * hidden,
+                                    stream.get());
+    CELEG_CUDA(cudaStreamSynchronize(stream.get()));
+
+    std::vector<float> actual(rows * hidden);
+    std::vector<__nv_bfloat16> output_host(static_cast<size_t>(rows) * hidden);
+    CELEG_CUDA(cudaMemcpy(output_host.data(), output.data(), output.bytes(),
+                        cudaMemcpyDeviceToHost));
+    for (size_t i = 0; i < actual.size(); ++i)
+        actual[i] = __bfloat162float(output_host[i]);
+    for (int row = 0; row < rows; ++row) {
+        float sum = 0.0f;
+        for (int h = 0; h < hidden; ++h)
+            sum += __bfloat162float(hidden_bf16[static_cast<size_t>(row) * hidden + h]);
+        const float activated_value = sum * (1.0f / (1.0f + std::exp(-sum))) * sum;
         const float expected = (routing_host[row * K] + routing_host[row * K + 1]) *
             static_cast<float>(inter) * activated_value;
         for (int h = 0; h < hidden; ++h) {
@@ -176,6 +306,11 @@ int main() {
 
         run_native_quantized_case(celeg::GgmlType::Q4_K, celeg::GgmlType::Q6_K);
         run_native_quantized_case(celeg::GgmlType::Q6_K, celeg::GgmlType::Q4_K);
+
+        run_native_quantized_split_case(
+            celeg::GgmlType::Q4_K, celeg::GgmlType::Q6_K, celeg::GgmlType::Q6_K);
+        run_native_quantized_split_case(
+            celeg::GgmlType::Q6_K, celeg::GgmlType::Q4_K, celeg::GgmlType::Q4_K);
 
         celeg::MoeRouterConfig cfg;
         cfg.num_experts = p.experts;

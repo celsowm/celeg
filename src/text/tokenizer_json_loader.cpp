@@ -230,9 +230,14 @@ TokenizerDefinition resolve_tokenizer_definition(
             definition.special_tokens.push_back({data.tokens[id], static_cast<int32_t>(id)});
         }
     }
-    if (definition.pre_tokenizer == TokenizerPreTokenizerKind::NumericTriplets) {
-        add_reasoning_delimiters(definition);
-    }
+    /// Reasoning delimiters ship as USER_DEFINED (type 4) rather than
+    /// CONTROL (type 3) in current GGUF vocabularies, so the loop above
+    /// does not register them; without registration the chat-template
+    /// `<think>` suffix BPE-splits into `<`/`think`/`>` and the model
+    /// derails from the first generated token (seen on qwen35moe GGUF).
+    /// The helper only adds spellings present in the vocabulary and skips
+    /// ones already registered, so checkpoints without them are unaffected.
+    add_reasoning_delimiters(definition);
     definition.tokenizer_vocab_size = static_cast<int>(definition.tokens.size());
     return definition;
 }

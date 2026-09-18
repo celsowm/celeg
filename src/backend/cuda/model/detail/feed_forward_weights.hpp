@@ -22,6 +22,10 @@ struct DenseFfnWeights {
 struct ResidentExpertWeights {
     const ExpertLinearWeight* gate_up = nullptr;
     const ExpertLinearWeight* down = nullptr;
+    /// Split native gate/up tables (mixed quant types); when set, these take
+    /// precedence over the fused `gate_up` table for GGUF-quantized experts.
+    const ExpertLinearWeight* gate = nullptr;
+    const ExpertLinearWeight* up = nullptr;
 };
 
 struct OffloadedExpertWeights {
@@ -105,8 +109,26 @@ inline celeg::MoeFfnDevice moe_ffn_device(const MoeFfnWeights& moe,
         } else {
             const ExpertLinearWeight* gate_up = expert_storage.gate_up;
             const ExpertLinearWeight* down = expert_storage.down;
-            if (gate_up->kind == ExpertStorageKind::Q4_K ||
-                gate_up->kind == ExpertStorageKind::Q6_K) {
+            /// Split native gate/up tables (mixed quant types) take
+            /// precedence over the fused table; the down projection is
+            /// independent and handled below in both cases.
+            const bool split_native = expert_storage.gate != nullptr &&
+                expert_storage.up != nullptr;
+            if (split_native) {
+                const ExpertLinearWeight* gate = expert_storage.gate;
+                const ExpertLinearWeight* up = expert_storage.up;
+                fdev.gate_gguf = gate->gguf_blocks;
+                fdev.up_gguf = up->gguf_blocks;
+                fdev.gate_gguf_type = gate->gguf_type;
+                fdev.up_gguf_type = up->gguf_type;
+                fdev.expert_gate_row_bytes = gate->gguf_row_bytes;
+                fdev.expert_up_row_bytes = up->gguf_row_bytes;
+                fdev.expert_gate_byte_stride = gate->gguf_expert_stride;
+                fdev.expert_up_byte_stride = up->gguf_expert_stride;
+            }
+            if (!split_native &&
+                (gate_up->kind == ExpertStorageKind::Q4_K ||
+                 gate_up->kind == ExpertStorageKind::Q6_K)) {
                 fdev.gate_up_gguf = gate_up->gguf_blocks;
                 fdev.down_gguf = down->gguf_blocks;
                 fdev.gate_up_gguf_type = gate_up->gguf_type;
@@ -115,12 +137,25 @@ inline celeg::MoeFfnDevice moe_ffn_device(const MoeFfnWeights& moe,
                 fdev.expert_down_row_bytes = down->gguf_row_bytes;
                 fdev.expert_gate_up_byte_stride = gate_up->gguf_expert_stride;
                 fdev.expert_down_byte_stride = down->gguf_expert_stride;
-            } else {
+            } else if (!split_native) {
                 fdev.gate_up = gate_up->bf16;
                 fdev.down = down->bf16;
                 fdev.expert_gate_up_stride =
                     static_cast<size_t>(2) * semantics.routed.mlp.intermediate_size *
                         semantics.routed.mlp.hidden_size;
+                fdev.expert_down_stride =
+                    static_cast<size_t>(semantics.routed.mlp.hidden_size) *
+                        semantics.routed.mlp.intermediate_size;
+            }
+            if (split_native &&
+                (down->kind == ExpertStorageKind::Q4_K ||
+                 down->kind == ExpertStorageKind::Q6_K)) {
+                fdev.down_gguf = down->gguf_blocks;
+                fdev.down_gguf_type = down->gguf_type;
+                fdev.expert_down_row_bytes = down->gguf_row_bytes;
+                fdev.expert_down_byte_stride = down->gguf_expert_stride;
+            } else if (split_native) {
+                fdev.down = down->bf16;
                 fdev.expert_down_stride =
                     static_cast<size_t>(semantics.routed.mlp.hidden_size) *
                         semantics.routed.mlp.intermediate_size;

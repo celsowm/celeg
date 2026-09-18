@@ -151,11 +151,17 @@ void infer_and_bind_layer_norms(CanonicalInferenceContext& context,
         "model.layers." + index + ".post_attn_norm.weight",
         "model.language_model.layers." + index + ".post_attn_norm.weight",
         "layers." + index + ".post_attn_norm.weight",
-        "blk." + index + ".post_attention_norm.weight",
     };
+    /// The GGUF `blk.*.post_attention_norm.weight` spelling disambiguates
+    /// like `post_attention_layernorm` below instead of forcing mixer-after:
+    /// in llama nomenclature (which GGUF files follow) the post-attention
+    /// norm feeds the feed-forward block (norm -> FFN -> residual), while a
+    /// mixer-after placement overdoses every mixer output by ~40x (seen on
+    /// qwen35moe GGUF, whose HF/llama references both apply it pre-MLP).
     const std::vector<std::string> post_attention_layernorm_candidates = {
         "model.layers." + index + ".post_attention_layernorm.weight",
         "model.language_model.layers." + index + ".post_attention_layernorm.weight",
+        "blk." + index + ".post_attention_norm.weight",
     };
     const std::vector<std::string> explicit_ffn_before_candidates = {
         "transformer.h." + index + ".ln_2.weight",

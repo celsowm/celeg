@@ -103,7 +103,7 @@ __global__ void moe_gguf_gate_up_kernel(
         up_row, input, hidden_dim, row_bytes);
     if (lane == 0) {
         activated[static_cast<size_t>(pair) * inter + channel] =
-            __float2bfloat16(moe_sigmoid(gate) * up);
+            __float2bfloat16(moe_silu(gate) * up);
     }
     (void)gate_up_type;
 }
@@ -132,6 +132,69 @@ __global__ void moe_gguf_down_kernel(
     }
 }
 
+/// Split-table variant of `moe_gguf_gate_up_kernel` for mixed-quant
+/// experts: gate and up rows live in separate tables with their own block
+/// types, strides and row widths. Math is identical (silu(gate) * up per
+/// channel); only the row addressing differs.
+template <typename GateBlockT, float (*GateFn)(const GateBlockT*, int),
+          typename UpBlockT, float (*UpFn)(const UpBlockT*, int)>
+__global__ void moe_gguf_gate_up_split_kernel(
+    const uint8_t* gate, const uint8_t* up,
+    size_t gate_stride, size_t up_stride,
+    size_t gate_row_bytes, size_t up_row_bytes,
+    int num_experts, int inter, int hidden_dim,
+    const int* selected_experts, const __nv_bfloat16* hidden,
+    int rows, int K, __nv_bfloat16* activated) {
+    const int pair = blockIdx.x;
+    const int warp = threadIdx.x >> 5;
+    const int lane = threadIdx.x & 31;
+    const int channel = blockIdx.y * (blockDim.x / 32) + warp;
+    if (pair >= rows * K || channel >= inter) return;
+    const int expert = selected_experts[pair];
+    if (expert < 0 || expert >= num_experts) return;
+    const uint8_t* gate_row = gate +
+        static_cast<size_t>(expert) * gate_stride +
+        static_cast<size_t>(channel) * gate_row_bytes;
+    const uint8_t* up_row = up +
+        static_cast<size_t>(expert) * up_stride +
+        static_cast<size_t>(channel) * up_row_bytes;
+    const __nv_bfloat16* input = hidden + static_cast<size_t>(pair / K) * hidden_dim;
+    const float gate_value = gguf_expert_dot_warp<GateBlockT, GateFn>(
+        gate_row, input, hidden_dim, gate_row_bytes);
+    const float up_value = gguf_expert_dot_warp<UpBlockT, UpFn>(
+        up_row, input, hidden_dim, up_row_bytes);
+    if (lane == 0) {
+        activated[static_cast<size_t>(pair) * inter + channel] =
+            __float2bfloat16(moe_silu(gate_value) * up_value);
+    }
+}
+
+void launch_moe_gguf_split_ffn(const MoeFfnDevice& device,
+                               const int* selected_experts,
+                               const float* routing_weights,
+                               const __nv_bfloat16* hidden,
+                               float* output_accum, int rows, int K,
+                               __nv_bfloat16* scratch_activated,
+                               cudaStream_t stream);
+
+__global__ void moe_down_tiled_kernel(
+    const __nv_bfloat16* down,
+    const __nv_bfloat16* const* down_ptrs,
+    int num_experts, int inter, int hidden_dim,
+    size_t down_stride,
+    const int* selected_experts,
+    const float* routing_weights,
+    float* output_accum,
+    int rows, int K,
+    const __nv_bfloat16* scratch_activated);
+
+void launch_moe_gguf_down(const MoeFfnDevice& device,
+                          const int* selected_experts,
+                          const float* routing_weights,
+                          const __nv_bfloat16* scratch_activated,
+                          float* output_accum, int rows, int K,
+                          cudaStream_t stream);
+
 void launch_moe_gguf_ffn(const MoeFfnDevice& device,
                          const int* selected_experts,
                          const float* routing_weights,
@@ -144,6 +207,12 @@ void launch_moe_gguf_ffn(const MoeFfnDevice& device,
     const int warps_per_block = block_size / 32;
     const dim3 gate_grid(pairs, (device.inter + warps_per_block - 1) / warps_per_block);
     const dim3 block(block_size);
+    if (device.gate_gguf != nullptr && device.up_gguf != nullptr) {
+        launch_moe_gguf_split_ffn(device, selected_experts, routing_weights,
+                                  hidden, output_accum, rows, K,
+                                  scratch_activated, stream);
+        return;
+    }
     if (device.gate_up_gguf_type == GgmlType::Q4_K) {
         moe_gguf_gate_up_kernel<GgufQ4KBlock, gguf_q4k_value>
             <<<gate_grid, block, 0, stream>>>(
@@ -161,6 +230,20 @@ void launch_moe_gguf_ffn(const MoeFfnDevice& device,
     }
     CELEG_KERNEL_CHECK();
 
+    launch_moe_gguf_down(device, selected_experts, routing_weights,
+                         scratch_activated, output_accum, rows, K, stream);
+}
+
+void launch_moe_gguf_down(const MoeFfnDevice& device,
+                          const int* selected_experts,
+                          const float* routing_weights,
+                          const __nv_bfloat16* scratch_activated,
+                          float* output_accum, int rows, int K,
+                          cudaStream_t stream) {
+    const int pairs = rows * K;
+    constexpr int block_size = 256;
+    const int warps_per_block = block_size / 32;
+    const dim3 block(block_size);
     const dim3 down_grid(pairs, (device.hidden_dim + warps_per_block - 1) / warps_per_block);
     if (device.down_gguf_type == GgmlType::Q4_K) {
         moe_gguf_down_kernel<GgufQ4KBlock, gguf_q4k_value>
@@ -177,6 +260,76 @@ void launch_moe_gguf_ffn(const MoeFfnDevice& device,
                 device.hidden_dim, selected_experts, routing_weights,
                 scratch_activated, output_accum, rows, K);
     }
+    CELEG_KERNEL_CHECK();
+}
+
+void launch_moe_gguf_split_ffn(const MoeFfnDevice& device,
+                               const int* selected_experts,
+                               const float* routing_weights,
+                               const __nv_bfloat16* hidden,
+                               float* output_accum, int rows, int K,
+                               __nv_bfloat16* scratch_activated,
+                               cudaStream_t stream) {
+    const int pairs = rows * K;
+    constexpr int block_size = 256;
+    const int warps_per_block = block_size / 32;
+    const dim3 gate_grid(pairs, (device.inter + warps_per_block - 1) / warps_per_block);
+    const dim3 block(block_size);
+    const bool gate_q4 = device.gate_gguf_type == GgmlType::Q4_K;
+    const bool up_q4 = device.up_gguf_type == GgmlType::Q4_K;
+    if (gate_q4 && up_q4) {
+        moe_gguf_gate_up_split_kernel<GgufQ4KBlock, gguf_q4k_value,
+                                      GgufQ4KBlock, gguf_q4k_value>
+            <<<gate_grid, block, 0, stream>>>(
+                device.gate_gguf, device.up_gguf,
+                device.expert_gate_byte_stride, device.expert_up_byte_stride,
+                device.expert_gate_row_bytes, device.expert_up_row_bytes,
+                device.num_experts, device.inter, device.hidden_dim,
+                selected_experts, hidden, rows, K, scratch_activated);
+    } else if (gate_q4) {
+        moe_gguf_gate_up_split_kernel<GgufQ4KBlock, gguf_q4k_value,
+                                      GgufQ6KBlock, gguf_q6k_value>
+            <<<gate_grid, block, 0, stream>>>(
+                device.gate_gguf, device.up_gguf,
+                device.expert_gate_byte_stride, device.expert_up_byte_stride,
+                device.expert_gate_row_bytes, device.expert_up_row_bytes,
+                device.num_experts, device.inter, device.hidden_dim,
+                selected_experts, hidden, rows, K, scratch_activated);
+    } else if (up_q4) {
+        moe_gguf_gate_up_split_kernel<GgufQ6KBlock, gguf_q6k_value,
+                                      GgufQ4KBlock, gguf_q4k_value>
+            <<<gate_grid, block, 0, stream>>>(
+                device.gate_gguf, device.up_gguf,
+                device.expert_gate_byte_stride, device.expert_up_byte_stride,
+                device.expert_gate_row_bytes, device.expert_up_row_bytes,
+                device.num_experts, device.inter, device.hidden_dim,
+                selected_experts, hidden, rows, K, scratch_activated);
+    } else {
+        moe_gguf_gate_up_split_kernel<GgufQ6KBlock, gguf_q6k_value,
+                                      GgufQ6KBlock, gguf_q6k_value>
+            <<<gate_grid, block, 0, stream>>>(
+                device.gate_gguf, device.up_gguf,
+                device.expert_gate_byte_stride, device.expert_up_byte_stride,
+                device.expert_gate_row_bytes, device.expert_up_row_bytes,
+                device.num_experts, device.inter, device.hidden_dim,
+                selected_experts, hidden, rows, K, scratch_activated);
+    }
+    CELEG_KERNEL_CHECK();
+
+    /// The down projection is independent: native blocks when available,
+    /// otherwise the BF16 tiled kernel over host-decoded weights.
+    if (device.down_gguf != nullptr) {
+        launch_moe_gguf_down(device, selected_experts, routing_weights,
+                             scratch_activated, output_accum, rows, K, stream);
+        return;
+    }
+    constexpr int tile_size = 128;
+    const dim3 grid_dw(pairs, (device.hidden_dim + tile_size - 1) / tile_size);
+    moe_down_tiled_kernel<<<grid_dw, tile_size, 0, stream>>>(
+        device.down, device.down_ptrs,
+        device.num_experts, device.inter, device.hidden_dim,
+        device.expert_down_stride, selected_experts, routing_weights,
+        output_accum, rows, K, scratch_activated);
     CELEG_KERNEL_CHECK();
 }
 
@@ -301,8 +454,13 @@ void launch_moe_ffn(const MoeFfnDevice& device,
                     cudaStream_t stream) {
     const bool indirect =
         device.gate_up_ptrs != nullptr || device.down_ptrs != nullptr;
+    /// Split native gate/up tables (mixed quant types) ride the same native
+    /// path; `launch_moe_gguf_ffn` dispatches to the split kernel internally.
+    const bool split_native = device.gate_gguf != nullptr &&
+        device.up_gguf != nullptr;
     const bool native_gguf =
-        device.gate_up_gguf != nullptr || device.down_gguf != nullptr;
+        device.gate_up_gguf != nullptr || device.down_gguf != nullptr ||
+        split_native;
     if (device.num_experts <= 0 || device.inter <= 0 || device.hidden_dim <= 0) {
         throw std::invalid_argument("invalid MoE FFN device configuration");
     }
@@ -323,16 +481,45 @@ void launch_moe_ffn(const MoeFfnDevice& device,
         throw std::invalid_argument("null MoE FFN pointer");
     }
 
-    if (device.gate_up_gguf != nullptr || device.down_gguf != nullptr) {
-        if (device.gate_up_gguf == nullptr || device.down_gguf == nullptr ||
-            (device.gate_up_gguf_type != GgmlType::Q4_K &&
-             device.gate_up_gguf_type != GgmlType::Q6_K) ||
-            (device.down_gguf_type != GgmlType::Q4_K &&
-             device.down_gguf_type != GgmlType::Q6_K) ||
-            device.expert_gate_up_row_bytes == 0 ||
-            device.expert_down_row_bytes == 0 ||
-            device.expert_gate_up_byte_stride == 0 ||
-            device.expert_down_byte_stride == 0) {
+    if (device.gate_up_gguf != nullptr || device.down_gguf != nullptr ||
+        split_native) {
+        if (split_native) {
+            /// The down projection is independent here: native blocks or
+            /// BF16 (host-decoded, e.g. Q5_K down with native gate/up).
+            if (device.down_gguf != nullptr) {
+                if ((device.down_gguf_type != GgmlType::Q4_K &&
+                     device.down_gguf_type != GgmlType::Q6_K) ||
+                    device.expert_down_row_bytes == 0 ||
+                    device.expert_down_byte_stride == 0) {
+                    throw std::invalid_argument(
+                        "invalid native GGUF MoE expert storage");
+                }
+            } else if (device.down == nullptr ||
+                       device.expert_down_stride == 0) {
+                throw std::invalid_argument(
+                    "invalid native GGUF MoE expert storage");
+            }
+            if ((device.gate_gguf_type != GgmlType::Q4_K &&
+                 device.gate_gguf_type != GgmlType::Q6_K) ||
+                (device.up_gguf_type != GgmlType::Q4_K &&
+                 device.up_gguf_type != GgmlType::Q6_K) ||
+                device.expert_gate_row_bytes == 0 ||
+                device.expert_up_row_bytes == 0 ||
+                device.expert_gate_byte_stride == 0 ||
+                device.expert_up_byte_stride == 0) {
+                throw std::invalid_argument(
+                    "invalid split native GGUF MoE expert storage");
+            }
+        } else if (device.gate_up_gguf == nullptr ||
+                   device.down_gguf == nullptr ||
+                   (device.gate_up_gguf_type != GgmlType::Q4_K &&
+                    device.gate_up_gguf_type != GgmlType::Q6_K) ||
+                   (device.down_gguf_type != GgmlType::Q4_K &&
+                    device.down_gguf_type != GgmlType::Q6_K) ||
+                   device.expert_gate_up_row_bytes == 0 ||
+                   device.expert_down_row_bytes == 0 ||
+                   device.expert_gate_up_byte_stride == 0 ||
+                   device.expert_down_byte_stride == 0) {
             throw std::invalid_argument("invalid native GGUF MoE expert storage");
         }
         launch_moe_gguf_ffn(device, selected_experts, routing_weights, hidden,

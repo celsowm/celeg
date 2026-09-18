@@ -46,13 +46,32 @@ RopePositionFacts normalize_rope_position_facts(const CheckpointMetadata& metada
     if (mrope_sections.empty()) mrope_sections = token_list(metadata, "mrope_section");
     if (mrope_sections.empty()) mrope_sections = token_list(metadata, "rope_parameters.mrope_sections");
     if (mrope_sections.empty()) mrope_sections = token_list(metadata, "mrope_sections");
+    if (mrope_sections.empty() && metadata.is_gguf()) {
+        /// GGUF stores the sections under the file's own architecture tag
+        /// ("<arch>.rope.dimension_sections"), composed at runtime so no
+        /// per-architecture spelling lives in tree.
+        mrope_sections = token_list(
+            metadata, metadata.architecture_type() + ".rope.dimension_sections");
+    }
+    /// Some writers append a trailing zero section for an unused fourth axis;
+    /// trim only trailing zeros so a nonzero fourth axis still fails loudly
+    /// below instead of being silently dropped.
+    while (mrope_sections.size() > 3 && mrope_sections.back() == 0) {
+        mrope_sections.pop_back();
+    }
     if (!mrope_sections.empty() && mrope_sections.size() != 3) {
         inference_detail::fail(ResolutionFailureKind::ConflictingMetadata,
                                "M-RoPE requires exactly three sections (temporal/height/width)");
     }
-    const bool mrope_interleaved = aliases<bool>(
+    const std::optional<bool> explicit_interleaved = aliases<bool>(
         metadata, {"mrope_interleaved", "rope_parameters.mrope_interleaved"}, result.evidence,
-        "mrope_interleaved").value_or(false);
+        "mrope_interleaved");
+    /// Interleaved section layout is the current HF/llama.cpp convention for
+    /// sectioned rotary (validated against transformers text-rope
+    /// recomputation); default to it when sections are present but the flag
+    /// is absent, so sectioned checkpoints without the flag are not silently
+    /// run chunked.
+    const bool mrope_interleaved = explicit_interleaved.value_or(!mrope_sections.empty());
     const bool architecture_never_applies_rope = metadata.is_gguf() &&
         gguf_architecture_never_applies_rope(metadata.architecture_type());
     if (!architecture_never_applies_rope && !rotary_fraction.has_value() && metadata.is_gguf()) {
@@ -223,16 +242,22 @@ void normalize_latent_attention_facts(const CheckpointMetadata& metadata,
 
 /// MoE cluster of `normalize_model_metadata`.
 void normalize_moe_facts(const CheckpointMetadata& metadata, NormalizedModelMetadata& result) {
+    /// Each `gguf_suffix` resolves under the file's own architecture tag
+    /// ("<arch>.<suffix>"), so GGUF MoE dialects need no per-architecture
+    /// spelling in tree: `expert_count`, `expert_used_count`,
+    /// `expert_feed_forward_length`, `expert_shared_feed_forward_length`.
     result.moe.experts = aliases<int>(
-        metadata, {"num_experts"}, result.evidence, "moe_experts");
+        metadata, {"num_experts"}, result.evidence, "moe_experts",
+        "expert_count");
     result.moe.experts_per_token = aliases<int>(
         metadata, {"num_experts_per_tok", "experts_per_token"}, result.evidence,
-        "moe_experts_per_token");
+        "moe_experts_per_token", "expert_used_count");
     result.moe.intermediate = aliases<int>(
-        metadata, {"moe_intermediate_size"}, result.evidence, "moe_intermediate");
+        metadata, {"moe_intermediate_size"}, result.evidence, "moe_intermediate",
+        "expert_feed_forward_length");
     result.moe.shared_intermediate = aliases<int>(
         metadata, {"moe_shared_expert_intermediate_size"}, result.evidence,
-        "moe_shared_intermediate");
+        "moe_shared_intermediate", "expert_shared_feed_forward_length");
     result.moe.routing_groups = aliases<int>(
         metadata, {"topk_group"}, result.evidence, "moe_routing_groups");
     result.moe.total_routing_groups = aliases<int>(

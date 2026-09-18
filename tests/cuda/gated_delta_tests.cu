@@ -7,6 +7,7 @@
 #include "celeg/backend/cpu/gated_delta.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <vector>
 
 namespace celeg::cuda_test {
@@ -143,6 +144,57 @@ for (const int agnes_rows : {59, 1}) {
     for (size_t i = 0; i < got_out.size(); ++i) expect_near(to_float(got_out[i]), cpu_out[i], 0.03f);
     for (size_t i = 0; i < got_conv.size(); ++i) expect_near(to_float(got_conv[i]), cpu_conv[i], 0.03f);
     for (size_t i = 0; i < got_state.size(); ++i) expect_near(to_float(got_state[i]), cpu_state[i], 0.03f);
+}
+
+/// Absolute GQA head-mapping check: with 2 key heads and 4 value heads, a
+/// zeroed key head 1 must silence exactly value heads 1 and 3 (tile mapping
+/// h % key_heads), while heads 0 and 2 stay live. The previous whole-block
+/// repeat (h / repeat) instead silenced heads 2 and 3. Exact zeros: a zero
+/// state can never leave zero through decay, delta update, output dot,
+/// RMSNorm, or the SiLU gate.
+{
+    constexpr int rows = 1, kernel = 1, kdim = 2, vdim = 2, kheads = 2, vheads = 4;
+    constexpr int qkvw = 2 * kdim * kheads + vdim * vheads;
+    constexpr int vw = vdim * vheads;
+    std::vector<float> qkv(qkvw, 0.0f);
+    qkv[0] = 0.5f; qkv[1] = -0.3f; qkv[2] = 0.7f; qkv[3] = 0.2f;
+    qkv[kdim * kheads + 0] = 0.4f; qkv[kdim * kheads + 1] = -0.6f;
+    for (int i = 0; i < vw; ++i) qkv[2 * kdim * kheads + i] = 0.1f * static_cast<float>(i + 1);
+    std::vector<float> z(vw, 0.3f);
+    std::vector<float> b(vheads, -0.2f), a(vheads, 0.1f);
+    std::vector<float> conv(static_cast<size_t>(qkvw) * kernel, 1.0f);
+    std::vector<float> dt(vheads, 0.5f), alog(vheads, -0.3f), norm(vdim, 1.0f);
+    auto convert = [](const std::vector<float>& values) {
+        std::vector<__nv_bfloat16> result(values.size());
+        for (size_t i = 0; i < values.size(); ++i) result[i] = to_bf16(values[i]);
+        return result;
+    };
+    const auto hq = convert(qkv), hz = convert(z), hb = convert(b), ha = convert(a),
+        hc = convert(conv), hdt = convert(dt), hal = convert(alog), hn = convert(norm);
+    celeg::DeviceBuffer<__nv_bfloat16> dq(qkv.size()), dz(z.size()), db(b.size()), da(a.size()),
+        dc(conv.size()), ddt(dt.size()), dal(alog.size()), dn(norm.size()),
+        dcs(static_cast<size_t>(qkvw) * kernel),
+        drs(static_cast<size_t>(vheads) * kdim * vdim), dout(vw);
+    CELEG_CUDA(cudaMemcpy(dq.data(), hq.data(), dq.bytes(), cudaMemcpyHostToDevice));
+    CELEG_CUDA(cudaMemcpy(dz.data(), hz.data(), dz.bytes(), cudaMemcpyHostToDevice));
+    CELEG_CUDA(cudaMemcpy(db.data(), hb.data(), db.bytes(), cudaMemcpyHostToDevice));
+    CELEG_CUDA(cudaMemcpy(da.data(), ha.data(), da.bytes(), cudaMemcpyHostToDevice));
+    CELEG_CUDA(cudaMemcpy(dc.data(), hc.data(), dc.bytes(), cudaMemcpyHostToDevice));
+    CELEG_CUDA(cudaMemcpy(ddt.data(), hdt.data(), ddt.bytes(), cudaMemcpyHostToDevice));
+    CELEG_CUDA(cudaMemcpy(dal.data(), hal.data(), dal.bytes(), cudaMemcpyHostToDevice));
+    CELEG_CUDA(cudaMemcpy(dn.data(), hn.data(), dn.bytes(), cudaMemcpyHostToDevice));
+    celeg::launch_gated_delta_net(dq.data(), dz.data(), db.data(), da.data(), dc.data(),
+        ddt.data(), dal.data(), dn.data(), dcs.data(), drs.data(), dout.data(), rows, kernel,
+        kdim, vdim, kheads, vheads, 1e-6f, false, false, -5.0f, false, stream.get());
+    std::vector<__nv_bfloat16> got(vw);
+    CELEG_CUDA(cudaMemcpyAsync(got.data(), dout.data(), dout.bytes(), cudaMemcpyDeviceToHost, stream.get()));
+    CELEG_CUDA(cudaStreamSynchronize(stream.get()));
+    for (int d = 0; d < vdim; ++d) {
+        CELEG_TEST_CHECK(to_float(got[static_cast<size_t>(1) * vdim + d]) == 0.0f);
+        CELEG_TEST_CHECK(to_float(got[static_cast<size_t>(3) * vdim + d]) == 0.0f);
+        CELEG_TEST_CHECK(std::abs(to_float(got[static_cast<size_t>(0) * vdim + d])) > 1e-6f);
+        CELEG_TEST_CHECK(std::abs(to_float(got[static_cast<size_t>(2) * vdim + d])) > 1e-6f);
+    }
 }
 }
 

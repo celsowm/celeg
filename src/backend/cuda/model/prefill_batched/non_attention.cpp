@@ -80,7 +80,8 @@ void run_gated_delta(
         rows, spec.conv_kernel, spec.key_head_dim, spec.value_head_dim,
         spec.key_heads, spec.value_heads, mixer_epsilon,
         spec.vector_decay, spec.safe_decay, spec.decay_lower_bound,
-        spec.sigmoid_output_gate, model.stream_.get());
+        spec.sigmoid_output_gate, model.stream_.get(),
+        spec.a_log_needs_exp);
     prof.end(PrefillPhase::Conv, model.stream_.get());
 
     prof.begin(model.stream_.get());

@@ -17,6 +17,17 @@ __device__ float softplus(float value) {
     return log1pf(expf(value));
 }
 
+/// A-encoding variants for gated-delta decay: raw safetensors checkpoints
+/// store log-domain A (needs exp()), while GGUF conversions bake the
+/// pretransformed -exp(A_log) multiplier (used directly). Matches the CPU
+/// `a_log_needs_exp` handling and llama.cpp (`gate = softplus * ssm_a`).
+__device__ __forceinline__ float gated_delta_a_exp(float a_log_value, bool a_log_needs_exp) {
+    return a_log_needs_exp ? expf(a_log_value) : -a_log_value;
+}
+__device__ __forceinline__ float gated_delta_neg_a_exp(float a_log_value, bool a_log_needs_exp) {
+    return a_log_needs_exp ? -expf(a_log_value) : a_log_value;
+}
+
 __global__ void interleave_gated_delta_qkv_kernel(
     const __nv_bfloat16* q, const __nv_bfloat16* k, const __nv_bfloat16* v,
     __nv_bfloat16* qkv, int rows, int key_width, int value_width) {
@@ -119,14 +130,16 @@ __global__ void gated_delta_sequence_state_kernel(
     const __nv_bfloat16* dt_bias, const __nv_bfloat16* a_log,
     __nv_bfloat16* recurrent_state, __nv_bfloat16* output, int rows,
     int key_head_dim, int value_head_dim, int key_heads, int value_heads, bool vector_decay,
-    bool safe_decay, float decay_lower_bound) {
+    bool safe_decay, float decay_lower_bound, bool a_log_needs_exp) {
     constexpr int columns_per_block = 4;
     const int value_head = static_cast<int>(blockIdx.x);
     const int v_dim = static_cast<int>(blockIdx.y) * columns_per_block + threadIdx.y;
     const int lane = threadIdx.x;
     if (value_head >= value_heads || v_dim >= value_head_dim) return;
-    const int repeat = value_heads / key_heads;
-    const int key_head = value_head / repeat;
+    /// GQA-style head sharing tiles the key/query heads across the value
+    /// heads (value head h reads key/query head h % key_heads), matching the
+    /// reference fused kernel and the trained checkpoint layout.
+    const int key_head = value_head % key_heads;
     const int head_dim = StaticKeyHeadDim == 0 ? key_head_dim : StaticKeyHeadDim;
     const int key_width = key_heads * head_dim;
     const int value_width = value_heads * value_head_dim;
@@ -154,9 +167,9 @@ __global__ void gated_delta_sequence_state_kernel(
                 const float raw_decay = bf16_float(row_a[value_head]) +
                     bf16_float(dt_bias[value_head]);
                 warp_decay = safe_decay
-                    ? expf(sigmoid(expf(bf16_float(a_log[value_head])) * raw_decay) *
+                    ? expf(sigmoid(gated_delta_a_exp(bf16_float(a_log[value_head]), a_log_needs_exp) * raw_decay) *
                         decay_lower_bound)
-                    : expf(-expf(bf16_float(a_log[value_head])) * softplus(raw_decay));
+                    : expf(gated_delta_neg_a_exp(bf16_float(a_log[value_head]), a_log_needs_exp) * softplus(raw_decay));
             }
             scalar_decay = __shfl_sync(0xffffffffu, warp_decay, 0);
         }
@@ -168,9 +181,9 @@ __global__ void gated_delta_sequence_state_kernel(
             const int decay_index = key_head * head_dim + k_dim;
             const float decay = vector_decay
                 ? (safe_decay
-                    ? expf(sigmoid(expf(bf16_float(a_log[value_head])) *
+                    ? expf(sigmoid(gated_delta_a_exp(bf16_float(a_log[value_head]), a_log_needs_exp) *
                         (bf16_float(row_a[decay_index]) + bf16_float(dt_bias[decay_index]))) * decay_lower_bound)
-                    : expf(-expf(bf16_float(a_log[value_head])) *
+                    : expf(gated_delta_neg_a_exp(bf16_float(a_log[value_head]), a_log_needs_exp) *
                         softplus(bf16_float(row_a[decay_index]) + bf16_float(dt_bias[decay_index]))))
                 : scalar_decay;
             state_registers[shard] = bf16_float(__float2bfloat16(
@@ -244,7 +257,8 @@ __global__ void gated_delta_sequence_register_tile_kernel(
     const __nv_bfloat16* qkv, const __nv_bfloat16* b, const __nv_bfloat16* a,
     const __nv_bfloat16* dt_bias, const __nv_bfloat16* a_log,
     __nv_bfloat16* recurrent_state, __nv_bfloat16* output, int rows,
-    int key_heads, bool vector_decay, bool safe_decay, float decay_lower_bound) {
+    int key_heads, bool vector_decay, bool safe_decay, float decay_lower_bound,
+    bool a_log_needs_exp) {
     constexpr int columns_per_warp = 4;
     constexpr int columns_per_block = 16;
     constexpr int shards = KeyHeadDim / 32;
@@ -278,8 +292,8 @@ __global__ void gated_delta_sequence_register_tile_kernel(
             if (lane == 0) {
                 const float raw = bf16_float(row_a[value_head]) + bf16_float(dt_bias[value_head]);
                 scalar_decay = safe_decay
-                    ? expf(sigmoid(expf(bf16_float(a_log[value_head])) * raw) * decay_lower_bound)
-                    : expf(-expf(bf16_float(a_log[value_head])) * softplus(raw));
+                    ? expf(sigmoid(gated_delta_a_exp(bf16_float(a_log[value_head]), a_log_needs_exp) * raw) * decay_lower_bound)
+                    : expf(gated_delta_neg_a_exp(bf16_float(a_log[value_head]), a_log_needs_exp) * softplus(raw));
             }
             scalar_decay = __shfl_sync(0xffffffffu, scalar_decay, 0);
         }
@@ -291,9 +305,9 @@ __global__ void gated_delta_sequence_register_tile_kernel(
             const int decay_index = value_head * KeyHeadDim + key;
             decays[shard] = vector_decay
                 ? (safe_decay
-                    ? expf(sigmoid(expf(bf16_float(a_log[value_head])) *
+                    ? expf(sigmoid(gated_delta_a_exp(bf16_float(a_log[value_head]), a_log_needs_exp) *
                         (bf16_float(row_a[decay_index]) + bf16_float(dt_bias[decay_index]))) * decay_lower_bound)
-                    : expf(-expf(bf16_float(a_log[value_head])) *
+                    : expf(gated_delta_neg_a_exp(bf16_float(a_log[value_head]), a_log_needs_exp) *
                         softplus(bf16_float(row_a[decay_index]) + bf16_float(dt_bias[decay_index]))))
                 : scalar_decay;
         }
@@ -345,12 +359,11 @@ __global__ void gated_delta_net_kernel(
     __nv_bfloat16* output, int rows, int conv_kernel, int key_head_dim,
     int value_head_dim, int key_heads, int value_heads, float eps,
     bool vector_decay, bool safe_decay, float decay_lower_bound,
-    bool sigmoid_output_gate) {
+    bool sigmoid_output_gate, bool a_log_needs_exp) {
     if (blockIdx.x != 0 || threadIdx.x != 0) return;
     const int key_width = key_heads * key_head_dim;
     const int value_width = value_heads * value_head_dim;
     const int qkv_width = 2 * key_width + value_width;
-    const int repeat = value_heads / key_heads;
 
     for (int row = 0; row < rows; ++row) {
         __nv_bfloat16* qkv = const_cast<__nv_bfloat16*>(projected_qkv) +
@@ -391,7 +404,9 @@ __global__ void gated_delta_net_kernel(
         }
 
         for (int value_head = 0; value_head < value_heads; ++value_head) {
-            const int key_head = value_head / repeat;
+            /// Tile key/query heads across value heads (h % key_heads), not
+            /// contiguous blocks (h / repeat): see the CPU kernel note.
+            const int key_head = value_head % key_heads;
             const float beta = sigmoid(bf16_float(b[value_head]));
             __nv_bfloat16* state = recurrent_state + static_cast<size_t>(value_head) *
                 key_head_dim * value_head_dim;
@@ -399,10 +414,10 @@ __global__ void gated_delta_net_kernel(
                 const int decay_index = vector_decay ? key_head * key_head_dim + k_dim
                                                       : value_head;
                 const float decay = safe_decay
-                    ? expf(sigmoid(expf(bf16_float(a_log[value_head])) *
+                    ? expf(sigmoid(gated_delta_a_exp(bf16_float(a_log[value_head]), a_log_needs_exp) *
                         (bf16_float(a[decay_index]) + bf16_float(dt_bias[decay_index]))) *
                         decay_lower_bound)
-                    : expf(-expf(bf16_float(a_log[value_head])) *
+                    : expf(gated_delta_neg_a_exp(bf16_float(a_log[value_head]), a_log_needs_exp) *
                         softplus(bf16_float(a[decay_index]) + bf16_float(dt_bias[decay_index])));
                 for (int v_dim = 0; v_dim < value_head_dim; ++v_dim) {
                     const size_t offset = static_cast<size_t>(k_dim) * value_head_dim + v_dim;
@@ -465,7 +480,7 @@ void gated_delta_fused_register_state_kernel(
     __nv_bfloat16* conv_state, __nv_bfloat16* recurrent_state,
     __nv_bfloat16* output, int conv_kernel, int key_heads, float eps,
     bool vector_decay, bool safe_decay, float decay_lower_bound,
-    bool sigmoid_output_gate) {
+    bool sigmoid_output_gate, bool a_log_needs_exp) {
     static_assert(ValueHeadDim % 32 == 0);
     static_assert(KeyHeadDim % 32 == 0);
     constexpr int warps = ValueHeadDim / 32;
@@ -537,8 +552,8 @@ void gated_delta_fused_register_state_kernel(
         if (!vector_decay) {
             const float raw = bf16_float(a_row[head]) + bf16_float(dt_bias[head]);
             reductions[2] = safe_decay
-                ? expf(sigmoid(expf(bf16_float(a_log[head])) * raw) * decay_lower_bound)
-                : expf(-expf(bf16_float(a_log[head])) * softplus(raw));
+                ? expf(sigmoid(gated_delta_a_exp(bf16_float(a_log[head]), a_log_needs_exp) * raw) * decay_lower_bound)
+                : expf(gated_delta_neg_a_exp(bf16_float(a_log[head]), a_log_needs_exp) * softplus(raw));
         }
     }
     __syncthreads();
@@ -558,9 +573,9 @@ void gated_delta_fused_register_state_kernel(
         const int decay_index = head * KeyHeadDim + key;
         const float decay = vector_decay
             ? (safe_decay
-                ? expf(sigmoid(expf(bf16_float(a_log[head])) *
+                ? expf(sigmoid(gated_delta_a_exp(bf16_float(a_log[head]), a_log_needs_exp) *
                     (bf16_float(a_row[decay_index]) + bf16_float(dt_bias[decay_index]))) * decay_lower_bound)
-                : expf(-expf(bf16_float(a_log[head])) *
+                : expf(gated_delta_neg_a_exp(bf16_float(a_log[head]), a_log_needs_exp) *
                     softplus(bf16_float(a_row[decay_index]) + bf16_float(dt_bias[decay_index]))))
             : reductions[2];
         state_registers[key] = bf16_float(__float2bfloat16(state_registers[key] * decay));
@@ -610,7 +625,8 @@ __global__ void gated_delta_fused_single_head_kernel(
     __nv_bfloat16* conv_state, __nv_bfloat16* recurrent_state,
     __nv_bfloat16* output, int rows, int conv_kernel, int key_head_dim,
     int value_head_dim, int key_heads, float eps, bool vector_decay,
-    bool safe_decay, float decay_lower_bound, bool sigmoid_output_gate) {
+    bool safe_decay, float decay_lower_bound, bool sigmoid_output_gate,
+    bool a_log_needs_exp) {
     const int head = static_cast<int>(blockIdx.x);
     const int lane = static_cast<int>(threadIdx.x);
     if (head >= key_heads) return;
@@ -692,8 +708,8 @@ __global__ void gated_delta_fused_single_head_kernel(
     if (!vector_decay && lane == 0) {
         const float raw_decay = bf16_float(a_row[head]) + bf16_float(dt_bias[head]);
         reductions[2] = safe_decay
-            ? expf(sigmoid(expf(bf16_float(a_log[head])) * raw_decay) * decay_lower_bound)
-            : expf(-expf(bf16_float(a_log[head])) * softplus(raw_decay));
+            ? expf(sigmoid(gated_delta_a_exp(bf16_float(a_log[head]), a_log_needs_exp) * raw_decay) * decay_lower_bound)
+            : expf(gated_delta_neg_a_exp(bf16_float(a_log[head]), a_log_needs_exp) * softplus(raw_decay));
     }
     __syncthreads();
     if (lane < key_head_dim) {
@@ -702,10 +718,10 @@ __global__ void gated_delta_fused_single_head_kernel(
         if (vector_decay) {
             const int decay_index = head * key_head_dim + lane;
             decay[lane] = safe_decay
-                ? expf(sigmoid(expf(bf16_float(a_log[head])) *
+                ? expf(sigmoid(gated_delta_a_exp(bf16_float(a_log[head]), a_log_needs_exp) *
                     (bf16_float(a_row[decay_index]) + bf16_float(dt_bias[decay_index]))) *
                     decay_lower_bound)
-                : expf(-expf(bf16_float(a_log[head])) *
+                : expf(gated_delta_neg_a_exp(bf16_float(a_log[head]), a_log_needs_exp) *
                     softplus(bf16_float(a_row[decay_index]) + bf16_float(dt_bias[decay_index])));
         } else {
             decay[lane] = reductions[2];
@@ -796,7 +812,8 @@ void launch_gated_delta_net(const __nv_bfloat16* projected_qkv,
                             int key_head_dim, int value_head_dim, int key_heads,
                             int value_heads, float eps, bool vector_decay,
                             bool safe_decay, float decay_lower_bound,
-                            bool sigmoid_output_gate, cudaStream_t stream) {
+                            bool sigmoid_output_gate, cudaStream_t stream,
+                            bool a_log_needs_exp) {
     if (rows > 0 && key_head_dim <= 256 && value_head_dim <= 256) {
         if (rows == 1 && key_heads == value_heads && key_head_dim == 128 &&
             value_head_dim == 128) {
@@ -805,7 +822,7 @@ void launch_gated_delta_net(const __nv_bfloat16* projected_qkv,
                 projected_qkv, projected_z, projected_b, projected_a, conv_weight,
                 dt_bias, a_log, norm_weight, conv_state, recurrent_state, output,
                 conv_kernel, key_heads, eps, vector_decay, safe_decay,
-                decay_lower_bound, sigmoid_output_gate);
+                decay_lower_bound, sigmoid_output_gate, a_log_needs_exp);
             CELEG_KERNEL_DEBUG_SYNC(stream);
             return;
         }
@@ -815,12 +832,13 @@ void launch_gated_delta_net(const __nv_bfloat16* projected_qkv,
                 projected_qkv, projected_z, projected_b, projected_a, conv_weight,
                 dt_bias, a_log, norm_weight, conv_state, recurrent_state, output, rows,
                 conv_kernel, key_head_dim, value_head_dim, key_heads, eps,
-                vector_decay, safe_decay, decay_lower_bound, sigmoid_output_gate);
+                vector_decay, safe_decay, decay_lower_bound, sigmoid_output_gate, a_log_needs_exp);
             CELEG_KERNEL_DEBUG_SYNC(stream);
             return;
         }
         /// Generic path: loops over all `rows` internally and handles
-        /// key_heads != value_heads via GQA-style `repeat`, so it is correct
+        /// key_heads != value_heads via tiled head sharing (value head h
+        /// reads key/query head h % key_heads), so it is correct
         /// for any rows count and any heads configuration. Reached both for
         /// rows >= 64 (any heads config) and for rows < 64 with
         /// key_heads != value_heads -- the latter used to fall into a
@@ -836,14 +854,14 @@ void launch_gated_delta_net(const __nv_bfloat16* projected_qkv,
             gated_delta_sequence_register_tile_kernel<64, 64><<<tile_grid, dim3(32, 4), 0, stream>>>(
                 projected_qkv, projected_b, projected_a, dt_bias, a_log,
                 recurrent_state, output, rows, key_heads, vector_decay, safe_decay,
-                decay_lower_bound);
+                decay_lower_bound, a_log_needs_exp);
         } else if (rows >= 64 && key_heads == value_heads && key_head_dim == 128 &&
                    value_head_dim == 128) {
             const dim3 tile_grid(value_heads, (value_head_dim + 15) / 16);
             gated_delta_sequence_register_tile_kernel<128, 128><<<tile_grid, dim3(32, 4), 0, stream>>>(
                 projected_qkv, projected_b, projected_a, dt_bias, a_log,
                 recurrent_state, output, rows, key_heads, vector_decay, safe_decay,
-                decay_lower_bound);
+                decay_lower_bound, a_log_needs_exp);
         } else {
             const dim3 state_grid(value_heads, tiles);
             const dim3 state_block(32, 4);
@@ -852,31 +870,31 @@ void launch_gated_delta_net(const __nv_bfloat16* projected_qkv,
                     gated_delta_sequence_state_kernel<32><<<state_grid, state_block, 0, stream>>>(
                         projected_qkv, projected_b, projected_a, dt_bias, a_log, recurrent_state,
                         output, rows, key_head_dim, value_head_dim, key_heads, value_heads,
-                        vector_decay, safe_decay, decay_lower_bound);
+                        vector_decay, safe_decay, decay_lower_bound, a_log_needs_exp);
                     break;
                 case 64:
                     gated_delta_sequence_state_kernel<64><<<state_grid, state_block, 0, stream>>>(
                         projected_qkv, projected_b, projected_a, dt_bias, a_log, recurrent_state,
                         output, rows, key_head_dim, value_head_dim, key_heads, value_heads,
-                        vector_decay, safe_decay, decay_lower_bound);
+                        vector_decay, safe_decay, decay_lower_bound, a_log_needs_exp);
                     break;
                 case 128:
                     gated_delta_sequence_state_kernel<128><<<state_grid, state_block, 0, stream>>>(
                         projected_qkv, projected_b, projected_a, dt_bias, a_log, recurrent_state,
                         output, rows, key_head_dim, value_head_dim, key_heads, value_heads,
-                        vector_decay, safe_decay, decay_lower_bound);
+                        vector_decay, safe_decay, decay_lower_bound, a_log_needs_exp);
                     break;
                 case 256:
                     gated_delta_sequence_state_kernel<256><<<state_grid, state_block, 0, stream>>>(
                         projected_qkv, projected_b, projected_a, dt_bias, a_log, recurrent_state,
                         output, rows, key_head_dim, value_head_dim, key_heads, value_heads,
-                        vector_decay, safe_decay, decay_lower_bound);
+                        vector_decay, safe_decay, decay_lower_bound, a_log_needs_exp);
                     break;
                 default:
                     gated_delta_sequence_state_kernel<<<state_grid, state_block, 0, stream>>>(
                         projected_qkv, projected_b, projected_a, dt_bias, a_log, recurrent_state,
                         output, rows, key_head_dim, value_head_dim, key_heads, value_heads,
-                        vector_decay, safe_decay, decay_lower_bound);
+                        vector_decay, safe_decay, decay_lower_bound, a_log_needs_exp);
                     break;
             }
         }
@@ -890,7 +908,7 @@ void launch_gated_delta_net(const __nv_bfloat16* projected_qkv,
         projected_qkv, projected_z, projected_b, projected_a, conv_weight,
         dt_bias, a_log, norm_weight, conv_state, recurrent_state, output,
         rows, conv_kernel, key_head_dim, value_head_dim, key_heads, value_heads, eps,
-        vector_decay, safe_decay, decay_lower_bound, sigmoid_output_gate);
+        vector_decay, safe_decay, decay_lower_bound, sigmoid_output_gate, a_log_needs_exp);
     CELEG_KERNEL_DEBUG_SYNC(stream);
 }
 

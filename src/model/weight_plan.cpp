@@ -268,6 +268,13 @@ void append_moe(ResolvedModel& model, const MixtureOfExpertsSpec& moe,
                {moe.shared->intermediate_size, hidden});
         append(TensorRole::MoeSharedDown, -1,
                {hidden, moe.shared->intermediate_size});
+        /// Optional shared-expert scalar gate: requested only when binding
+        /// resolved it (checkpoints without one keep gate 1.0 downstream).
+        const TensorRequest gate_probe{TensorRole::MoeSharedGateWeight, layer,
+                                       -1, {}, std::nullopt, physical_layer};
+        if (!naming_policy.candidates(gate_probe).empty()) {
+            append(TensorRole::MoeSharedGateWeight, -1, {1, hidden});
+        }
     }
 }
 

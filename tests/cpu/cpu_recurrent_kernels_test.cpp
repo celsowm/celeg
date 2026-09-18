@@ -96,4 +96,54 @@ int main() {
     for (size_t i = 0; i < decode_state.size(); ++i) {
         CELEG_TEST_CHECK(std::abs(decode_state[i] - prefill_state[i]) < 1e-5f);
     }
+
+    /// GQA-style head sharing tiles key/query heads across value heads
+    /// (value head h reads key/query head h % key_heads). Zeroing key head 1
+    /// of a 2-key/4-value layer must therefore silence exactly value heads 1
+    /// and 3 (whose state can never leave zero), while heads 0 and 2 stay
+    /// live. The previous whole-block repeat (h / repeat) instead silenced
+    /// heads 2 and 3, derailing every unequal-heads checkpoint.
+    {
+        constexpr int kernel1 = 1;
+        constexpr int kdim = 2;
+        constexpr int vdim = 2;
+        constexpr int kheads = 2;
+        constexpr int vheads = 4;
+        constexpr int qkvw = 2 * kdim * kheads + vdim * vheads;
+        constexpr int vw = vdim * vheads;
+        std::vector<float> qkv1(qkvw, 0.0f);
+        qkv1[0] = 0.5f;
+        qkv1[1] = -0.3f;
+        qkv1[2] = 0.7f;
+        qkv1[3] = 0.2f;
+        qkv1[kdim * kheads + 0] = 0.4f;
+        qkv1[kdim * kheads + 1] = -0.6f;
+        for (int i = 0; i < vw; ++i) {
+            qkv1[2 * kdim * kheads + i] = 0.1f * static_cast<float>(i + 1);
+        }
+        std::vector<float> z1(vw, 0.3f);
+        std::vector<float> b1(vheads, -0.2f);
+        std::vector<float> a1(vheads, 0.1f);
+        std::vector<float> conv1(static_cast<size_t>(qkvw) * kernel1, 1.0f);
+        std::vector<float> dt1(vheads, 0.5f);
+        std::vector<float> alog1(vheads, -0.3f);
+        std::vector<float> norm1(vdim, 1.0f);
+        std::vector<float> conv_state1(conv1.size(), 0.0f);
+        std::vector<float> rec_state1(
+            static_cast<size_t>(vheads) * kdim * vdim, 0.0f);
+        std::vector<float> out1(vw, 0.0f);
+        celeg::cpu_gated_delta_net_decode(
+            qkv1.data(), z1.data(), b1.data(), a1.data(), conv1.data(),
+            dt1.data(), alog1.data(), norm1.data(), conv_state1.data(),
+            rec_state1.data(), out1.data(), kernel1, kdim, vdim, kheads,
+            vheads, 1e-6f, false, false, -5.0f, false);
+        for (int d = 0; d < vdim; ++d) {
+            CELEG_TEST_CHECK(out1[static_cast<size_t>(1) * vdim + d] == 0.0f);
+            CELEG_TEST_CHECK(out1[static_cast<size_t>(3) * vdim + d] == 0.0f);
+            CELEG_TEST_CHECK(
+                std::abs(out1[static_cast<size_t>(0) * vdim + d]) > 1e-6f);
+            CELEG_TEST_CHECK(
+                std::abs(out1[static_cast<size_t>(2) * vdim + d]) > 1e-6f);
+        }
+    }
 }

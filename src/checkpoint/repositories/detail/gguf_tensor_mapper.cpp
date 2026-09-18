@@ -141,11 +141,33 @@ GgufTensorReference GgufTensorNameMapper::resolve(std::string_view canonical_nam
     if (suffix == "self_attn.k_layernorm.weight") {
         return layer_tensor(layer, "attn_k_norm.weight");
     }
+    /// Shared-expert MLP: `bind_moe` requests `mlp.shared_experts.*`
+    /// canonical names; GGUF keeps the shared expert in `ffn_*_shexp`
+    /// tensors (no per-expert index, unlike the stacked `ffn_*_exps`).
+    if (suffix == "mlp.shared_experts.gate_proj.weight") {
+        return layer_tensor(layer, "ffn_gate_shexp.weight");
+    }
+    if (suffix == "mlp.shared_experts.up_proj.weight") {
+        return layer_tensor(layer, "ffn_up_shexp.weight");
+    }
+    if (suffix == "mlp.shared_experts.down_proj.weight") {
+        return layer_tensor(layer, "ffn_down_shexp.weight");
+    }
+    /// Shared-expert scalar gate (`mlp.shared_expert_gate`, HF Linear with
+    /// shape [1, hidden]); GGUF stores the row flattened, restored to [1, H]
+    /// by the resolver.
+    if (suffix == "mlp.shared_expert_gate.weight") {
+        return layer_tensor(layer, "ffn_gate_inp_shexp.weight");
+    }
 
     if (suffix == "conv.in_proj.weight") return layer_tensor(layer, "shortconv.in_proj.weight");
     if (suffix == "conv.conv.weight") return layer_tensor(layer, "shortconv.conv.weight");
     if (suffix == "conv.out_proj.weight") return layer_tensor(layer, "shortconv.out_proj.weight");
     if (suffix == "feed_forward.gate.weight") {
+        return layer_tensor(layer, "ffn_gate_inp.weight");
+    }
+    /// `bind_moe` prefers the `mlp.gate.weight` router spelling; same router.
+    if (suffix == "mlp.gate.weight") {
         return layer_tensor(layer, "ffn_gate_inp.weight");
     }
     if (suffix == "feed_forward.expert_bias.weight") {

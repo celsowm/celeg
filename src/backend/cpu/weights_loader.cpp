@@ -584,6 +584,12 @@ void CpuCompiledModel::Shared::load_weights() {
                 moe.shared_w2 = load_matrix(source, reader.get(), writer.get(),
                     tensor_name(weight_requests, TensorRole::MoeSharedDown, index),
                     {program.hidden, shared_intermediate});
+                if (has_request(TensorRole::MoeSharedGateWeight)) {
+                    moe.shared_gate = load_matrix(source, reader.get(), writer.get(),
+                        tensor_name(weight_requests, TensorRole::MoeSharedGateWeight, index),
+                        {1, program.hidden});
+                    moe.has_shared_gate = true;
+                }
             }
 
             if (has_request(TensorRole::MoeRouterBias)) {

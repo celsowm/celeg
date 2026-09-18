@@ -254,6 +254,17 @@ void bind_moe(CanonicalInferenceContext& context,
             TensorRole::MoeSharedDown,
             shared + "down_proj.weight",
             {*m.core.hidden_size, shared_intermediate});
+        /// Optional shared-expert scalar gate (`mlp.shared_expert_gate`,
+        /// HF [1, hidden]; GGUF row restored to the same shape by the
+        /// resolver). Absent on checkpoints without one; execution then
+        /// scales the shared expert by 1.0 as before.
+        const std::string gate_name = prefix + "shared_expert_gate.weight";
+        if (has_tensor(gate_name)) {
+            bind(
+                TensorRole::MoeSharedGateWeight,
+                gate_name,
+                {1, *m.core.hidden_size});
+        }
     }
 }
 

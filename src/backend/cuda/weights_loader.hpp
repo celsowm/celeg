@@ -16,6 +16,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace celeg {
@@ -72,6 +73,24 @@ public:
         const IWeightRepository& repo,
         const MoeExpertTensorNames& names,
         int num_experts, int moe_intermediate, int hidden);
+
+    /// Split native gate/up tables for mixed-quant experts (gate and up use
+    /// different block types, e.g. Q4_K gate with Q6_K up). Returns the gate
+    /// table first, the up table second; each table is self-consistent
+    /// ([experts, intermediate, hidden], one block type). Only native-MMQ
+    /// pairs are accepted -- anything else keeps the existing error.
+    std::pair<const ExpertLinearWeight*, const ExpertLinearWeight*>
+    load_moe_gate_up_split(
+        const IWeightRepository& repo,
+        const MoeExpertTensorNames& names,
+        int num_experts, int moe_intermediate, int hidden);
+
+    /// True when gate/up need the split loader: both quantized, different
+    /// block types, each natively MMQ-capable. Everything else (fused
+    /// same-type, BF16, packed int4, host-decoded) keeps the fused loader.
+    bool moe_gate_up_is_split(
+        const IWeightRepository& repo,
+        const MoeExpertTensorNames& names);
 
     const ExpertLinearWeight* load_moe_down(
         const IWeightRepository& repo,

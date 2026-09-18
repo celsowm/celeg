@@ -310,9 +310,10 @@ kernel void celeg_gated_delta(
         for (uint tap = 0; tap < conv_kernel; ++tap) filtered += history[tap] * weight[tap];
         projected_qkv[channel] = celeg_silu(filtered);
     }
-    const uint repeat = value_heads / key_heads;
     for (uint value_head = 0; value_head < value_heads; ++value_head) {
-        const uint key_head = value_head / repeat;
+        /// Tile key/query heads across value heads (h % key_heads), matching
+        /// the reference fused kernel and the trained checkpoint layout.
+        const uint key_head = value_head % key_heads;
         const device float* q = projected_qkv + static_cast<size_t>(key_head) * key_head_dim;
         const device float* k = projected_qkv + key_width +
                                 static_cast<size_t>(key_head) * key_head_dim;

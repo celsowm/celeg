@@ -68,7 +68,8 @@ void CudaCompiledModel::enqueue_decode_non_attention_mixer(Layer& layer,
             spec.key_head_dim, spec.value_head_dim, spec.key_heads,
             spec.value_heads, mixer_epsilon,
             spec.vector_decay, spec.safe_decay, spec.decay_lower_bound,
-            spec.sigmoid_output_gate, stream_.get());
+            spec.sigmoid_output_gate, stream_.get(),
+            spec.a_log_needs_exp);
         linear(workspace_.gated_delta_output_.data(), *gated_delta->out,
                workspace_.hidden_.data(), 1, resources_.program_.hidden,
                value_width, fuse_residual ? 1.0f : 0.0f);

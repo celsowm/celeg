@@ -84,12 +84,19 @@ ResidentExpertWeights bind_cuda_resident_experts(
         return ResidentExpertWeights{gate_up, down};
     }
 
-    const ExpertLinearWeight* gate_up =
-        resources.weight_loader_->load_moe_gate_up(
-            repo, expert_names, expert_count, intermediate,
-            resources.program_.hidden);
     const ExpertLinearWeight* down =
         resources.weight_loader_->load_moe_down(
+            repo, expert_names, expert_count, intermediate,
+            resources.program_.hidden);
+    if (resources.weight_loader_->moe_gate_up_is_split(repo, expert_names)) {
+        const auto [gate, up] =
+            resources.weight_loader_->load_moe_gate_up_split(
+                repo, expert_names, expert_count, intermediate,
+                resources.program_.hidden);
+        return ResidentExpertWeights{nullptr, down, gate, up};
+    }
+    const ExpertLinearWeight* gate_up =
+        resources.weight_loader_->load_moe_gate_up(
             repo, expert_names, expert_count, intermediate,
             resources.program_.hidden);
     return ResidentExpertWeights{gate_up, down};

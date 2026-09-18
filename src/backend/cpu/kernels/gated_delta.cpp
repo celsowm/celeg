@@ -114,7 +114,12 @@ void gated_delta_step(const float* projected_qkv, const float* projected_z,
     const float* q = filtered_qkv.data();
     const float* k = filtered_qkv.data() + key_width;
     const float* v = filtered_qkv.data() + 2 * key_width;
-    const int repeat = value_heads / key_heads;
+    /// GQA-style head sharing tiles the key/query heads across the value
+    /// heads (value head h reads key/query head h % key_heads), matching the
+    /// reference fused kernel (`iq1 = iv1 % neq1`) and the checkpoint's
+    /// trained layout: repeating whole blocks (h / repeat) scrambles which
+    /// key each value head attends to (seen on 16-key/32-value GDN, where the
+    /// interleave reading derails generation from the first mixer on).
     std::vector<float>& normalized_q = scratch.normalized_q;
     std::vector<float>& normalized_k = scratch.normalized_k;
     for (int head = 0; head < key_heads; ++head) {
@@ -136,7 +141,7 @@ void gated_delta_step(const float* projected_qkv, const float* projected_z,
 
     const float inverse_key_norm = 1.0f / std::sqrt(static_cast<float>(key_head_dim));
     for (int value_head = 0; value_head < value_heads; ++value_head) {
-        const int key_head = value_head / repeat;
+        const int key_head = value_head % key_heads;
         const float beta = sigmoid(projected_b[value_head]);
         float* __restrict state = recurrent_state + static_cast<size_t>(value_head) *
             key_head_dim * value_head_dim;

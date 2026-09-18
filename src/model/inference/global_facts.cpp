@@ -260,8 +260,36 @@ CanonicalInferenceContext initialize_canonical_facts(
 
     context.layer_count = *m.core.layer_count;
     context.physical_layer_count = context.layer_count;
-    context.dense_start =
-        m.moe.first_dense_layer.value_or(context.layer_count);
+    /// Explicit `first_dense_layer` metadata wins; otherwise the MoE span
+    /// starts at the first layer carrying routed-expert tensors (stacked
+    /// `ffn_*_exps` or per-expert `experts.0.*` grammars), so all-MoE
+    /// checkpoints with no dense marker resolve MoE instead of falling back
+    /// to a dense binding that cannot match. All-dense checkpoints keep
+    /// `dense_start == layer_count` exactly as before.
+    if (m.moe.first_dense_layer.has_value()) {
+        context.dense_start = *m.moe.first_dense_layer;
+    } else {
+        context.dense_start = context.layer_count;
+        for (int layer = 0; layer < context.layer_count; ++layer) {
+            const std::string index =
+                std::to_string(context.physical_layer(layer));
+            const auto has_experts = [&](std::string_view name) {
+                return input.inventory.find(name) != nullptr;
+            };
+            if (has_experts("blk." + index + ".ffn_gate_exps.weight") ||
+                has_experts("model.layers." + index +
+                            ".mlp.experts.0.gate_proj.weight") ||
+                has_experts("model.language_model.layers." + index +
+                            ".mlp.experts.0.gate_proj.weight") ||
+                has_experts("model.layers." + index +
+                            ".feed_forward.experts.0.w1.weight") ||
+                has_experts("model.language_model.layers." + index +
+                            ".feed_forward.experts.0.w1.weight")) {
+                context.dense_start = layer;
+                break;
+            }
+        }
+    }
     if (context.dense_start < 0 ||
         context.dense_start > context.layer_count) {
         fail(
@@ -333,16 +361,24 @@ CanonicalInferenceContext initialize_canonical_facts(
                 shared_expert_intermediate, MoeCombineOrder::RoutedThenShared};
         }
 
+        /// Default router semantics match the descriptor path (`normalize_topk`
+        /// and `router_softmax` both default true there) and the reference
+        /// MoE implementations (softmax scores renormalized over the
+        /// selected experts): unnormalized router weights otherwise scale
+        /// every MoE output by ~top-k and the residual stream explodes
+        /// (seen on qwen35moe GGUF, which carries no router-semantics keys).
+        /// Checkpoints with explicit keys (e.g. Ling's sigmoid +
+        /// norm_topk_prob) are unaffected by either default.
         context.moe = CanonicalMoeFacts{
             num_experts,
             experts_per_token,
             m.moe.intermediate.value_or(0),
             std::move(selection),
             std::move(shared),
-            m.moe.normalize_topk.value_or(false),
+            m.moe.normalize_topk.value_or(true),
             m.moe.expert_bias.value_or(false),
             m.moe.routed_scaling.value_or(1.0f),
-            m.moe.score_function.value_or(MoeRouterScoreFunction::Sigmoid) ==
+            m.moe.score_function.value_or(MoeRouterScoreFunction::Softmax) ==
                 MoeRouterScoreFunction::Softmax};
     }
 

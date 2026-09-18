@@ -26,6 +26,7 @@ void launch_gated_delta_net(const __nv_bfloat16* projected_qkv,
                             int key_head_dim, int value_head_dim, int key_heads,
                             int value_heads, float eps, bool vector_decay,
                             bool safe_decay, float decay_lower_bound,
-                            bool sigmoid_output_gate, cudaStream_t stream);
+                            bool sigmoid_output_gate, cudaStream_t stream,
+                            bool a_log_needs_exp = true);
 
 }
